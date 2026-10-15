@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#111827">
+        <title>Scratch NES Emulator - TypeScript Preview</title>
+        <link rel="stylesheet" href="/styles.css">
+    </head>
+    <body>
+        <main class="app-shell">
+            <header class="app-header">
+                <div>
+                    <p class="eyebrow">TypeScript reference implementation</p>
+                    <h1>Scratch NES Emulator</h1>
+                    <p class="intro">A deterministic NTSC console preview. Select an iNES ROM to begin.</p>
+                </div>
+                <p id="runtime-status" class="status" role="status" aria-live="polite">No ROM loaded.</p>
+            </header>
+
+            <div class="workspace">
+                <section class="screen-panel" aria-label="NES display">
+                    <div id="screen-container" class="screen-container">
+                        <canvas id="nes-screen" tabindex="0" aria-label="NES framebuffer, 256 by 240 pixels"></canvas>
+                    </div>
+                    <div class="screen-caption">
+                        <span id="rom-description">No ROM loaded</span>
+                        <span id="frame-description">Frame: 0</span>
+                    </div>
+                </section>
+
+                <aside class="control-panel" aria-label="Emulator controls">
+                    <section class="control-section">
+                        <h2>Cartridge</h2>
+                        <input id="rom-file" class="file-input" type="file" accept=".nes,application/octet-stream">
+                        <label class="file-picker" for="rom-file">Choose an iNES ROM</label>
+                        <div class="button-stack">
+                            <button id="load-supplied-rom" class="button button-secondary" type="button">Load supplied mapper 4 ROM</button>
+                            <button id="load-apu-rom" class="button button-secondary" type="button">Load MIT APU smoke ROM</button>
+                        </div>
+                    </section>
+
+                    <section class="control-section">
+                        <h2>Playback</h2>
+                        <div class="button-grid">
+                            <button id="run-console" class="button button-primary" type="button" disabled>Run</button>
+                            <button id="pause-console" class="button button-secondary" type="button" disabled>Pause</button>
+                            <button id="reset-console" class="button button-secondary" type="button" disabled>Reset</button>
+                            <button id="step-frame" class="button button-secondary" type="button" disabled>Step frame</button>
+                            <button id="step-instruction" class="button button-secondary" type="button" disabled>Step instruction</button>
+                        </div>
+                        <label class="audio-toggle">
+                            <input id="audio-output" type="checkbox" checked>
+                            <span>Audio output</span>
+                        </label>
+                    </section>
+
+                    <section class="control-section stats-section">
+                        <h2>Console status</h2>
+                        <dl class="stats-list">
+                            <div><dt>Mapper</dt><dd id="mapper-status">-</dd></div>
+                            <div><dt>CPU cycles</dt><dd id="cycle-status">0</dd></div>
+                            <div><dt>Last frame</dt><dd id="frame-cycle-status">-</dd></div>
+                            <div><dt>Audio samples</dt><dd id="audio-status">0</dd></div>
+                            <div><dt>CPU PC</dt><dd id="pc-status">-</dd></div>
+                        </dl>
+                    </section>
+
+                    <section class="control-section input-section">
+                        <h2>Player 1</h2>
+                        <p><kbd>Arrow keys</kbd> move; <kbd>Z</kbd> A; <kbd>X</kbd> B; <kbd>Shift</kbd> Select; <kbd>Enter</kbd> Start.</p>
+                        <h2 class="player-two-heading">Player 2</h2>
+                        <p><kbd>I</kbd>/<kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> move; <kbd>U</kbd> A; <kbd>O</kbd> B; <kbd>Y</kbd> Select; <kbd>P</kbd> Start.</p>
+                    </section>
+                </aside>
+            </div>
+
+            <footer class="app-footer">
+                <p>The core is TypeScript and headless. This preview uses a best-effort RGB palette and integer CSS scaling; it is not a cycle-accuracy or performance claim.</p>
+            </footer>
+        </main>
+        <script type="module" src="/build/nes/browser/main.js"></script>
+    </body>
+</html>

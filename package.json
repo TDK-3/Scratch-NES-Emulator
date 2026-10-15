@@ -1,0 +1,22 @@
+{
+    "name": "scratch-nes-emulator",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "A testable TypeScript NES emulator with a GoboScript port for Scratch and TurboWarp.",
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "npm run typecheck && node --import tsx --test --test-timeout=10000 tests/*.test.ts",
+        "test:nestest": "node --import tsx scripts/run_nestest_trace.mjs",
+        "build:ts": "tsc",
+        "browser:dev": "npm run build:ts && node scripts/serve_browser.mjs",
+        "scratch:assets": "node scripts/generate_goboscript_rom_data.mjs",
+        "scratch:vectors": "node scripts/generate_goboscript_shared_port_vectors.mjs",
+        "build:scratch": "npm run scratch:assets && npm run scratch:vectors && cd scratch && goboscript build"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "tsx": "^4.0.0",
+        "typescript": "^5.0.0"
+    }
+}
