@@ -1,0 +1,4 @@
+std = "2.1.0"
+frame_rate = 60
+no_miscellaneous_limits = true
+notes = "NOTES.md"
