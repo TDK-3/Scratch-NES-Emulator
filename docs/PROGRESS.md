@@ -262,6 +262,24 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Completed instruction dispatch for every official opcode. `scratch/src/cpu_instruction.gs` now routes
+      the operand instructions through `cpu_execute_regular_instruction`, which resolves the operand and spends
+      the cycles its kind needs: a dummy read of the opcode byte for the implied and accumulator forms, nothing
+      extra for an immediate operand, and one read, one write, or the read, write-back, and write of a
+      read-modify-write for a memory operand. `cpu_apply_read_instruction` covers LDA, LDX, LDY, ADC, SBC, AND,
+      ORA, EOR, CMP, CPX, CPY, and BIT through the ported ALU and status helpers, `cpu_modify_value` covers
+      ASL, LSR, ROL, ROR, INC, and DEC, and `cpu_compute_store_value` covers STA, STX, and STY. All 151
+      official opcodes are now dispatched; unofficial opcodes other than KIL report `unofficial_opcode` after
+      the opcode fetch, and the unstable high-byte stores stay with them. Suite 13 grew from 44 to 99 records,
+      adding every load and store across the twelve memory addressing modes with and without page crossings,
+      the ALU group with its carry, borrow, overflow, and zero boundaries, and the read-modify-write group on
+      the accumulator and in memory; the LDA immediate record that documented a refusal in the previous entry
+      now records the executed instruction. The mirror gained the same five procedures plus a totality test
+      that executes all 256 opcodes and asserts the 151 official ones report no error while the other 104
+      report `unofficial_opcode` except KIL. Mutation-checked by dropping the read-modify-write write-back,
+      storing the wrong register for STX, losing the BIT overflow copy, and zeroing an immediate operand.
+      Not ported: the jam vector reads and sequence selection, interrupt acceptance, and `finish_instruction`;
+      compile validation stays blocked by the missing toolchain.
 - [x] Ported instruction dispatch for the instructions that need no memory operand.
       `scratch/src/cpu_instruction.gs` fetches and decodes the opcode byte, then executes the KIL jam flag,
       BRK, JSR, RTI, RTS, the eight relative branches (dispatched on the decoded relative mode with the
@@ -343,13 +361,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,048 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 415 shared port-vector tests (414 records), 57 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,104 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 470 shared port-vector tests (469 records), 58 GoboScript port-algorithm
   tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 7,303 decimal values for 414 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 9,300 decimal values for 469 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official

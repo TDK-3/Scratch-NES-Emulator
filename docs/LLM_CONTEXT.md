@@ -118,7 +118,7 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,048 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+suite has 1,104 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
 test, 351 cross-domain parity cases, 50 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported helpers, 16 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
@@ -197,11 +197,12 @@ and relative-branch cycle sequences, with opcode fetch left to the caller), and 
 mnemonic enum and the decode of one opcode byte into mnemonic, addressing mode, base cycles, operand access,
 page-cross flag, and official flag, read from the generated table), and `cpu_instruction.gs` (one whole
 instruction: the fetch and decode, the KIL jam flag, BRK, JSR, RTI, RTS, the eight branches, both JMP forms,
-the four stack instructions, the transfers, the flag instructions, INX, DEX, INY, DEY, and NOP, with a numeric
-error code for anything it does not execute yet). `stage.gs` includes every header, so the
+the four stack instructions, the transfers, the flag instructions, INX, DEX, INY, DEY, NOP, and every load,
+store, ALU, and read-modify-write instruction, so all 151 official opcodes are dispatched, with a numeric error
+code for the unofficial ones). `stage.gs` includes every header, so the
 Stage owns all shared state, and its green-flag handler runs `src/vector_selftest.gs`, which executes suites 1,
 3, 7, 8, 9, 10, 11, 12, and 13 of the fixture, counts suites 2, 4, 5, and 6 as skipped, and broadcasts a summary
-that `main.gs` reports. The load, store, ALU, and read-modify-write instructions, interrupt acceptance and the
+that `main.gs` reports. Unofficial opcodes other than KIL, interrupt acceptance and the
 jam vector reads, cartridge payload copying and mapper dispatch, PPU,
 APU, rendering, sound, save states, and game execution remain unimplemented there, and none of the `.gs`
 sources has been compiled. The TypeScript NROM/MMC3 mapper and

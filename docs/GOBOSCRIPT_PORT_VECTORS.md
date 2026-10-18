@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for thirteen suites and 414 records. TypeScript regression tests execute each vector
+inputs and expected outputs for thirteen suites and 469 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (7,303 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (9,300 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -98,15 +98,19 @@ access ids are the same integers the ported enums use, so each record also check
 opcodes against the generated table rather than only these 20.
 
 Suite 13 executes one whole instruction per record, opcode fetch included, so its trace starts at the fetch
-and its cycle count is the instruction's. The 44 records cover the groups the ported dispatcher reaches: the
+and its cycle count is the instruction's. The 99 records cover every group the ported dispatcher reaches: the
 six register transfers with their zero and wrap boundaries, TXS, INX, DEX, INY, DEY, NOP, the seven flag
 instructions, the four stack instructions with a prepared stack byte, all eight branches taken plus a
-not-taken and a page-crossing BNE, JMP absolute and JMP indirect, BRK, JSR, RTS, RTI, and a KIL jam. Two
-records document refusals instead of execution: an unofficial SLO reports `unofficial_opcode` and an official
-LDA immediate reports `unsupported_mnemonic`, each after spending only the opcode fetch, so an instruction the
-port has not reached cannot pass as executed. The refusal a record documents is derived in the reference test
-from the production table and `CPU_INSTRUCTION_PORTED_MNEMONICS`, never copied from the expected values, and
-the projection rejects a record whose refusal the table does not justify.
+not-taken and a page-crossing BNE, JMP absolute and JMP indirect, BRK, JSR, RTS, RTI, and a KIL jam; every
+load and store across immediate, zero page, zero page indexed, absolute, absolute indexed with and without a
+page crossing, indexed indirect, and indirect indexed; ADC, SBC, AND, ORA, EOR, CMP, CPX, CPY, and BIT with
+their carry, borrow, overflow, and zero boundaries; and ASL, LSR, ROL, ROR, INC, and DEC on the accumulator and
+in memory, where the read-modify-write records pin the read, the write-back of the original byte, and the write
+of the modified one. One record documents a refusal: an unofficial SLO reports `unofficial_opcode` after
+spending only its opcode fetch, so an instruction the port does not execute cannot pass as executed. The
+refusal a record documents is derived in the reference test from the production table and
+`CPU_INSTRUCTION_PORTED_MNEMONICS`, never copied from the expected values, and the projection rejects a record
+whose refusal the table does not justify.
 
 Operation 1 of suite 3 replays against a decoder with no devices attached, while the GoboScript port always has
 live controller ports; suite 3 operation 1 records therefore must not read `$4016`/`$4017`, and
@@ -147,7 +151,8 @@ stand in for that until the toolchain is available:
   with `CPU_OPCODE_TABLE` for all 256 opcodes through `tests/support/cpu_opcode_projection.ts`, including the
   length and header checks that report a truncated, reversioned, or missing table. Instruction dispatch is
   mirrored inside `GoboscriptCpuCore.execute_instruction()`, which composes the decoder, the operand resolver,
-  the sequences, and the status helpers, and replays every suite 13 record; the source lint additionally
+  the sequences, and the status helpers, replays every suite 13 record, and executes all 151 official opcodes
+  while refusing the 104 unofficial ones other than KIL; the source lint additionally
   compares the mnemonics named in the `.gs` dispatch chains with the mirror's `CPU_MNEMONIC` ids and with the
   projection's ported set, so the three cannot drift.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing

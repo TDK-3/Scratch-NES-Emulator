@@ -881,9 +881,13 @@ export const CPU_INSTRUCTION_ERROR_CODE = {
  * canonical opcode table fixture so the two cannot drift.
  */
 export const CPU_MNEMONIC = {
+    ADC: 1,
+    AND: 5,
+    ASL: 7,
     BCC: 9,
     BCS: 10,
     BEQ: 11,
+    BIT: 12,
     BMI: 13,
     BNE: 14,
     BPL: 15,
@@ -894,23 +898,40 @@ export const CPU_MNEMONIC = {
     CLD: 20,
     CLI: 21,
     CLV: 22,
+    CMP: 23,
+    CPX: 24,
+    CPY: 25,
+    DEC: 27,
     DEX: 28,
     DEY: 29,
+    EOR: 30,
+    INC: 31,
     INX: 32,
     INY: 33,
     JMP: 35,
     JSR: 36,
     KIL: 37,
+    LDA: 40,
+    LDX: 41,
+    LDY: 42,
+    LSR: 43,
     NOP: 45,
+    ORA: 46,
     PHA: 47,
     PHP: 48,
     PLA: 49,
     PLP: 50,
+    ROL: 52,
+    ROR: 53,
     RTI: 55,
     RTS: 56,
+    SBC: 58,
     SEC: 59,
     SED: 60,
     SEI: 61,
+    STA: 66,
+    STX: 67,
+    STY: 68,
     TAX: 70,
     TAY: 71,
     TSX: 72,
@@ -962,6 +983,9 @@ export class GoboscriptCpuCore {
     sequence_error = 0;
     instruction_error = 0;
     jammed = 0;
+    store_value = 0;
+    alu_value = 0;
+    alu_status = 0;
 
     /**
      * Decoder this core fetches through, mirroring the Stage-owned `cpu_opcode_table` list that
@@ -1420,17 +1444,155 @@ export class GoboscriptCpuCore {
         }
     }
 
-    /** Mirror of `cpu_execute_implied_instruction`. */
-    execute_implied_instruction(): void {
+    /** Mirror of `cpu_execute_regular_instruction`. */
+    execute_regular_instruction(): void {
         this.resolve_operand(this.decoder?.mode ?? 0, this.decoder?.access ?? 0);
 
         if (this.resolved_error !== CPU_OPERAND_ERROR_CODE.NONE) {
             this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNRESOLVED_OPERAND;
-            return;
+        } else if (this.resolved_kind === CPU_OPERAND_KIND.IMPLIED) {
+            this.read_cycle(this.program_counter);
+            this.apply_implied_instruction();
+        } else if (this.resolved_kind === CPU_OPERAND_KIND.ACCUMULATOR) {
+            this.read_cycle(this.program_counter);
+            this.modify_value(this.decoder?.mnemonic ?? 0, this.a);
+
+            if (this.instruction_error === CPU_INSTRUCTION_ERROR_CODE.NONE) {
+                this.a = this.alu_value;
+                this.status = this.alu_status;
+            }
+        } else if (this.resolved_kind === CPU_OPERAND_KIND.IMMEDIATE) {
+            this.apply_read_instruction(this.decoder?.mnemonic ?? 0, this.resolved_value);
+        } else if (this.resolved_kind === CPU_OPERAND_KIND.MEMORY) {
+            this.execute_memory_instruction();
+        } else {
+            this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_OPERAND;
+        }
+    }
+
+    /** Mirror of `cpu_apply_read_instruction mnemonic, value`. */
+    apply_read_instruction(mnemonic: number, value: number): void {
+        if (mnemonic === CPU_MNEMONIC.LDA) {
+            this.a = normalize_byte(value);
+            this.status = update_zero_negative_flags(this.status, this.a);
+        } else if (mnemonic === CPU_MNEMONIC.LDX) {
+            this.x = normalize_byte(value);
+            this.status = update_zero_negative_flags(this.status, this.x);
+        } else if (mnemonic === CPU_MNEMONIC.LDY) {
+            this.y = normalize_byte(value);
+            this.status = update_zero_negative_flags(this.status, this.y);
+        } else if (mnemonic === CPU_MNEMONIC.ADC) {
+            const result = alu_add_with_carry(this.a, value, this.status);
+            this.alu_value = result.value;
+            this.alu_status = result.status;
+            this.a = result.value;
+            this.status = result.status;
+        } else if (mnemonic === CPU_MNEMONIC.SBC) {
+            const result = alu_subtract_with_carry(this.a, value, this.status);
+            this.alu_value = result.value;
+            this.alu_status = result.status;
+            this.a = result.value;
+            this.status = result.status;
+        } else if (mnemonic === CPU_MNEMONIC.AND) {
+            const result = alu_and(this.a, value, this.status);
+            this.alu_value = result.value;
+            this.alu_status = result.status;
+            this.a = result.value;
+            this.status = result.status;
+        } else if (mnemonic === CPU_MNEMONIC.ORA) {
+            const result = alu_ora(this.a, value, this.status);
+            this.alu_value = result.value;
+            this.alu_status = result.status;
+            this.a = result.value;
+            this.status = result.status;
+        } else if (mnemonic === CPU_MNEMONIC.EOR) {
+            const result = alu_eor(this.a, value, this.status);
+            this.alu_value = result.value;
+            this.alu_status = result.status;
+            this.a = result.value;
+            this.status = result.status;
+        } else if (mnemonic === CPU_MNEMONIC.CMP) {
+            this.alu_status = alu_compare(this.a, value, this.status).status;
+            this.status = this.alu_status;
+        } else if (mnemonic === CPU_MNEMONIC.CPX) {
+            this.alu_status = alu_compare(this.x, value, this.status).status;
+            this.status = this.alu_status;
+        } else if (mnemonic === CPU_MNEMONIC.CPY) {
+            this.alu_status = alu_compare(this.y, value, this.status).status;
+            this.status = this.alu_status;
+        } else if (mnemonic === CPU_MNEMONIC.BIT) {
+            this.alu_status = alu_bit_test(this.a, value, this.status).status;
+            this.status = this.alu_status;
+        } else {
+            this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_MNEMONIC;
+        }
+    }
+
+    /** Mirror of `cpu_execute_memory_instruction`. */
+    execute_memory_instruction(): void {
+        if (this.resolved_access === CPU_OPERAND_ACCESS.READ) {
+            this.read_cycle(this.resolved_address);
+            this.apply_read_instruction(this.decoder?.mnemonic ?? 0, this.cycle_value);
+        } else if (this.resolved_access === CPU_OPERAND_ACCESS.WRITE) {
+            this.compute_store_value();
+
+            if (this.instruction_error === CPU_INSTRUCTION_ERROR_CODE.NONE) {
+                this.write_cycle(this.resolved_address, this.store_value);
+            }
+        } else if (this.resolved_access === CPU_OPERAND_ACCESS.READ_MODIFY_WRITE) {
+            this.read_cycle(this.resolved_address);
+            this.write_cycle(this.resolved_address, this.cycle_value);
+            this.modify_value(this.decoder?.mnemonic ?? 0, this.cycle_value);
+
+            if (this.instruction_error === CPU_INSTRUCTION_ERROR_CODE.NONE) {
+                this.write_cycle(this.resolved_address, this.alu_value);
+                this.status = this.alu_status;
+            }
+        } else {
+            this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_OPERAND;
+        }
+    }
+
+    /** Mirror of `cpu_compute_store_value`. */
+    compute_store_value(): void {
+        const mnemonic = this.decoder?.mnemonic ?? 0;
+
+        if (mnemonic === CPU_MNEMONIC.STA) {
+            this.store_value = this.a;
+        } else if (mnemonic === CPU_MNEMONIC.STX) {
+            this.store_value = this.x;
+        } else if (mnemonic === CPU_MNEMONIC.STY) {
+            this.store_value = this.y;
+        } else {
+            this.store_value = 0;
+            this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_MNEMONIC;
+        }
+    }
+
+    /** Mirror of `cpu_modify_value mnemonic, value`. */
+    modify_value(mnemonic: number, value: number): void {
+        let result: AluResult | null = null;
+
+        if (mnemonic === CPU_MNEMONIC.ASL) {
+            result = alu_shift_left(value, this.status);
+        } else if (mnemonic === CPU_MNEMONIC.LSR) {
+            result = alu_shift_right(value, this.status);
+        } else if (mnemonic === CPU_MNEMONIC.ROL) {
+            result = alu_rotate_left(value, this.status);
+        } else if (mnemonic === CPU_MNEMONIC.ROR) {
+            result = alu_rotate_right(value, this.status);
+        } else if (mnemonic === CPU_MNEMONIC.INC) {
+            result = alu_increment(value, this.status);
+        } else if (mnemonic === CPU_MNEMONIC.DEC) {
+            result = alu_decrement(value, this.status);
+        } else {
+            this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_MNEMONIC;
         }
 
-        this.read_cycle(this.program_counter);
-        this.apply_implied_instruction();
+        if (result !== null) {
+            this.alu_value = result.value;
+            this.alu_status = result.status;
+        }
     }
 
     /** Mirror of `cpu_apply_implied_instruction`. */
@@ -1535,10 +1697,8 @@ export class GoboscriptCpuCore {
             this.execute_jump();
         } else if (mode === CPU_ADDRESSING_MODE.RELATIVE) {
             this.execute_branch();
-        } else if (mode === CPU_ADDRESSING_MODE.IMPLIED) {
-            this.execute_implied_instruction();
         } else {
-            this.instruction_error = CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_MNEMONIC;
+            this.execute_regular_instruction();
         }
     }
 

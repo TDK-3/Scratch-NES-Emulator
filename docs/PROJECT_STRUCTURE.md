@@ -154,7 +154,7 @@
             cpu_alu.gs  ADC, SBC, logic, shift, compare, BIT, INC, DEC
             cpu_bus.gs  RAM mirroring, open bus, controller window
             cpu_core.gs  registers, one logged bus transaction per cycle, fetch and stack operations
-            cpu_instruction.gs  one whole instruction: dispatch, branches, jumps, stack, transfers, flags
+            cpu_instruction.gs  one whole instruction: dispatch, operands, ALU, branches, jumps, stack
             cpu_opcode.gs  mnemonic enum plus the generated opcode table decode
             cpu_sequence.gs  reset, BRK, JSR, RTI, RTS, interrupt, and branch cycle sequences
             cpu_status.gs  status normalization and flag updates
@@ -247,11 +247,12 @@ toolchain needs Cargo and rustc, which are unavailable here.
   RTS, the NMI and IRQ/BRK hardware interrupts, and a relative branch. Opcode fetch stays with the caller,
   because the reference reaches the four instruction sequences through `execute_instruction_cycles`.
 - `src/cpu_instruction.gs` executes one instruction: fetch and decode the opcode, then run the sequence for
-  the mnemonic. It reaches the KIL jam flag, BRK, JSR, RTI, RTS, the eight relative branches, both JMP forms,
-  PHA, PHP, PLA, PLP, the six transfers, TXS, the seven flag instructions, INX, DEX, INY, DEY, and NOP, and
-  reports `cpu_instruction_error` for an undecodable opcode, an unofficial opcode, an unresolved operand, or a
-  mnemonic it does not execute yet. Loads, stores, the ALU and read-modify-write groups, the jam vector reads,
-  and interrupt acceptance are not ported.
+  the mnemonic. Every official mnemonic is dispatched, including the loads and stores across all twelve memory
+  addressing modes, the ALU group, the shifts, rotates, and counters on the accumulator and in memory, the
+  transfers, the flag instructions, the stack instructions, the branches, both JMP forms, BRK, JSR, RTI, RTS,
+  NOP, and the KIL jam flag. It reports `cpu_instruction_error` for an undecodable opcode, an unofficial
+  opcode, an unresolved operand, or an operand kind a mnemonic cannot use. Unofficial opcodes other than KIL,
+  the unstable high-byte stores, the jam vector reads, and interrupt acceptance are not ported.
 - `src/cpu_opcode.gs` decodes one opcode byte through the generated `data/opcode_table.txt`: the 76-name
   mnemonic enum whose ids come from the canonical fixture, the record offset `3 + opcode * 6`, a length and
   header check that reports a table which failed to load, and the six decoded fields. Dispatch and

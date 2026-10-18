@@ -28,9 +28,11 @@ import {
     CPU_INSTRUCTION_FIXED_VALUE_COUNT,
     CPU_INSTRUCTION_PORTED_MNEMONICS,
 } from "./support/cpu_instruction_projection.js";
+import { CPU_OPCODE_TABLE } from "../src/nes/cpu/opcode_table.js";
 import {
     cpu_mnemonic_ids,
     flat_opcode_table,
+    is_official_opcode,
     opcode_table_fixture,
     project_opcode_decode,
 } from "./support/cpu_opcode_projection.js";
@@ -1697,7 +1699,7 @@ test("the mirrored opcode decoder normalizes its argument and resets cleanly", (
 
 test("the mirrored dispatcher replays every suite 13 instruction vector", () => {
     const vectors = get_shared_vector_suite("cpu_instruction").vectors;
-    assert.ok(vectors.length >= 40, "suite 13 covers the ported instruction groups");
+    assert.ok(vectors.length >= 90, "suite 13 covers every ported instruction group and mode");
 
     for (const vector of vectors) {
         const core = make_mirror_cpu_instruction([...vector.input]);
@@ -1726,19 +1728,13 @@ test("the mirrored dispatcher reports what it does not execute", () => {
     assert.equal(without_table.cycles, 1, "a refused instruction spends only its fetch");
     assert.equal(without_table.program_counter, 0x0201);
 
-    // An official instruction the port has not reached yet is refused, not guessed at.
-    const load = make_mirror_cpu_instruction([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 2, 0, 0xa9, 0x5a]);
-    load.execute_instruction();
-    assert.equal(load.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_MNEMONIC);
-    assert.equal(load.cycles, 1);
-    assert.equal(load.a, 0x11, "a refused load leaves the accumulator alone");
-    assert.deepEqual(load.access_log, [0, 0x0200, 0xa9], "only the opcode fetch reaches the bus");
-
-    // An unofficial opcode other than KIL is refused as unofficial.
+    // An unofficial opcode other than KIL is refused as unofficial, after only the fetch.
     const unofficial = make_mirror_cpu_instruction([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 2, 0, 0x03, 0x10]);
     unofficial.execute_instruction();
     assert.equal(unofficial.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.UNOFFICIAL_OPCODE);
     assert.equal(unofficial.cycles, 1);
+    assert.equal(unofficial.a, 0x11, "a refused instruction leaves the registers alone");
+    assert.deepEqual(unofficial.access_log, [0, 0x0200, 0x03], "only the opcode fetch reaches the bus");
     assert.equal(unofficial.jammed, 0, "only KIL jams");
 
     // KIL spends the fetch plus one read at the advanced program counter, then jams.
@@ -1771,4 +1767,40 @@ test("the mirrored mnemonic ids and ported set agree with the canonical opcode t
         "the mirror declares every ported mnemonic",
     );
     assert.equal(CPU_INSTRUCTION_ERROR_IDS.none, 0, "no error is the zero code the fixture records");
+});
+
+test("the mirrored dispatcher executes every official opcode and refuses the rest", () => {
+    let officials = 0;
+
+    for (let opcode = 0; opcode < 256; opcode += 1) {
+        const definition = CPU_OPCODE_TABLE.get(opcode);
+        assert.ok(definition !== undefined, `opcode $${opcode.toString(16)} is defined`);
+        const label = `$${opcode.toString(16).padStart(2, "0")} ${definition?.mnemonic}`;
+        const core = make_mirror_cpu_instruction([
+            0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 3, 0, opcode, 0x10, 0x03,
+        ]);
+        core.execute_instruction();
+
+        assert.equal(core.cycles, core.access_log.length / 3, `${label} logs one access per cycle`);
+        assert.ok(core.cycles >= 1, `${label} spends at least its opcode fetch`);
+
+        if (definition?.mnemonic === "KIL") {
+            assert.equal(core.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.NONE, `${label} jams`);
+            assert.equal(core.jammed, 1, `${label} sets the jam flag`);
+            assert.equal(core.cycles, 2, `${label} spends the fetch and one read`);
+        } else if (is_official_opcode(opcode)) {
+            officials += 1;
+            assert.equal(core.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.NONE, `${label} executes`);
+            assert.equal(core.jammed, 0, `${label} does not jam`);
+        } else {
+            assert.equal(
+                core.instruction_error,
+                ported.CPU_INSTRUCTION_ERROR_CODE.UNOFFICIAL_OPCODE,
+                `${label} is refused`,
+            );
+            assert.equal(core.cycles, 1, `${label} spends only its fetch`);
+        }
+    }
+
+    assert.equal(officials, 151, "every official opcode is dispatched");
 });

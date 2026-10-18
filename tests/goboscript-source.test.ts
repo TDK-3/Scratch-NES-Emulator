@@ -228,8 +228,28 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/cpu_instruction.gs",
-        declaration: "cpu_execute_implied_instruction",
-        mirror: "GoboscriptCpuCore.execute_implied_instruction",
+        declaration: "cpu_execute_regular_instruction",
+        mirror: "GoboscriptCpuCore.execute_regular_instruction",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_apply_read_instruction",
+        mirror: "GoboscriptCpuCore.apply_read_instruction",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_execute_memory_instruction",
+        mirror: "GoboscriptCpuCore.execute_memory_instruction",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_compute_store_value",
+        mirror: "GoboscriptCpuCore.compute_store_value",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_modify_value",
+        mirror: "GoboscriptCpuCore.modify_value",
     },
     {
         source: "src/cpu_instruction.gs",

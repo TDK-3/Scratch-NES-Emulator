@@ -225,7 +225,7 @@ separate from TypeScript success.
 - [x] Create an initial shared, generated vector set for numeric helpers, CPU instruction state/cycles,
       CPU-bus mirroring/open bus, MMC3 PRG banks/filtered IRQs, scheduled PPU vblank/NMI, pulse APU state,
       controller serialization, and per-instruction ALU results. `tests/fixtures/goboscript/shared_port_vectors.json`
-      is canonical: thirteen suites and 414 records, whose expected ALU bytes were derived by executing the
+      is canonical: thirteen suites and 469 records, whose expected ALU bytes were derived by executing the
       production CPU, whose expected cartridge header fields were derived by executing `parse_ines_rom`, and
       whose expected addressing operands and bus traces were derived by executing
       `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
@@ -278,6 +278,17 @@ separate from TypeScript success.
       `scripts/generate_goboscript_opcode_table.mjs` flattens it to the ignored
       `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. The `.gs` mnemonic enum,
       the list loader, and the decode proc that reads it landed in the next entry.
+- [x] Complete instruction dispatch for every official opcode. `cpu_execute_regular_instruction` in
+      `scratch/src/cpu_instruction.gs` resolves the operand and spends the cycles its kind needs (a dummy read
+      for the implied and accumulator forms, nothing extra for an immediate operand, and the read, write-back,
+      and write of a read-modify-write for a memory operand), `cpu_apply_read_instruction` covers the loads and
+      the ALU group, `cpu_modify_value` covers ASL, LSR, ROL, ROR, INC, and DEC, and `cpu_compute_store_value`
+      covers STA, STX, and STY. Suite 13 grew to 99 records covering every official group and all twelve memory
+      addressing modes, and the mirror executes all 256 opcodes, asserting that the 151 official ones report no
+      error and the other 104 report `unofficial_opcode` except KIL. Not ported: unofficial opcodes other than
+      KIL and their unstable high-byte stores, the jam vector reads and sequence selection, interrupt acceptance
+      policy between instructions, and `finish_instruction`. Compile validation stays blocked by the missing
+      toolchain.
 - [x] Port instruction dispatch for the instructions that need no memory operand.
       `scratch/src/cpu_instruction.gs` executes one whole instruction: fetch and decode, then the KIL jam
       flag, BRK, JSR, RTI, RTS, the eight branches, both JMP forms, the four stack instructions, the
@@ -317,7 +328,7 @@ separate from TypeScript success.
 
 - [x] Run CPU, PPU, APU, DMA, interrupt, mapper, and timing test suites; document skips and known
       failures. On 2026-10-15, `npm test` passed all 332 tests (including strict type-checking) and
-      `npm run build:ts` passed; on 2026-10-18 it passed all 1,048 tests. Coverage and known external-ROM
+      `npm run build:ts` passed; on 2026-10-18 it passed all 1,104 tests. Coverage and known external-ROM
       failures/skips are recorded in `docs/TESTING.md`.
 - [ ] Differentially compare CPU traces and framebuffer/audio outputs against trusted reference
       behavior. The first 5,003 external `nestest` trace entries match; TypeScript and a temporary JSNES 2.1.0
@@ -338,14 +349,14 @@ separate from TypeScript success.
       open under P6 and `docs/COMPLETION_CRITERIA.md`.
 - [x] From a clean npm install (`npm ci`), run TypeScript tests/build and regenerate the selected-ROM and
       shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed. Rechecked on
-      2026-10-18 with 1,048 tests passing and all three generators completing (7,303 vector values, 1,538
+      2026-10-18 with 1,104 tests passing and all three generators completing (9,300 vector values, 1,538
       opcode values, 81,936 ROM bytes).
 - [ ] Install the documented GoboScript compiler, build/open the `.sb3`, and validate it in TurboWarp;
       review source, asset, and ROM rights before distribution. Compiler availability and runtime validation
       remain blocked; see the P0 notes above.
 - [x] Keep `PROGRESS.md` and `COMPLETION_CRITERIA.md` current with test results, measurements, and open
       blockers. The 2026-10-15 clean-install run passed 332 tests, TypeScript build, and both data generators;
-      the 2026-10-18 run passed 1,048 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
+      the 2026-10-18 run passed 1,104 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
       is a progress record, not a claim that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria
       are complete.
 
