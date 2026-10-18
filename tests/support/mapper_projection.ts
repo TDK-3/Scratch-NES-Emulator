@@ -1,7 +1,9 @@
 import { parse_ines_rom } from "../../src/nes/cartridge/ines.js";
 import { resolve_mapper } from "../../src/nes/cartridge/mapper.js";
 import { NromMapper } from "../../src/nes/cartridge/mapper_000.js";
+import { NesCpuBus } from "../../src/nes/cpu/nes_cpu_bus.js";
 import { make_cartridge_image } from "./cartridge_projection.js";
+import { make_absent_bus_devices } from "./recording_cpu_bus.js";
 
 /**
  * Reference-side projection of mapper selection and NROM board validation onto the flat array
@@ -181,21 +183,22 @@ export interface NromMemoryOp {
 }
 
 /**
- * Builds one board over an image whose payload carries the record's prepared bytes. The header is
- * parsed once to learn where the payload starts and how long it is, the prepared bytes are written
- * into a fresh image, and that image is parsed again, because the mapper copies the payload the
- * parser hands it and a later write to a separate image would not reach it.
+ * Builds the board a record describes, over an image whose payload carries its prepared bytes. The
+ * header is parsed once to learn where the payload starts and how long it is, the prepared bytes
+ * are written into a fresh image, and that image is parsed again, because the mapper copies the
+ * payload the parser hands it and a later write to a separate image would not reach it. A board
+ * that does not validate comes back as null with its error code.
  */
-function create_board(
+function build_board(
     image_bytes: number,
     header: readonly number[],
     prg_prepare: readonly NromMemoryPrepare[],
     chr_prepare: readonly NromMemoryPrepare[],
-): NromMapper {
+): { readonly mapper: NromMapper | null; readonly error_code: number } {
     const plain = parse_ines_rom(make_cartridge_image(image_bytes, header));
 
     if (!plain.ok) {
-        throw new RangeError(`Suite 16 needs a header that parses; this one reported ${plain.error.code}.`);
+        throw new RangeError(`A board record needs a header that parses; this one reported ${plain.error.code}.`);
     }
 
     const prg_rom_offset = 16 + (plain.value.trainer === null ? 0 : 512);
@@ -227,10 +230,26 @@ function create_board(
     const created = NromMapper.create(parsed.value);
 
     if (!created.ok) {
-        throw new RangeError(`Suite 16 needs a board that validates; this one reported ${created.error.code}.`);
+        return { mapper: null, error_code: NROM_ERROR_IDS[created.error.code] };
     }
 
-    return created.value;
+    return { mapper: created.value, error_code: 0 };
+}
+
+/** Builds one board and refuses a record whose board does not validate. */
+function create_board(
+    image_bytes: number,
+    header: readonly number[],
+    prg_prepare: readonly NromMemoryPrepare[],
+    chr_prepare: readonly NromMemoryPrepare[],
+): NromMapper {
+    const built = build_board(image_bytes, header, prg_prepare, chr_prepare);
+
+    if (built.mapper === null) {
+        throw new RangeError(`Suite 16 needs a board that validates; this one reported ${built.error_code}.`);
+    }
+
+    return built.mapper;
 }
 
 /**
@@ -280,6 +299,80 @@ export function project_nrom_memory(
         } else {
             throw new RangeError(`Unknown memory operation kind ${op.kind}.`);
         }
+    }
+
+    return values;
+}
+
+/**
+ * Suite 17 ("cartridge_bus") runs the production CPU address decoder with the board a record
+ * describes attached as its cartridge port, so it pins what the ported bus and board do together:
+ * which addresses the board drives, what the open-bus latch holds where it does not, and that a
+ * board which fails validation leaves the window undriven instead of half mapped.
+ */
+
+/** Bus operation kinds a suite-17 record can run, using suite 3's convention: 0 reads, 1 writes. */
+export const CARTRIDGE_BUS_OPS: readonly { readonly id: number; readonly name: string }[] = [
+    { id: 0, name: "read" },
+    { id: 1, name: "write" },
+];
+
+export const CARTRIDGE_BUS_READ = 0;
+export const CARTRIDGE_BUS_WRITE = 1;
+
+/**
+ * Number of fixed inputs before a record's payload pairs and operations: the declared image length,
+ * the sixteen header bytes, the attach flag, the PRG ROM prepare count, and the operation count.
+ */
+export const CARTRIDGE_BUS_FIXED_INPUT_COUNT = 20;
+
+/** Values reported before the per-operation results: whether a board is attached, and why not. */
+export const CARTRIDGE_BUS_FIXED_VALUE_COUNT = 2;
+
+/** Values reported per operation: the byte the bus returned and the latch it left behind. */
+export const CARTRIDGE_BUS_VALUES_PER_OP = 2;
+
+/** An address no ported device drives, so reading it reports the latch without changing it. */
+const OPEN_BUS_PROBE_ADDRESS = 0x2000;
+
+export interface CartridgeBusOp {
+    readonly kind: number;
+    readonly address: number;
+    readonly value: number;
+}
+
+/**
+ * Runs one suite-17 record. Every operation reports the byte the bus returned, which is the latch
+ * for a write, and then the latch itself, read back through an address no device drives.
+ */
+export function project_cartridge_bus(
+    image_bytes: number,
+    header: readonly number[],
+    attach_board: number,
+    prg_prepare: readonly NromMemoryPrepare[],
+    ops: readonly CartridgeBusOp[],
+): number[] {
+    const built = build_board(image_bytes, header, prg_prepare, []);
+    const mapper = attach_board === 1 ? built.mapper : null;
+    const devices = make_absent_bus_devices();
+    const bus = new NesCpuBus(mapper === null ? devices : { ...devices, cartridge: mapper });
+    const values: number[] = [mapper === null ? 0 : 1, built.error_code];
+
+    for (const op of ops) {
+        if (op.value < 0 || op.value > 0xff) {
+            throw new RangeError(`Operation value ${op.value} is outside the byte range the bus accepts.`);
+        }
+
+        if (op.kind === CARTRIDGE_BUS_READ) {
+            values.push(bus.read_cpu(op.address));
+        } else if (op.kind === CARTRIDGE_BUS_WRITE) {
+            bus.write_cpu(op.address, op.value);
+            values.push(0);
+        } else {
+            throw new RangeError(`Unknown bus operation kind ${op.kind}.`);
+        }
+
+        values.push(bus.read_cpu(OPEN_BUS_PROBE_ADDRESS));
     }
 
     return values;

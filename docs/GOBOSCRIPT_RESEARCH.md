@@ -369,12 +369,13 @@ a CPU-bus subset, cartridge header parsing, the CPU register/fetch/stack/address
 BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, the generated opcode decode, one whole
 instruction for all 151 official opcodes, the control loop with interrupt acceptance, the jam vector reads,
 and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection, and the NROM board with its
-validation, payload and trainer copies, and CPU and pattern windows), and step 6 is written but unrun, because
-the project cannot be compiled here. What step 5 still lacks is the yield policy a frame loop needs and the DMA
-stall path; wiring the board into the ported CPU bus, the NVRAM snapshots, and the MMC3 board are the next
-porting work, and step 7 remains entirely blocked on a toolchain. The in-project self test replays suites 1, 3,
-and 7 through 16 of the shared fixture and counts the CPU state, MMC3, PPU, and APU suites as skipped rather
-than passing.
+validation, payload and trainer copies, CPU and pattern windows, and the boot path that attaches a validated
+board to the ported CPU bus), and step 6 is written but unrun, because the project cannot be compiled here.
+What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the NVRAM snapshots and
+the MMC3 board are the next porting work, and step 7 remains entirely blocked on a toolchain. The in-project
+self test replays suites 1, 3, and 7 through 17 of the shared fixture and counts the CPU state, MMC3, PPU, and
+APU suites as skipped rather than passing. The embedded default image is MMC3, so the loader reports a wrong
+board family and the cartridge window stays undriven until that board is ported.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

@@ -153,10 +153,11 @@
         main.gs  display sprite: reports the self-test summary
         src/
             cartridge.gs  iNES and NES 2.0 header parsing with numeric error codes
+            cartridge_loader.gs  boot path: signature, header, board validation, payload, attachment
             controller.gs  two serial controller ports
             cpu_addressing.gs  all thirteen addressing modes with dummy reads and page-cross cycles
             cpu_alu.gs  ADC, SBC, logic, shift, compare, BIT, INC, DEC
-            cpu_bus.gs  RAM mirroring, open bus, controller window
+            cpu_bus.gs  RAM mirroring, open bus, controller window, attached-board cartridge window
             cpu_control.gs  sequence selection, interrupt acceptance, jam vector reads, IRQ poll mask
             cpu_core.gs  registers, one logged bus transaction per cycle, fetch and stack operations
             cpu_instruction.gs  one whole instruction: dispatch, operands, ALU, branches, jumps, stack
@@ -242,8 +243,14 @@ toolchain needs Cargo and rustc, which are unavailable here.
 - `src/cpu_alu.gs` holds the thirteen ALU operations; each proc leaves its result in `alu_value` and its
   status in `alu_status`.
 - `src/controller.gs` holds both serial controller ports.
-- `src/cpu_bus.gs` holds the CPU decoder subset: RAM and mirroring, the open-bus latch with driven masks, and
-  the `$4016`/`$4017` window. PPU, APU, OAM DMA, and cartridge windows behave as absent devices.
+- `src/cpu_bus.gs` holds the CPU decoder subset: RAM and mirroring, the open-bus latch with driven masks, the
+  `$4016`/`$4017` window, and the cartridge window an attached board drives. PPU, APU, and OAM DMA behave as
+  absent devices, and the cartridge window stays undriven until a board validates, so its reads return the
+  latch and its writes are dropped.
+- `src/cartridge_loader.gs` composes the boot path: check the embedded image's signature, copy and parse its
+  header, validate the board, copy the payload, and attach the board to the bus, recording one summary line
+  for the report. The embedded default image is an MMC3 cartridge, so it reports a wrong board family and
+  leaves the window undriven until mapper 4 is ported.
 - `src/cpu_core.gs` holds the six CPU registers, one logged bus transaction per cycle in `cpu_access_log`,
   fetch byte/word, and push/pop byte/word with status push and restore.
 - `src/cpu_addressing.gs` resolves all thirteen addressing modes, including the zero-page and indexed dummy

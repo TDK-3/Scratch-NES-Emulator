@@ -25,6 +25,7 @@ costumes "assets/blank.svg";
 %include src/mapper
 %include src/mapper_000
 %include src/rom_loader
+%include src/cartridge_loader
 %include src/shared_vectors
 %include src/vector_selftest
 

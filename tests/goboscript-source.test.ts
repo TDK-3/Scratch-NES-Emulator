@@ -413,6 +413,12 @@ const MIRROR_CONTRACT: readonly {
         reason: "dispatcher",
     },
     { source: "src/vector_selftest.gs", declaration: "run_nrom_vector", mirror: null, reason: "dispatcher" },
+    {
+        source: "src/cartridge_loader.gs",
+        declaration: "cartridge_load_board",
+        mirror: null,
+        reason: "composes the parser, board validation, payload copy, and bus attachment",
+    },
     { source: "src/mapper_000.gs", declaration: "nrom_reset_memory", mirror: "GoboscriptNromMapper.reset_memory" },
     { source: "src/mapper_000.gs", declaration: "nrom_copy_prg_rom", mirror: "GoboscriptNromMapper.copy_prg_rom" },
     { source: "src/mapper_000.gs", declaration: "nrom_copy_chr_rom", mirror: "GoboscriptNromMapper.copy_chr_rom" },
@@ -429,6 +435,12 @@ const MIRROR_CONTRACT: readonly {
     {
         source: "src/vector_selftest.gs",
         declaration: "run_nrom_memory_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_cartridge_bus_vector",
         mirror: null,
         reason: "dispatcher",
     },
@@ -475,6 +487,7 @@ test("the GoboScript project contains the expected sources", () => {
     assert.deepEqual(paths, [
         "main.gs",
         "src/cartridge.gs",
+        "src/cartridge_loader.gs",
         "src/controller.gs",
         "src/cpu_addressing.gs",
         "src/cpu_alu.gs",
@@ -958,6 +971,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "alu",
             "bus",
             "cartridge",
+            "cartridge_bus",
             "controller",
             "cpu_addressing",
             "cpu_control",
@@ -1071,6 +1085,7 @@ test("the self-test operation ids match the shared vector fixture operations", (
     // that board's memory operations under the same single operation id.
     assert.deepEqual([...fixture_operations("nrom")], [1], "board validation has one operation");
     assert.deepEqual([...fixture_operations("nrom_memory")], [1], "board memory has one operation");
+    assert.deepEqual([...fixture_operations("cartridge_bus")], [1], "the cartridge bus has one operation");
 
     // The memory operation kinds the self-test dispatches are the projection's ids.
     const memory_ops = get_enum(get_source("src/mapper_000.gs"), "nrom_memory_op");

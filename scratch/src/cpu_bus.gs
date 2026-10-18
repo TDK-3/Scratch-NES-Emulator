@@ -11,9 +11,16 @@
 
 %include src/numeric
 %include src/controller
+%include src/mapper
+%include src/mapper_000
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
+
+# The board the cartridge loader attached, using mapper_kind. Zero leaves the cartridge window
+# without a device, so its reads return the latch and its writes are dropped, exactly as the
+# reference bus behaves with an absent cartridge port.
+var cpu_bus_cartridge_kind = 0;
 
 # Clears the bus latch like NesCpuBus.reset(); RAM contents survive a reset.
 proc cpu_bus_reset {
@@ -60,7 +67,16 @@ func cpu_bus_read(address) {
         return cpu_bus_read_io(numeric_address);
     }
 
-    # $4020-$FFFF: cartridge space is not ported yet.
+    # $4020-$FFFF: an attached board drives the addresses it maps, and the rest of the window
+    # still returns the latch, because NROM does not answer below $6000.
+    if cpu_bus_cartridge_kind == mapper_kind.nrom {
+        nrom_read_cpu numeric_address;
+
+        if nrom_cpu_mapped == 1 {
+            return cpu_apply_driven_value(nrom_cpu_value, nrom_cpu_driven_mask);
+        }
+    }
+
     return cpu_open_bus;
 }
 
@@ -91,5 +107,9 @@ proc cpu_bus_write address, value {
         controller_write_strobe numeric_value;
     }
 
-    # PPU, APU, $4014 OAM DMA, and cartridge writes are not ported yet.
+    if cpu_bus_cartridge_kind == mapper_kind.nrom {
+        nrom_write_cpu numeric_address, numeric_value;
+    }
+
+    # PPU, APU, and $4014 OAM DMA writes are not ported yet.
 }

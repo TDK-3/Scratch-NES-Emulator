@@ -46,7 +46,11 @@ import {
     project_cpu_sequence,
     type CpuSequenceSetup,
 } from "./support/cpu_sequence_projection.js";
+import { make_absent_bus_devices } from "./support/recording_cpu_bus.js";
 import {
+    CARTRIDGE_BUS_FIXED_INPUT_COUNT,
+    CARTRIDGE_BUS_FIXED_VALUE_COUNT,
+    CARTRIDGE_BUS_VALUES_PER_OP,
     MAPPER_CREATION_VALUE_COUNT,
     MAPPER_KIND_IDS,
     MAPPER_SELECTION_ERROR_IDS,
@@ -2152,4 +2156,139 @@ test("the mirrored payload copy lands the bytes the reference board holds", () =
     mirror.read_cpu(0x7000);
     assert.equal(mirror.cpu_value, 0, "the trainer copy is gone");
     assert.equal(mirror.prg_rom.length, 32768, "the ROM lists keep their declared size");
+});
+
+test("the mirrored bus and board replay every suite 17 vector", () => {
+    const vectors = get_shared_vector_suite("cartridge_bus").vectors;
+    assert.ok(vectors.length >= 10, "suite 17 covers the cartridge window with and without a board");
+
+    for (const vector of vectors) {
+        const input = [...vector.input];
+        const attach = input[17] ?? 0;
+        const prg_count = input[18] ?? 0;
+        const op_count = input[19] ?? 0;
+        const board = make_mirror_nrom(input);
+        board.validate();
+        const bus = new ported.GoboscriptCpuBus();
+        bus.clear_ram();
+        bus.reset();
+        const attached = board.ok === 1 && attach === 1 ? 1 : 0;
+
+        if (attached === 1) {
+            board.reset_memory();
+
+            for (let index = 0; index < prg_count; index += 1) {
+                const at = CARTRIDGE_BUS_FIXED_INPUT_COUNT + index * 2;
+                board.prg_rom[input[at] ?? 0] = input[at + 1] ?? 0;
+            }
+
+            bus.board = board;
+            bus.cartridge_kind = ported.MAPPER_KIND.NROM;
+        }
+
+        const values = [attached, board.error_code];
+
+        for (let index = 0; index < op_count; index += 1) {
+            const at = CARTRIDGE_BUS_FIXED_INPUT_COUNT + prg_count * 2 + index * 3;
+            const kind = input[at] ?? 0;
+            const address = input[at + 1] ?? 0;
+            const value = input[at + 2] ?? 0;
+
+            if (kind === 1) {
+                bus.write(address, value);
+                values.push(0);
+            } else {
+                values.push(bus.read(address));
+            }
+
+            values.push(bus.read(0x2000));
+        }
+
+        assert.deepEqual(values, [...vector.expected], `cartridge_bus vector ${vector.id}`);
+        assert.equal(values.length, CARTRIDGE_BUS_FIXED_VALUE_COUNT + op_count * CARTRIDGE_BUS_VALUES_PER_OP);
+    }
+});
+
+test("the mirrored boot path answers the way the reference bus and board do", () => {
+    const header = [0x4e, 0x45, 0x53, 0x1a, 2, 1, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+    const bytes = 16 + 32768 + 8192;
+    const image = make_cartridge_image(bytes, header);
+
+    for (let index = 16; index < image.length; index += 1) {
+        image[index] = (index * 11 + 5) % 251;
+    }
+
+    const parsed = parse_ines_rom(image);
+    assert.ok(parsed.ok, "the synthetic NROM image parses");
+    const created = NromMapper.create(parsed.value);
+    assert.ok(created.ok, "the synthetic image is an acceptable board");
+    const devices = make_absent_bus_devices();
+    const reference = new NesCpuBus({ ...devices, cartridge: created.value });
+
+    // The mirror walks the same boot path: parse the header, validate the board, copy the payload,
+    // and attach it to the bus, which is what cartridge_load_board composes in the project.
+    const parser = new ported.GoboscriptCartridgeParser();
+    parser.image_bytes = image.length;
+
+    for (let index = 0; index < 16; index += 1) {
+        parser.header[index] = image[index] ?? 0;
+    }
+
+    parser.parse();
+    assert.equal(parser.ok, 1);
+
+    const board = new ported.GoboscriptNromMapper();
+    board.mapper_id = parser.mapper_id;
+    board.submapper = parser.submapper;
+    board.has_trainer = parser.has_trainer;
+    board.prg_rom_bytes = parser.prg_rom_bytes;
+    board.chr_rom_bytes = parser.chr_rom_bytes;
+    board.prg_ram_bytes = parser.prg_ram_bytes;
+    board.prg_nvram_bytes = parser.prg_nvram_bytes;
+    board.chr_ram_bytes = parser.chr_ram_bytes;
+    board.chr_nvram_bytes = parser.chr_nvram_bytes;
+    board.trainer_offset = parser.trainer_offset;
+    board.prg_rom_offset = parser.prg_rom_offset;
+    board.chr_rom_offset = parser.chr_rom_offset;
+    board.cartridge_bytes = [...image];
+    board.validate();
+    assert.equal(board.ok, 1);
+    board.load_payload();
+
+    const bus = new ported.GoboscriptCpuBus();
+    bus.board = board;
+    bus.cartridge_kind = ported.MAPPER_KIND.NROM;
+
+    // The controller window is left out: the mirrored bus drives it from its own ports, while this
+    // reference bus has no controller attached. Suite 3 compares that window on its own.
+    const addresses = [
+        0x0000, 0x07ff, 0x0800, 0x1fff, 0x2000, 0x3fff, 0x4020, 0x5fff, 0x6000, 0x7fff, 0x8000, 0xbfff, 0xc000,
+        0xffff,
+    ];
+
+    for (const address of addresses) {
+        assert.equal(bus.read(address), reference.read_cpu(address), `read $${address.toString(16)}`);
+    }
+
+    for (const [address, value] of [[0x6000, 0x5a], [0x7fff, 0xa5], [0x8000, 0x3c], [0x0001, 0x77]] as const) {
+        bus.write(address, value);
+        reference.write_cpu(address, value);
+    }
+
+    for (const address of addresses) {
+        assert.equal(bus.read(address), reference.read_cpu(address), `after writes, $${address.toString(16)}`);
+    }
+
+    // A board that does not validate leaves the window undriven on both sides.
+    const rejected = new ported.GoboscriptNromMapper();
+    rejected.mapper_id = 4;
+    rejected.prg_rom_bytes = 32768;
+    rejected.chr_rom_bytes = 8192;
+    rejected.validate();
+    assert.equal(rejected.ok, 0);
+    assert.equal(rejected.error_code, ported.NROM_ERROR.WRONG_MAPPER_FAMILY);
+
+    const undriven = new ported.GoboscriptCpuBus();
+    undriven.write(0x0000, 0x5a);
+    assert.equal(undriven.read(0x8000), 0x5a, "no board means the window returns the latch");
 });

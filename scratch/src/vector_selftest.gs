@@ -27,6 +27,7 @@
 %include src/cartridge
 %include src/mapper
 %include src/mapper_000
+%include src/cartridge_loader
 %include src/rom_loader
 %include src/shared_vectors
 
@@ -46,7 +47,8 @@ enum port_suite {
     cpu_instruction = 13,
     cpu_control = 14,
     nrom = 15,
-    nrom_memory = 16
+    nrom_memory = 16,
+    cartridge_bus = 17
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -113,6 +115,7 @@ proc run_port_self_test {
     port_self_test_done = 0;
     port_self_test_summary = "";
     rom_header_report;
+    cartridge_load_board;
     cpu_check_opcode_table;
 
     if schema_version != 1 {
@@ -127,6 +130,7 @@ proc run_port_self_test {
         port_self_test_summary = "port vectors " & port_vectors_passed & "/" & port_vectors_run;
         port_self_test_summary = port_self_test_summary & " passed, " & port_vectors_skipped & " skipped";
         port_self_test_summary = port_self_test_summary & ", rom header " & rom_header_state_text;
+        port_self_test_summary = port_self_test_summary & ", board " & cartridge_board_state_text;
     }
 
     if port_vectors_failed > 0 {
@@ -173,6 +177,8 @@ proc run_next_port_vector {
         run_nrom_vector input_start;
     } elif suite_id == port_suite.nrom_memory {
         run_nrom_memory_vector input_start;
+    } elif suite_id == port_suite.cartridge_bus {
+        run_cartridge_bus_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -800,6 +806,72 @@ proc run_nrom_memory_vector input_start {
             add 0 to port_actual_values;
         }
 
+        index++;
+    }
+}
+
+# Suite 17: the ported CPU bus with a board attached. Inputs are the declared image length, the
+# sixteen header bytes, the attach flag, the PRG ROM prepare count, the operation count, then the
+# prepared (index, value) PRG ROM pairs and the (kind, address, value) operations, where kind 1
+# writes the bus and any other kind reads it, as in suite 3. Expected values are whether a board is
+# attached and the board error code, then two values per operation: the byte the bus returned and
+# the open-bus latch it left behind, read back through $2000, an address no ported device drives.
+proc run_cartridge_bus_vector input_start {
+    local attach_board = to_number(shared_port_vectors[$input_start + 17]);
+    local prg_count = to_number(shared_port_vectors[$input_start + 18]);
+    local op_count = to_number(shared_port_vectors[$input_start + 19]);
+    local prg_start = $input_start + 20;
+    local op_start = prg_start + (prg_count * 2);
+    local index = 0;
+    local prepare_index = 0;
+    local op_kind = 0;
+    local op_address = 0;
+    local op_value = 0;
+    local attached = 0;
+    cartridge_image_bytes = to_number(shared_port_vectors[$input_start]);
+
+    repeat cartridge_limit.header_bytes {
+        cartridge_header[index + 1] = to_number(shared_port_vectors[$input_start + index + 1]);
+        index++;
+    }
+
+    cartridge_parse_header;
+    nrom_validate;
+    cpu_bus_clear_ram;
+    cpu_bus_reset;
+    cpu_bus_cartridge_kind = mapper_kind.none;
+
+    if nrom_ok == 1 and attach_board == 1 {
+        attached = 1;
+        nrom_reset_memory;
+        index = 0;
+
+        repeat prg_count {
+            prepare_index = to_number(shared_port_vectors[prg_start + (index * 2)]) + 1;
+            nrom_prg_rom[prepare_index] = to_number(shared_port_vectors[prg_start + 1 + (index * 2)]);
+            index++;
+        }
+
+        cpu_bus_cartridge_kind = mapper_kind.nrom;
+    }
+
+    add attached to port_actual_values;
+    add nrom_error_code to port_actual_values;
+    index = 0;
+
+    repeat op_count {
+        op_kind = to_number(shared_port_vectors[op_start + (index * 3)]);
+        op_address = to_number(shared_port_vectors[op_start + 1 + (index * 3)]);
+        op_value = to_number(shared_port_vectors[op_start + 2 + (index * 3)]);
+
+        if op_kind == 1 {
+            cpu_bus_write op_address, op_value;
+            add 0 to port_actual_values;
+        } else {
+            add cpu_bus_read(op_address) to port_actual_values;
+        }
+
+        add cpu_bus_read(8192) to port_actual_values;
         index++;
     }
 }

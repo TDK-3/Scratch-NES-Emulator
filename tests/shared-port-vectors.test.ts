@@ -51,6 +51,13 @@ import {
 } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
+    CARTRIDGE_BUS_FIXED_INPUT_COUNT,
+    CARTRIDGE_BUS_FIXED_VALUE_COUNT,
+    CARTRIDGE_BUS_OPS,
+    CARTRIDGE_BUS_VALUES_PER_OP,
+    CARTRIDGE_BUS_WRITE,
+    project_cartridge_bus,
+    type CartridgeBusOp,
     MAPPER_CREATION_INPUT_COUNT,
     NROM_MEMORY_CPU_READ,
     NROM_MEMORY_CPU_WRITE,
@@ -877,6 +884,66 @@ for_each_vector("nrom_memory", (vector) => {
         } else {
             assert.equal(value, 0, "a pattern write reports no byte");
             assert.equal(driven, 0);
+        }
+    }
+});
+
+for_each_vector("cartridge_bus", (vector) => {
+    assert.equal(vector.operation, 1, "Cartridge bus vectors have a single operation.");
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
+    const attach_board = vector.input[17] ?? 0;
+    const prg_count = vector.input[18] ?? 0;
+    const op_count = vector.input[19] ?? 0;
+    assert.equal(vector.input.length, CARTRIDGE_BUS_FIXED_INPUT_COUNT + prg_count * 2 + op_count * 3);
+
+    const prg_prepare: NromMemoryPrepare[] = [];
+    const operations: CartridgeBusOp[] = [];
+
+    for (let index = 0; index < prg_count; index += 1) {
+        const at = CARTRIDGE_BUS_FIXED_INPUT_COUNT + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `PRG prepare ${index} is a pair.`);
+        prg_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const at = CARTRIDGE_BUS_FIXED_INPUT_COUNT + prg_count * 2 + index * 3;
+        const kind = vector.input[at];
+        const address = vector.input[at + 1];
+        const value = vector.input[at + 2];
+        assert.ok(kind !== undefined && address !== undefined && value !== undefined, `Operation ${index}.`);
+        assert.ok(
+            CARTRIDGE_BUS_OPS.some((entry) => entry.id === kind),
+            `Operation kind ${kind} is one the ported bus dispatches.`,
+        );
+        operations.push({ kind, address, value });
+    }
+
+    const actual = project_cartridge_bus(image_bytes, header, attach_board, prg_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, CARTRIDGE_BUS_FIXED_VALUE_COUNT + op_count * CARTRIDGE_BUS_VALUES_PER_OP);
+
+    const attached = actual[0] ?? 0;
+    const board_error = actual[1] ?? 0;
+    assert.equal(
+        attached,
+        attach_board === 1 && board_error === 0 ? 1 : 0,
+        "a board drives the bus only when it validates and the record attaches it",
+    );
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = CARTRIDGE_BUS_FIXED_VALUE_COUNT + index * CARTRIDGE_BUS_VALUES_PER_OP;
+        const returned = actual[at] ?? 0;
+        const latch = actual[at + 1] ?? 0;
+        assert.ok(returned >= 0 && returned <= 0xff, `Operation ${index} returns a byte.`);
+        assert.ok(latch >= 0 && latch <= 0xff, `Operation ${index} leaves a byte in the latch.`);
+
+        if (op?.kind === CARTRIDGE_BUS_WRITE) {
+            assert.equal(returned, 0, "a write returns no byte");
+            assert.equal(latch, op.value, "the bus latches every write, mapped or not");
         }
     }
 });

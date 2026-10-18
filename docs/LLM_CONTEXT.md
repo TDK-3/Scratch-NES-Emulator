@@ -118,8 +118,8 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,174 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
-test, 530 cross-domain parity cases, 67 GoboScript port-algorithm comparisons against an integer-only mirror of
+suite has 1,188 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+test, 542 cross-domain parity cases, 69 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported modules, 17 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
@@ -187,8 +187,9 @@ The Scratch/TurboWarp project embeds one build-time ROM as a file-backed GoboScr
 port vectors. It now also ports the helper layer: `scratch/src/numeric.gs` (bit-free byte/word helpers plus
 `bit_at` and weight-loop AND/OR/XOR, because GoboScript has no bitwise operators), `cpu_status.gs`,
 `cpu_alu.gs` (ADC, SBC, AND, ORA, EOR, ASL, LSR, ROL, ROR, CMP, CPX, CPY, BIT, INC, DEC), `controller.gs`
-(both serial ports), `cpu_bus.gs` (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`, and
-absent-device behavior for PPU/APU/OAM DMA/cartridge), and `cartridge.gs` (iNES 1.0 and NES 2.0 header decode
+(both serial ports), `cpu_bus.gs` (RAM mirroring, open-bus latch with driven masks,
+`$4016`/`$4017`, absent-device behavior for PPU/APU/OAM DMA, and a cartridge window an attached
+board drives), and `cartridge.gs` (iNES 1.0 and NES 2.0 header decode
 with mapper/submapper, mirroring, battery, trainer, ROM and RAM sizes, payload offsets, and six numeric error
 codes), `cpu_core.gs` (register state, one logged bus transaction per cycle, fetch byte/word, and the four
 stack operations), `cpu_addressing.gs` (all thirteen addressing modes with dummy reads, page-cross
@@ -205,12 +206,15 @@ clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind
 and submapper routing with the two selection error codes, plus the declared-memory size sum), and
 `mapper_000.gs` (every NROM board check in the reference's order, the two memory sizes an accepted board would
 map, the payload copy including the trainer at PRG RAM offset `$1000`, and the CPU and pattern address windows
-with PRG ROM mirroring and the writable RAM regions). `stage.gs` includes every header, so the Stage owns all
-shared state, and its green-flag handler runs `src/vector_selftest.gs`, which executes suites 1, 3, and 7
-through 16 of the fixture, counts suites 2, 4, 5, and 6 as skipped, and broadcasts a summary that `main.gs`
-reports. Unofficial opcodes other than KIL, DMA stalls, wiring the board into `cpu_bus.gs`, the NVRAM
-snapshots, MMC3 banking and IRQ, PPU, APU, rendering, sound, save states, and game execution remain
-unimplemented there, and none of the `.gs` sources has been compiled. The TypeScript NROM/MMC3 mapper and
+with PRG ROM mirroring and the writable RAM regions), and `cartridge_loader.gs` (the boot path that validates
+a board, copies its payload, attaches it to the bus, and reports why an image was rejected). `stage.gs`
+includes every header, so the Stage owns all shared state, and its green-flag handler runs
+`src/vector_selftest.gs`, which executes suites 1, 3, and 7 through 17 of the fixture, counts suites 2, 4, 5,
+and 6 as skipped, and broadcasts a summary that `main.gs` reports. The embedded default image is MMC3, so the
+loader reports a wrong board family and the cartridge window stays undriven until mapper 4 is ported.
+Unofficial opcodes other than KIL, DMA stalls, the NVRAM snapshots, MMC3 banking and IRQ, PPU, APU, rendering,
+sound, save states, and game execution remain unimplemented there, and none of the `.gs` sources has been
+compiled. The TypeScript NROM/MMC3 mapper and
 `NesConsole` APIs copy/restore declared PRG and CHR NVRAM, excluding volatile RAM; restore validates both sizes
 before mutating either region. The browser shell stores both regions in per-ROM SHA-256 snapshots in local
 storage and accepts legacy PRG-only records. TurboWarp storage and full console save states are not implemented.

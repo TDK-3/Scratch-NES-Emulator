@@ -415,6 +415,12 @@ export class GoboscriptCpuBus {
     private readonly ram = new Array<number>(2048).fill(0);
     private open_bus = 0;
 
+    /** Mirror of `cpu_bus_cartridge_kind`: the board the loader attached, if any. */
+    cartridge_kind: number = MAPPER_KIND.NONE;
+
+    /** The attached board, or null while the cartridge window has no device. */
+    board: GoboscriptNromMapper | null = null;
+
     reset(): void {
         this.open_bus = 0;
     }
@@ -443,6 +449,14 @@ export class GoboscriptCpuBus {
             return this.read_io(numeric_address);
         }
 
+        if (this.cartridge_kind === MAPPER_KIND.NROM && this.board !== null) {
+            this.board.read_cpu(numeric_address);
+
+            if (this.board.cpu_mapped === 1) {
+                return this.apply_driven_value(this.board.cpu_value, this.board.cpu_driven_mask);
+            }
+        }
+
         return this.open_bus;
     }
 
@@ -457,6 +471,10 @@ export class GoboscriptCpuBus {
 
         if (numeric_address === 16406) {
             this.controllers.write_strobe(numeric_value);
+        }
+
+        if (this.cartridge_kind === MAPPER_KIND.NROM && this.board !== null) {
+            this.board.write_cpu(numeric_address, numeric_value);
         }
     }
 

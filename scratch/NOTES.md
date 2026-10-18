@@ -25,8 +25,9 @@ What the ported modules cover:
   derived from signed arithmetic rather than bit masks.
 * controller.gs: both serial controller ports with strobe, latch on the falling edge, and the
   trailing 1 bits after the eighth read.
-* cpu_bus.gs: 2 KiB RAM with $0000-$1FFF mirroring, the open-bus latch with driven masks, and
-  the $4016/$4017 controller window. PPU, APU, $4014 OAM DMA, and cartridge windows are not
+* cpu_bus.gs: 2 KiB RAM with $0000-$1FFF mirroring, the open-bus latch with driven masks, the
+  $4016/$4017 controller window, and the $4020-$FFFF cartridge window, which an attached NROM
+  board drives and which stays undriven until one validates. PPU, APU, and $4014 OAM DMA are not
   ported yet, so reads of those addresses return the retained latch and writes are dropped.
 * cartridge.gs: iNES 1.0 and NES 2.0 header parsing into the cartridge_* result globals,
   covering the signature, version bits, mapper and submapper, mirroring, battery, trainer
@@ -114,13 +115,18 @@ What the ported modules cover:
   mapped size when the board has any; and a write only lands in RAM. The NVRAM snapshots and the
   hookup to cpu_bus.gs, whose cartridge window still behaves as an absent device, are not ported
   yet.
+* cartridge_loader.gs: the boot path. It checks the embedded image's signature, copies and parses
+  its header, validates the board, copies the payload, and attaches the board to the CPU bus, and
+  it records one summary line so a report can say why the cartridge window is undriven. The
+  embedded default image is an MMC3 cartridge, so this reports board error 3, a wrong board
+  family, and leaves the window undriven until mapper 4 is ported.
 * vector_selftest.gs: walks the generated list in data/shared_port_vectors.txt and compares
   each record with the value recorded from the TypeScript reference. Suites 1 (numeric), 3
   (bus), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing), 11 (CPU
-  cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), and 15
-  (NROM board validation), and 16 (NROM memory windows) are replayed; records for the CPU state,
-  MMC3, PPU, and APU suites
-  are counted as skipped rather than treated as passing.
+  cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), 15 (NROM
+  board validation), 16 (NROM memory windows), and 17 (cartridge bus) are replayed; records for
+  the CPU state, MMC3, PPU, and APU suites are counted as skipped rather than treated as
+  passing. Its summary reports the ROM header state and the board state the loader recorded.
 
 The green flag runs that self test on the Stage and broadcasts "port self test done"; the
 display sprite reports the summary. data/test_rom_bytes.txt, data/shared_port_vectors.txt, and
@@ -130,6 +136,6 @@ Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
 Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-and the yield policy a frame loop needs; wiring the NROM board into cpu_bus.gs and the NVRAM
-snapshots; PPU rendering; APU channels; MMC3 mapper banking and IRQ; and any frame loop or
-rendering path.
+and the yield policy a frame loop needs; the NVRAM snapshots; PPU rendering; APU channels; MMC3
+mapper banking and IRQ, which is why the embedded MMC3 image cannot be attached; and any frame
+loop or rendering path.

@@ -225,7 +225,7 @@ separate from TypeScript success.
 - [x] Create an initial shared, generated vector set for numeric helpers, CPU instruction state/cycles,
       CPU-bus mirroring/open bus, MMC3 PRG banks/filtered IRQs, scheduled PPU vblank/NMI, pulse APU state,
       controller serialization, and per-instruction ALU results. `tests/fixtures/goboscript/shared_port_vectors.json`
-      is canonical: sixteen suites and 529 records, whose expected ALU bytes were derived by executing the
+      is canonical: seventeen suites and 541 records, whose expected ALU bytes were derived by executing the
       production CPU, whose expected cartridge header fields were derived by executing `parse_ines_rom`, and
       whose expected addressing operands and bus traces were derived by executing
       `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
@@ -278,6 +278,16 @@ separate from TypeScript success.
       `scripts/generate_goboscript_opcode_table.mjs` flattens it to the ignored
       `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. The `.gs` mnemonic enum,
       the list loader, and the decode proc that reads it landed in the next entry.
+- [x] Wire the NROM board into the ported CPU bus and add the cartridge boot path.
+      `scratch/src/cpu_bus.gs` dispatches `$4020-$FFFF` to an attached board through the same driven-mask merge
+      its RAM window uses, and `scratch/src/cartridge_loader.gs` composes the signature check, header parse,
+      board validation, payload copy, and attachment, reporting one summary line. Suite 17 (12 records) runs
+      the production `NesCpuBus` with the record's board attached and pins the returned byte and the latch it
+      left behind, including the boards that are rejected and never attached; a differential test compares the
+      mirrored boot path with the production bus across fourteen addresses before and after writes. The
+      embedded MMC3 image reports a wrong board family, so the window stays undriven until mapper 4 is ported.
+      Not ported: the NVRAM snapshots and the MMC3 board. Compile validation stays blocked by the missing
+      toolchain.
 - [x] Port the NROM board's memory and address windows. `scratch/src/mapper_000.gs` sizes both ROM lists to
       the declared payload, allocates both RAM regions at their full window, copies PRG ROM, CHR ROM, and the
       trainer into PRG RAM at offset `$1000`, and answers the CPU and pattern windows with PRG ROM mirroring
@@ -342,10 +352,11 @@ separate from TypeScript success.
       control loop with interrupt acceptance, the jam vector reads, and the CLI/SEI/PLP IRQ poll mask
       (`cpu_control.gs`), exact mapper and submapper selection (`mapper.gs`), and the NROM board checks with
       the memory sizes an accepted board would map, the NROM payload and trainer copies, and the NROM CPU and
-      pattern address windows (`mapper_000.gs`); PPU, APU, OAM DMA, and cartridge windows still behave as
-      absent devices on the bus, so the ported board does not drive it yet. Not started: wiring the board into
-      `cpu_bus.gs`, the NVRAM snapshots, MMC3 banking and IRQ, PPU rendering, APU channels, DMA stalls, and the
-      frame-loop yield policy.
+      pattern address windows (`mapper_000.gs`), the cartridge window an attached board drives
+      (`cpu_bus.gs`), and the boot path that validates a board, copies its payload, and attaches it
+      (`cartridge_loader.gs`); PPU, APU, and OAM DMA still behave as absent devices on the bus. Not started:
+      the NVRAM snapshots, MMC3 banking and IRQ, PPU rendering, APU channels, DMA stalls, and the frame-loop
+      yield policy.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,
@@ -359,7 +370,7 @@ separate from TypeScript success.
 
 - [x] Run CPU, PPU, APU, DMA, interrupt, mapper, and timing test suites; document skips and known
       failures. On 2026-10-15, `npm test` passed all 332 tests (including strict type-checking) and
-      `npm run build:ts` passed; on 2026-10-18 it passed all 1,174 tests. Coverage and known external-ROM
+      `npm run build:ts` passed; on 2026-10-18 it passed all 1,188 tests. Coverage and known external-ROM
       failures/skips are recorded in `docs/TESTING.md`.
 - [ ] Differentially compare CPU traces and framebuffer/audio outputs against trusted reference
       behavior. The first 5,003 external `nestest` trace entries match; TypeScript and a temporary JSNES 2.1.0
@@ -380,14 +391,14 @@ separate from TypeScript success.
       open under P6 and `docs/COMPLETION_CRITERIA.md`.
 - [x] From a clean npm install (`npm ci`), run TypeScript tests/build and regenerate the selected-ROM and
       shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed. Rechecked on
-      2026-10-18 with 1,174 tests passing and all three generators completing (11,826 vector values, 1,538
+      2026-10-18 with 1,188 tests passing and all three generators completing (12,357 vector values, 1,538
       opcode values, 81,936 ROM bytes).
 - [ ] Install the documented GoboScript compiler, build/open the `.sb3`, and validate it in TurboWarp;
       review source, asset, and ROM rights before distribution. Compiler availability and runtime validation
       remain blocked; see the P0 notes above.
 - [x] Keep `PROGRESS.md` and `COMPLETION_CRITERIA.md` current with test results, measurements, and open
       blockers. The 2026-10-15 clean-install run passed 332 tests, TypeScript build, and both data generators;
-      the 2026-10-18 run passed 1,174 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
+      the 2026-10-18 run passed 1,188 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
       is a progress record, not a claim that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria
       are complete.
 

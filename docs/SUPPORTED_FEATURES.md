@@ -88,7 +88,8 @@ picker, controls, rendering, audio, NVRAM persistence, or console save states. A
 successful `.sb3`/TurboWarp validation are still outstanding.
 
 What the project does contain today: bit-free numeric and status helpers, thirteen ALU operations, both serial
-controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`), iNES 1.0
+controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`, and a
+cartridge window an attached board drives), iNES 1.0
 and NES 2.0 cartridge header parsing (mapper and submapper, mirroring, battery, trainer, ROM and RAM sizes,
 payload offsets, and six numeric error codes), CPU register state with one logged bus transaction per cycle,
 fetch and stack operations, all thirteen addressing modes including dummy reads and the JMP indirect pointer
@@ -96,8 +97,9 @@ wrap, the reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequenc
 decode, one whole instruction for all 151 official opcodes, the control loop that selects jam, NMI, IRQ, or an
 instruction with the jam vector reads and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection,
 the NROM board checks with the memory sizes an accepted board would map, the NROM payload and trainer copies,
-and the NROM CPU and pattern address windows with PRG ROM mirroring and aliasing RAM, and a Stage-run self test
-that replays 529 shared vectors from
+the NROM CPU and pattern address windows with PRG ROM mirroring and aliasing RAM, and a boot path that
+validates a board, copies its payload, and attaches it to the bus, and a Stage-run self test
+that replays 541 shared vectors from
 `scratch/data/shared_port_vectors.txt`, counting the CPU state, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
 Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
 obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared
