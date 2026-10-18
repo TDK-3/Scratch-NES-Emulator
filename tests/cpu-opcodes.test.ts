@@ -1275,14 +1275,14 @@ test("all KIL opcodes jam until reset, ignore interrupts, and continue issuing b
     for (const opcode of kil_opcodes) {
         const bus = new FakeCpuBus();
         bus.load(0x8000, new Uint8Array([opcode, 0xea]));
-        bus.load(0xfffc, new Uint8Array([0x00, 0x90]));
+        bus.load(0xfffc, new Uint8Array([0x00, 0x90, 0x34, 0x12]));
         bus.load(0x9000, new Uint8Array([0xea]));
         const cpu = new Cpu2A03(bus);
         cpu.program_counter = 0x8000;
         cpu.status = UNUSED_FLAG;
 
         assert.equal(cpu.step(), 2, `KIL opcode $${opcode.toString(16)}`);
-        assert.equal(cpu.program_counter, 0x8000);
+        assert.equal(cpu.program_counter, 0x8001);
         assert.deepEqual(bus.accesses, [
             { kind: "read", address: 0x8000, value: opcode },
             { kind: "read", address: 0x8001, value: 0xea },
@@ -1292,26 +1292,24 @@ test("all KIL opcodes jam until reset, ignore interrupts, and continue issuing b
         cpu.set_irq_line(true);
         cpu.request_nmi();
 
-        const first_jam_cycle = cpu.clock_cycle();
-        assert.equal(first_jam_cycle.sequence_kind, "jam");
-        assert.equal(first_jam_cycle.sequence_cycle, 1);
-        assert.equal(first_jam_cycle.sequence_completed, false);
-        assert.deepEqual(first_jam_cycle.access, { kind: "read", address: 0x8000, value: opcode });
+        const first_jam_sequence = [
+            { kind: "read", address: 0xffff, value: 0x12 },
+            { kind: "read", address: 0xfffe, value: 0x34 },
+            { kind: "read", address: 0xfffe, value: 0x34 },
+        ] as const;
 
-        const second_jam_cycle = cpu.clock_cycle();
-        assert.equal(second_jam_cycle.sequence_kind, "jam");
-        assert.equal(second_jam_cycle.sequence_cycle, 2);
-        assert.equal(second_jam_cycle.sequence_completed, true);
-        assert.deepEqual(second_jam_cycle.access, { kind: "read", address: 0x8001, value: 0xea });
-        assert.equal(cpu.program_counter, 0x8000);
-        assert.equal(cpu.step(), 2, "a jammed step must remain bounded");
-        assert.deepEqual(
-            bus.accesses.slice(-2),
-            [
-                { kind: "read", address: 0x8000, value: opcode },
-                { kind: "read", address: 0x8001, value: 0xea },
-            ],
-        );
+        for (const [index, expected_access] of first_jam_sequence.entries()) {
+            const jam_cycle = cpu.clock_cycle();
+            assert.equal(jam_cycle.sequence_kind, "jam");
+            assert.equal(jam_cycle.sequence_cycle, index + 1);
+            assert.equal(jam_cycle.sequence_completed, index === first_jam_sequence.length - 1);
+            assert.deepEqual(jam_cycle.access, expected_access);
+        }
+
+        assert.equal(cpu.step(), 1, "a jammed step must remain bounded");
+        assert.deepEqual(bus.accesses.at(-1), { kind: "read", address: 0xffff, value: 0x12 });
+        assert.equal(cpu.step(), 1);
+        assert.equal(cpu.program_counter, 0x8001);
 
         cpu.set_irq_line(false);
         assert.equal(cpu.reset(), 7);

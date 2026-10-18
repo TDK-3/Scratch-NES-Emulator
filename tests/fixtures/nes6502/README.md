@@ -2,61 +2,48 @@
 
 ## Provenance and license
 
-This project includes twenty selected test cases from the `nes6502/v1` suite in
-[SingleStepTests/65x02](https://github.com/SingleStepTests/65x02), pinned to commit
+This project pins selected test cases from the `nes6502/v1` suite in
+[SingleStepTests/65x02](https://github.com/SingleStepTests/65x02) at commit
 `2f6980a2d95757486c7bee24355c360e40e2a224`. The suite identifies itself as test data for the 6502-derived
-RP2A03 CPU used by the NES, with decimal mode disabled. The upstream repository's MIT license at that
-revision is reproduced in [`LICENSE`](./LICENSE). The test vectors are not ROMs.
+RP2A03 CPU used by the NES, with decimal mode disabled. The upstream MIT license at that revision is
+reproduced in [`LICENSE`](./LICENSE) (copyright 2024 Thomas Harte et al). The test vectors are data, not ROMs.
 
-The full upstream corpus has 10,000 scenarios per opcode. This repository vendors only the twenty vectors
-listed below, not the full corpus. Each selected vector is unchanged from its upstream JSON object; the
-fixture adds source path, zero-based array index, and SHA-256 metadata. Hashes below are for the complete
-upstream opcode JSON files at the pinned revision, before selecting a case.
+The full upstream corpus has 10,000 scenarios per opcode byte, or 2,560,000 scenarios in total. This folder
+vendors only the deterministic subset described below; the corpus itself is never committed. Each selected
+vector is unchanged from its upstream JSON object; the fixture adds its source path, zero-based array index,
+and the SHA-256 of the complete upstream opcode file.
 
-- `$00` (`00 35 26`), index 0: BRK stack/vector effects.
-  - File `nes6502/v1/00.json`; full-file SHA-256 `992496ca570c8a47c69abcec84c36b7c71e6c1f1129a42afd9129e596840f7b3`.
-- `$20` (`20 ab 9d`), index 0: JSR operand fetch and stack ordering.
-  - File `nes6502/v1/20.json`; full-file SHA-256 `c012080ae8e7874f10eb039429640ab951fc08a0de5a83fe394abc4312953c46`.
-- `$40` (`40 6b a8`), index 0: RTI stack/status restore.
-  - File `nes6502/v1/40.json`; full-file SHA-256 `19d59c74ec21d763472fc17d5b2e74fa86f919444dbf6c2bc8babcd7df84b060`.
-- `$69` (`69 4a c2`), index 0: ADC immediate flags and binary arithmetic.
-  - File `nes6502/v1/69.json`; full-file SHA-256 `8eb25776eb073dfce637c50d3adc5055d5fee7f687d4cafbcad6ae1eab810def`.
-- `$6C` (`6c ff f5`), index 225: JMP indirect page-wrap behavior.
-  - File `nes6502/v1/6c.json`; full-file SHA-256 `17b88745c723e72cbd2d1d89527845b42509dbe849323bae791e206178fb125c`.
-- `$8D` (`8d aa 66`), index 0: STA absolute bus write.
-  - File `nes6502/v1/8d.json`; full-file SHA-256 `23c7c683fb39ed05373c04d1d7b62d00529d478796b2765d1089b98f900cb33d`.
-- `$A9` (`a9 c3 7a`), index 0: LDA immediate result and flags.
-  - File `nes6502/v1/a9.json`; full-file SHA-256 `443c6fb0c69bb164827cb364ffca6ebc0592e3fbe125628448944dd458162257`.
-- `$BD` (`bd f5 ba`), index 2: LDA absolute,X page crossing.
-  - File `nes6502/v1/bd.json`; full-file SHA-256 `52c2c6697c403b95b548d294ee4d989187833863aac6ba09e9550881e798fbb8`.
-- `$D0` (`d0 c6 5d`), index 29: BNE taken across a page.
-  - File `nes6502/v1/d0.json`; full-file SHA-256 `87d080ad2d8e49a100d1e78dd56d5da7cc230fbffbde71a080d783b7f239034e`.
-- `$E6` (`e6 5f 04`), index 0: INC zero-page read-modify-write sequence.
-  - File `nes6502/v1/e6.json`; full-file SHA-256 `e05ea9f6b60d852c0ef075695919d5babffd482a92cdfc5c7494438b5ed7f680`.
-- `$93` (`93 2`), index 1: AHX (indirect),Y without a page crossing.
-  - File `nes6502/v1/93.json`; full-file SHA-256 `17b5735e981bcd73163acaa7733b1dd6fced3673ebec4562ddeedaf05167862b`.
-- `$93` (`93 1`), index 0: AHX (indirect),Y with a page crossing.
-  - File `nes6502/v1/93.json`; full-file SHA-256 `17b5735e981bcd73163acaa7733b1dd6fced3673ebec4562ddeedaf05167862b`.
-- `$9B` (`9b 1`), index 0: TAS absolute,Y without a page crossing; also checks SP.
-  - File `nes6502/v1/9b.json`; full-file SHA-256 `a9892b940da12aa14c08d3c4c062fb804ca6ae568c4416c3408d00467ed05d14`.
-- `$9B` (`9b 2`), index 1: TAS absolute,Y with a page crossing; also checks SP.
-  - File `nes6502/v1/9b.json`; full-file SHA-256 `a9892b940da12aa14c08d3c4c062fb804ca6ae568c4416c3408d00467ed05d14`.
-- `$9C` (`9c 1`), index 0: SHY absolute,X without a page crossing.
-  - File `nes6502/v1/9c.json`; full-file SHA-256 `7f86ddc3c8cc4dc4a78763a6fc0a73d473192f273c9be934a94f1beafb73afdd`.
-- `$9C` (`9c 2`), index 1: SHY absolute,X with a page crossing.
-  - File `nes6502/v1/9c.json`; full-file SHA-256 `7f86ddc3c8cc4dc4a78763a6fc0a73d473192f273c9be934a94f1beafb73afdd`.
-- `$9E` (`9e 1`), index 0: SHX absolute,Y without a page crossing.
-  - File `nes6502/v1/9e.json`; full-file SHA-256 `7399fe1afcd91c5abb584096101fc5ce526198717a8855c6f983f8fdb81dbf23`.
-- `$9E` (`9e 2`), index 1: SHX absolute,Y with a page crossing.
-  - File `nes6502/v1/9e.json`; full-file SHA-256 `7399fe1afcd91c5abb584096101fc5ce526198717a8855c6f983f8fdb81dbf23`.
-- `$9F` (`9f 2`), index 1: AHX absolute,Y without a page crossing.
-  - File `nes6502/v1/9f.json`; full-file SHA-256 `1648cce9c71df7d92040dfdeb5e6a27ca2373d7051c45e728d8e350f9b9232e8`.
-- `$9F` (`9f 1`), index 0: AHX absolute,Y with a page crossing.
-  - File `nes6502/v1/9f.json`; full-file SHA-256 `1648cce9c71df7d92040dfdeb5e6a27ca2373d7051c45e728d8e350f9b9232e8`.
+[`SOURCE_MANIFEST.sha256`](./SOURCE_MANIFEST.sha256) records the SHA-256 of all 256 upstream opcode files at
+the pinned revision in `sha256sum` format, so any regenerated fixture can be checked against the same source
+content.
 
-The SHA-256 of the checked-in selected fixture, `vectors.json`, is
-`ab42d3bcdfebae3db6fd528cc493c131986a96ca84de83563ef7176143eed59d`. `LICENSE` is the only other
-upstream file copied into this folder.
+## Selection rule
+
+Selection is reproducible and not hand-filtered for passing results:
+
+1. Three curated scenarios that target specific documented behavior:
+   - `nes6502/v1/6c.json` index 225: JMP indirect page-wrap behavior.
+   - `nes6502/v1/bd.json` index 2: LDA absolute,X page crossing.
+   - `nes6502/v1/d0.json` index 29: BNE taken across a page.
+2. The first four scenarios, in file order, of every one of the 256 opcode files.
+
+That produces 1,026 vectors covering all 256 opcode bytes: 151 official encodings plus all 105 unofficial
+encodings, including the unstable `$93`/`$9B`/`$9C`/`$9E`/`$9F` high-byte stores, XAA/LXA, and the twelve
+KIL/JAM bytes.
+
+Regenerate with a local corpus checkout (no network access is needed at test time):
+
+```bash
+git clone --depth 1 https://github.com/SingleStepTests/65x02.git /tmp/65x02
+node scripts/select_cpu_vectors.mjs --corpus /tmp/65x02/nes6502/v1 --per-opcode 4 \
+    --extra 6c:225 --extra bd:2 --extra d0:29
+```
+
+Recorded hashes for the checked-in fixture:
+
+- `vectors.json` SHA-256: `e1852307fa91c1dd88af080fba11e41b230e5ccee611e268fc235875297cef30`
+- `SOURCE_MANIFEST.sha256` SHA-256: `5ca75bdd514b851567ff556d678e1b30495645506aa9f637bf16ea49b01da7c4`
+- Corpus revision: `2f6980a2d95757486c7bee24355c360e40e2a224`
 
 ## Automated setup and expected result
 
@@ -66,9 +53,41 @@ No network access, ROM download, or external runtime is required. Run:
 npm test
 ```
 
-`tests/cpu-single-step-vectors.test.ts` seeds the existing fake 64 KiB CPU bus from each vector's `initial`
-RAM and register state, then calls `clock_cycle()` once per upstream bus operation. It compares every returned
-access and sequence boundary, final registers, and listed RAM against the upstream `cycles` and `final`
-fields. The expected result is **20 of 20 selected vectors pass**. This subset is a regression fixture, not
-full conformance: it does not test every opcode or state. Passing it does not establish full timing accuracy
-or prove that a complete NES boots.
+`tests/cpu-single-step-vectors.test.ts` seeds a fake 64 KiB CPU bus from each vector's `initial` RAM and
+register state, then calls `clock_cycle()` once per upstream bus operation. It compares every returned access
+and sequence boundary, the final registers, and the listed final RAM against the upstream `cycles` and
+`final` fields, and asserts that the fixture's recorded source hashes agree with the manifest. The expected
+result is **1,026 of 1,026 pinned vectors pass**, reported as 257 grouped tests (one per opcode file plus one
+coverage test).
+
+This subset is a committed regression fixture, not full conformance: it does not exercise interrupts, `$4014`
+OAM DMA, DMC stalls, PPU/APU interaction, or console scheduling. Passing it does not establish hardware
+timing accuracy or prove that a complete NES boots.
+
+## Optional full-corpus check
+
+`scripts/run_cpu_vector_corpus.mjs` runs the complete upstream corpus against the same cycle-visible CPU
+core. It is opt-in because the corpus is 1.2 GB and is not vendored:
+
+```bash
+npm run test:cpu-corpus -- --corpus /tmp/65x02/nes6502/v1
+npm run test:cpu-corpus -- --corpus /tmp/65x02/nes6502/v1 --per-opcode 25 --opcodes 69,93
+```
+
+Recorded run on 2026-10-18 in the project sandbox (Node.js v22.22.3, two available CPUs):
+**2,560,000 of 2,560,000 vectors passed** across all 256 opcode files in about 20 seconds, comparing ordered
+bus accesses, final registers, and final RAM. The runner exits non-zero on any mismatch, and its detection
+path was checked by deliberately mutating register, bus-value, and cycle-count fields in a scratch copy of
+three corpus files.
+
+Two implementation notes follow from that comparison:
+
+- The KIL/JAM bus pattern now matches the corpus convention: after fetching the KIL byte and the next byte,
+  the chip reads `$FFFF`, `$FFFE`, `$FFFE`, and then `$FFFF` repeatedly, with the program counter left past
+  the KIL byte, until reset. A jammed chip's external bus activity is not hardware-verified; this is a
+  reference-matched convention, and each jam sequence stays bounded so `step()` cannot loop forever.
+- The default XAA/LXA magic input of `$EE` agrees with all 20,000 pinned upstream `$8B`/`$AB` scenarios. The
+  analog variation of those opcodes on real silicon is still unmodeled.
+
+The corpus is generated from a reference emulator, not from silicon, so agreement is cross-implementation
+evidence rather than a hardware measurement.
