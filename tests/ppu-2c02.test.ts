@@ -321,6 +321,60 @@ test("reset clears PPU register/timing output but preserves VRAM and OAM memory"
     assert.equal(memory_bus.read_oam(7), 0x6b);
 });
 
+test("forces OAMADDR to zero during sprite fetch dots and ignores OAMDATA writes while rendering", () => {
+    const ppu = make_ppu();
+
+    ppu.write_cpu_register(1, 0x18);
+    ppu.write_cpu_register(3, 0x40);
+    assert.equal(ppu.get_oam_address(), 0x40);
+
+    advance_to_position(ppu, 0, 258);
+    assert.equal(ppu.get_oam_address(), 0x00);
+
+    ppu.write_cpu_register(3, 0x24);
+    assert.equal(ppu.get_oam_address(), 0x24);
+
+    advance_to_position(ppu, 0, 259);
+    assert.equal(ppu.get_oam_address(), 0x00);
+
+    // An OAMDATA write on a rendered line must not reach OAM or change OAMADDR.
+    ppu.write_cpu_register(4, 0x77);
+    assert.equal(ppu.get_oam_address(), 0x00);
+
+    advance_to_position(ppu, 241, 0);
+    assert.equal(ppu.get_oam_address(), 0x00);
+    assert.equal(read_register(ppu, 4), 0x00);
+
+    // Vblank lines are not rendered, so OAMDATA writes work again.
+    ppu.write_cpu_register(3, 0x00);
+    ppu.write_cpu_register(4, 0x31);
+    assert.equal(ppu.get_oam_address(), 0x01);
+    ppu.write_cpu_register(3, 0x00);
+    assert.equal(read_register(ppu, 4), 0x31);
+});
+
+test("returns $FF from OAMDATA during the secondary OAM clear window only while rendering", () => {
+    const rendered = make_ppu_fixture();
+    rendered.memory_bus.write_oam(0, 0x53);
+
+    advance_to_position(rendered.ppu, 241, 0);
+    rendered.ppu.write_cpu_register(3, 0x00);
+    assert.equal(read_register(rendered.ppu, 4), 0x53);
+
+    rendered.ppu.write_cpu_register(1, 0x18);
+    advance_to_position(rendered.ppu, 0, 32);
+    assert.equal(read_register(rendered.ppu, 4), 0xff);
+
+    advance_to_position(rendered.ppu, 0, 65);
+    assert.equal(read_register(rendered.ppu, 4), 0x53);
+
+    const blanked = make_ppu_fixture();
+    blanked.memory_bus.write_oam(0, 0x2a);
+    blanked.ppu.write_cpu_register(3, 0x00);
+    advance_to_position(blanked.ppu, 0, 32);
+    assert.equal(read_register(blanked.ppu, 4), 0x2a);
+});
+
 test("rejects invalid PPU register indices and values", () => {
     const ppu = make_ppu();
 

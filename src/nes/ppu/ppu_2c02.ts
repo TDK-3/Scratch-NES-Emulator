@@ -39,6 +39,9 @@ const PPU_BACKGROUND_DUMMY_FETCH_DOT_ONE = 338;
 const PPU_BACKGROUND_DUMMY_FETCH_DOT_TWO = 340;
 const PPU_SPRITE_FETCH_START_DOT = 257;
 const PPU_SPRITE_FETCH_END_DOT = 320;
+const PPU_SECONDARY_OAM_CLEAR_START_DOT = 1;
+const PPU_SECONDARY_OAM_CLEAR_END_DOT = 64;
+const PPU_SECONDARY_OAM_CLEAR_VALUE = 0xff;
 const PPU_SPRITE_FETCH_DOTS_PER_SLOT = 8;
 const PPU_SPRITE_FETCH_COUNT = 8;
 const PPU_SPRITE_FETCH_ATTRIBUTE_PHASE = 2;
@@ -182,7 +185,7 @@ export class Ppu2C02 implements PpuCpuRegisterPort {
                 value = this.#read_status_register();
                 break;
             case 4:
-                value = this.#memory_bus.read_oam(this.#oam_address);
+                value = this.#read_oam_data_register();
                 this.#ppu_io_latch = value;
                 break;
             case 7:
@@ -216,6 +219,12 @@ export class Ppu2C02 implements PpuCpuRegisterPort {
                 this.#oam_address = value;
                 break;
             case 4:
+                if (this.#is_oam_cpu_access_during_rendering()) {
+                    // Documented 2C02 behavior: OAMDATA writes while rendering is enabled do not reach OAM.
+                    // The glitchy high-bit OAMADDR increment those writes cause is deliberately not modeled.
+                    break;
+                }
+
                 this.#memory_bus.write_oam(this.#oam_address, value);
                 this.#oam_address = (this.#oam_address + 1) & PPU_OAM_ADDRESS_MASK;
                 break;
@@ -515,11 +524,13 @@ export class Ppu2C02 implements PpuCpuRegisterPort {
     }
 
     #clock_rendering_pipeline(): void {
-        const visible_or_pre_render_scanline =
-            this.#scanline < PPU_FRAME_HEIGHT || this.#scanline === PPU_PRE_RENDER_SCANLINE;
-
-        if (!visible_or_pre_render_scanline || !this.#is_rendering_enabled()) {
+        if (!this.#is_visible_or_pre_render_scanline() || !this.#is_rendering_enabled()) {
             return;
+        }
+
+        if (this.#dot >= PPU_SPRITE_FETCH_START_DOT && this.#dot <= PPU_SPRITE_FETCH_END_DOT) {
+            // OAMADDR is forced to $00 on each dot of the sprite tile loading interval.
+            this.#oam_address = 0;
         }
 
         if (this.#scanline < PPU_FRAME_HEIGHT && this.#dot === 65) {
@@ -587,6 +598,31 @@ export class Ppu2C02 implements PpuCpuRegisterPort {
 
     #is_rendering_enabled(): boolean {
         return (this.#mask_register & PPU_RENDERING_MASK) !== 0;
+    }
+
+    #is_visible_or_pre_render_scanline(): boolean {
+        return this.#scanline < PPU_FRAME_HEIGHT || this.#scanline === PPU_PRE_RENDER_SCANLINE;
+    }
+
+    /** True while CPU OAM access falls on a rendered line with rendering enabled. */
+    #is_oam_cpu_access_during_rendering(): boolean {
+        return this.#is_visible_or_pre_render_scanline() && this.#is_rendering_enabled();
+    }
+
+    /**
+     * Reads OAMDATA. During dots 1-64 of a rendered line the secondary OAM clear drives $FF; reads later in
+     * sprite evaluation and fetch remain simplified and return primary OAM at OAMADDR.
+     */
+    #read_oam_data_register(): number {
+        if (
+            this.#is_oam_cpu_access_during_rendering() &&
+            this.#dot >= PPU_SECONDARY_OAM_CLEAR_START_DOT &&
+            this.#dot <= PPU_SECONDARY_OAM_CLEAR_END_DOT
+        ) {
+            return PPU_SECONDARY_OAM_CLEAR_VALUE;
+        }
+
+        return this.#memory_bus.read_oam(this.#oam_address);
     }
 
     #read_background_pixel(): number {
