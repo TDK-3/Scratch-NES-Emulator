@@ -1,7 +1,9 @@
 # Supported Features and Known Limits
 
 This page describes the current TypeScript/browser implementation, not a claim of full NES compatibility.
-The Scratch/TurboWarp project is still a ROM-data and parity-vector scaffold; it does not run NES games.
+The Scratch/TurboWarp project is still a scaffold: it embeds ROM data, ports the numeric, status, ALU,
+controller, and CPU-bus helper layer, and runs a shared port-vector self test, but it does not run NES games
+and none of its sources have ever been compiled.
 The current implementation targets an initial NTSC NES slice.
 
 ## Region, ROM formats, and mapper routes
@@ -42,7 +44,11 @@ The current implementation targets an initial NTSC NES slice.
   rendering, background and sprite output, scrolling, priority, sprite-zero hit, palette indices, and color
   emphasis. The 256 by 240 host palette is an RGB approximation. Sprite evaluation is aggregated rather than
   dot-by-dot; PPU open-bus decay, register races, exact pixel-pipeline delay, sprite-overflow false positives/
-  negatives, and some CPU/PPU phase behavior are not fully modeled.
+  negatives, and some CPU/PPU phase behavior are not fully modeled. Two render-time register quirks are
+  modeled: OAMADDR is forced to zero during dots 257-320 of pre-render and visible scanlines, and OAMDATA
+  writes during rendering are ignored. Evaluation starting at dot 65, glitchy OAMADDR high-bit increments on
+  suppressed OAMDATA writes, 2C02G OAM corruption on OAMADDR writes, and I/O latch decay are deliberately not
+  modeled.
 - **Audio:** native pulse, triangle, noise, and DMC channels with deterministic mono core samples. The
   TypeScript console uses a 44.1 kHz default. The browser applies a separate approximate output filter before
   Web Audio playback; neither the filter nor device playback is calibrated to an analog NES or validated
@@ -80,6 +86,16 @@ The GoboScript scaffold embeds one selected ROM at build time as a decimal list 
 the game. It has no runtime ROM file picker, controls, rendering, audio, NVRAM persistence, or console
 save states. A GoboScript compiler and successful `.sb3`/TurboWarp validation are still outstanding.
 
+What the project does contain today: bit-free numeric and status helpers, thirteen ALU operations, both serial
+controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`), and a
+Stage-run self test that replays 274 shared vectors from `scratch/data/shared_port_vectors.txt`, counting the
+CPU, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
+Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
+obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared
+exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic
+upstream codegen, reserved block names, and name resolution. See
+[`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md) and [`PORTING_PLAN.md`](PORTING_PLAN.md).
+
 ## Compatibility evidence and caveats
 
 - `test_rom.nes` is an 81,936-byte mapper-4 SMB2J-family image of unknown exact revision and redistribution
@@ -90,5 +106,9 @@ save states. A GoboScript compiler and successful `.sb3`/TurboWarp validation ar
 - The first 5,003 entries of an externally supplied `nestest` trace matched the documented PC, instruction
   bytes, registers, stack pointer, and cycle counts. That external ROM/log is not bundled. The historical trace
   stopped at `$04`, now implemented as an unofficial NOP; this trace has not been rerun since that change.
+- The CPU cycle sequencer matches 1,026 pinned MIT single-step vectors covering all 256 opcode bytes, and the
+  opt-in `npm run test:cpu-corpus` runner matched all 2,560,000 scenarios of the same upstream corpus. That
+  validates this implementation against a recorded reference, not against silicon, and the corpus is not
+  checked in.
 - The automated TypeScript suite and its known gaps are listed in [`TESTING.md`](TESTING.md). No interactive
   browser/TurboWarp runtime validation or general commercial-ROM compatibility result is claimed.

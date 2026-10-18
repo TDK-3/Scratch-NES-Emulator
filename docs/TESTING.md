@@ -16,13 +16,17 @@ npm run scratch:vectors
 - `npm run build:ts` emits JavaScript into ignored `dist/`.
 - `npm run scratch:assets` regenerates the decimal byte list from `test_rom.nes`; pass
   `-- --rom /path/to/rom.nes` to select a different build-time ROM without altering that fixture.
-- `npm run scratch:vectors` generates the numeric GoboScript list from the shared JSON vector fixture.
-  `tests/shared-port-vectors.test.ts` executes all current vectors against the TypeScript reference modules.
+- `npm run scratch:vectors` generates the numeric GoboScript list (2,808 decimal values for the current
+  274-record fixture) from the shared JSON vector fixture. `tests/shared-port-vectors.test.ts` executes all
+  current vectors against the TypeScript reference modules, and `scratch/src/vector_selftest.gs` replays the
+  same records inside the GoboScript project.
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 332 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases to
-source fixtures, plus 15 cross-domain shared-vector checks, six standard-controller tests, forty-two focused
+The 876 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases to
+source fixtures, 275 cross-domain shared-vector checks (274 records plus the generator regression), 257 pinned
+MIT single-step corpus checks covering all 256 opcode bytes, 32 GoboScript port-algorithm comparisons, 13
+GoboScript source-lint checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console
 tests, one supplied mapper 4 title-boot test, two NTSC clock tests, four canvas-renderer tests, four browser
@@ -421,6 +425,9 @@ current console frame smoke timing is about 46 ms, so the shell is not a 60 fps 
 ## P4 licensed APU/controller ROM and runtime validation
 
 On 2026-10-15, `npm test` passed all 332 tests (including type-checking), and `npm run build:ts` passed.
+On 2026-10-18, `npm test` passed all 876 tests in about 11.6 seconds, including the 1,026-vector CPU corpus
+subset, the two new PPU OAMADDR/OAMDATA quirk tests, and the 45 GoboScript port-algorithm and source-lint
+tests.
 The suite includes two pinned MIT APU-player smoke tests, covering pulse and noise channels through headless
 controller-to-sample paths. The SquarePlayer case now injects ArrowUp/ArrowDown through the browser keyboard
 adapter into the console; this does not exercise DOM events. These tests do not validate host playback or hardware
@@ -492,17 +499,21 @@ validation.
 
 ## Licensed CPU reference vectors
 
-`tests/fixtures/nes6502/` contains twenty selected instruction vectors from the MIT-licensed
+`tests/fixtures/nes6502/` contains 1,026 selected instruction vectors from the MIT-licensed
 [SingleStepTests/65x02](https://github.com/SingleStepTests/65x02) `nes6502/v1` corpus, pinned to commit
-`2f6980a2d95757486c7bee24355c360e40e2a224`. The copied license, selected source paths and array indices,
-SHA-256 hashes for the complete upstream source files, the checked-in subset hash, setup, and expected
-results are documented in [`tests/fixtures/nes6502/README.md`](../tests/fixtures/nes6502/README.md).
+`2f6980a2d95757486c7bee24355c360e40e2a224`, with every one of the 256 opcode bytes represented. The copied
+license, selection procedure, SHA-256 hashes for the complete upstream source files, the checked-in subset
+hash, setup, and expected results are documented in
+[`tests/fixtures/nes6502/README.md`](../tests/fixtures/nes6502/README.md).
 
 The offline `tests/cpu-single-step-vectors.test.ts` runner seeds a fake 64 KiB bus, calls
 `clock_cycle()` once for each reference bus operation, and checks the returned access, completion boundary,
-final registers, and listed RAM. All 20 selected vectors pass as part of `npm test`; ten of them cover
-both crossing and non-crossing cases for the five unstable high-byte-store opcodes. The fixture is not a ROM
-or the full upstream corpus. Passing it does not establish full cycle accuracy.
+final registers, and listed RAM. All 1,026 vectors pass as part of `npm test`, reported as 257 grouped tests;
+225 of them cover both crossing and non-crossing cases for the five unstable high-byte-store opcodes, and the
+KIL/JAM family is checked against the upstream jam bus pattern. `npm run test:cpu-corpus -- --corpus
+<path/to/nes6502/v1>` optionally replays the complete upstream corpus (2,560,000 scenarios in about 20
+seconds) from a local clone that is not checked in. The fixture is not a ROM. Passing it validates this
+implementation against the recorded reference, not against silicon.
 
 ## Instruction-level CPU traces
 
@@ -576,14 +587,31 @@ Every ported pure helper or state transition should have shared vectors. Run the
 in a GoboScript development sprite/list, then compare results. Keep vector field order and integer ranges
 documented. Favor exhaustive byte-input checks for numeric primitives and boundary cases for memory.
 
+Current parity coverage, in three layers:
+
+1. `tests/shared-port-vectors.test.ts` executes all 274 fixture records against the production TypeScript
+   modules (275 tests including the generator regression).
+2. `tests/goboscript-port-algorithms.test.ts` runs 32 comparisons against
+   `tests/support/goboscript_port_algorithms.ts`, an integer-only TypeScript mirror of every ported GoboScript
+   helper. It sweeps all 256 by 256 operand pairs for ADC/SBC/AND/ORA/EOR/CMP/BIT/INC/DEC and all 256 by 256
+   status combinations for the shift and rotate steps, sweeps every status byte against every flag for the
+   status helpers, replays the numeric, ALU, bus, and controller vectors through the mirror, and differentially
+   compares the mirrored bus and controller ports with `NesCpuBus` and `NesControllerPorts`.
+3. `tests/goboscript-source.test.ts` lints the `.gs` sources for the grammar shape the upstream parser accepts,
+   the constructs that panic upstream codegen (`return` inside a `proc`), reserved Scratch block and keyword
+   names, indentation, ASCII, line length, directive placement, resolvable `%include` paths, per-target name
+   resolution, mirror name/arity parity, and self-test enum IDs that match the fixture.
+
 A valid `.sb3` compile is only a syntax/package check. Also open it in TurboWarp, click the green flag,
 verify expected output, and check that the project remains responsive. If Scratch website compatibility is
-claimed, test it separately from TurboWarp.
+claimed, test it separately from TurboWarp. None of that is possible in this environment yet: the pinned
+compiler needs Cargo and rustc, so the in-project self test has never executed and its result is unknown.
 
 ### Performance tests
 
-No TurboWarp game-performance result is available: the GoboScript project is still a signature-checking
-scaffold and does not emulate frames. The TypeScript shell's single synthetic-frame timing of about 46 ms in
+No TurboWarp game-performance result is available: the GoboScript project is still a vector-self-test
+scaffold and does not emulate frames. Even the self test has not been measured, because the project has never
+been compiled. The TypeScript shell's single synthetic-frame timing of about 46 ms in
 this sandbox is a smoke measurement, not representative of a supported game, target hardware, or TurboWarp.
 There is no verified 60 fps claim or target-device benchmark yet.
 

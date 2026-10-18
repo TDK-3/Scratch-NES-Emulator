@@ -48,16 +48,24 @@ loading, persistence, and known-limitations statement.
   the title screen in a bounded 43-frame run; a pixel-signature boot test guards the result. Exact dump
   provenance and redistribution rights remain unknown, and a title-screen boot is not a compatibility claim.
   See [`docs/TESTING.md`](docs/TESTING.md) for the binary hash, evidence, and test result.
-- The GoboScript project scaffold statically embeds one selected ROM as a decimal list (default:
-  `test_rom.nes`), checks its iNES signature, and loads a generated numeric parity-vector list for future ports;
-  it does not yet execute those vectors or emulate games.
+- The GoboScript project statically embeds one selected ROM as a decimal list (default: `test_rom.nes`),
+  checks its iNES signature, and ports the helper layer: bit-free numeric and status helpers, thirteen ALU
+  operations, both serial controller ports, and a CPU-bus subset with RAM mirroring and the open-bus latch.
+  Its Stage runs a self test over the 274 generated parity vectors and reports a summary; the CPU core,
+  mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
+  been compiled, because the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
+  validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
+  source lint for grammar shape and reserved names.
 - `PpuMemoryBus` routes mapper-backed pattern memory, mirrored nametable RAM, palette aliases and six-bit
   writes, and separate primary OAM storage. `Ppu2C02` implements CPU register behavior and deterministic
   NTSC dot timing: 341 dots across 262 scanlines, three PPU dots per CPU cycle, vblank/status timing, the
   conditional odd-frame dot skip, and a consumable NMI rising-edge latch. Its baseline renderer produces a
   256 by 240 palette-index framebuffer with background, scrolling, sprites, priority, sprite-zero hit,
-  greyscale, and a separate emphasis plane. A diagonal OAM-byte sprite-overflow false-positive path has unit
-  coverage, but cycle timing, render-time register races, and open-bus decay remain approximations or gaps.
+  greyscale, and a separate emphasis plane. OAMADDR is forced to zero during dots 257-320 of pre-render and
+  visible scanlines, and OAMDATA writes during rendering are ignored. A diagonal OAM-byte sprite-overflow
+  false-positive path has unit coverage, but cycle timing, evaluation start at dot 65, glitchy OAMADDR
+  increments, 2C02G OAM corruption, other render-time register races, and open-bus decay remain approximations
+  or documented gaps.
 - A browser preview is available with `npm run browser:dev`. It includes a pixel-preserving 256 by 240 canvas,
   file and bundled-ROM loading, pause/reset/step controls, two keyboard-mapped pads, per-ROM PRG/CHR-NVRAM saves,
   and a best-effort Web Audio sink with an approximate filter. The palette is an approximation; browser
@@ -91,9 +99,9 @@ sample-rate/channel output, register/frame-sequencer/mixer behavior, PPU registe
 output, pinned MIT SquarePlayer and NoisePlayer controller-to-APU smoke tests, browser keyboard mapping,
 Web Audio filtering and sink scheduling, canvas conversion/scaling and frame scheduling,
 optional instruction-level traces, byte-exact build-time Scratch ROM asset generation with source-overwrite
-protection, a shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU, APU, and
-controller behavior,
-and twenty selected MIT-licensed NES 2A03 reference vectors. The respective fixture details are documented in
+protection, a 274-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
+APU, controller, and ALU behavior, and 1,026 selected MIT-licensed NES 2A03 reference vectors covering all 256
+opcode bytes. The respective fixture details are documented in
 [`docs/GOBOSCRIPT_PORT_VECTORS.md`](docs/GOBOSCRIPT_PORT_VECTORS.md) and
 [`tests/fixtures/nes6502/README.md`](tests/fixtures/nes6502/README.md).
 
@@ -125,7 +133,10 @@ The generated lists and `.sb3` output are ignored by Git. Each compiled project 
 Scratch/TurboWarp does not get an arbitrary runtime binary loader in this plan. Review ROM rights before
 sharing a generated project. The resulting default project is `scratch/scratch.sb3`.
 
-The current GoboScript sprite only checks the ROM signature. It is an integration scaffold, not an emulator.
+The current GoboScript project ports the numeric, status, ALU, controller, and CPU-bus helper layer and runs
+a shared port-vector self test on the green flag; the display sprite reports the summary. It is an integration
+scaffold, not an emulator, and it has never been compiled: no `.sb3` has been produced or opened in TurboWarp.
+See [`docs/PORTING_PLAN.md`](docs/PORTING_PLAN.md) for the module-by-module port state.
 
 ## Documentation
 

@@ -113,11 +113,14 @@ Scratch/TurboWarp runtime still needs its own adapters and validation.
 Tests cover parser success/failures, register helpers, all ADC/SBC operand pairs with both carry inputs,
 fake-bus ordering/validation, reset/stack sequencing, all addressing modes, every official opcode, per-cycle
 CPU stepping, branch and interrupt boundaries, optional CPU step traces, a headless NROM test-ROM runner,
-and twenty pinned MIT-licensed NES 2A03 single-step vectors. Ten target the five unstable high-byte stores,
-with both page-crossing and non-crossing cases. The vector subset compares each bus operation,
-sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus. The current suite
-has 332 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke test,
-15 cross-domain parity cases, two
+and 1,026 pinned MIT-licensed NES 2A03 single-step vectors covering all 256 opcode bytes. 225 target the five
+unstable high-byte stores, with both page-crossing and non-crossing cases, and the KIL/JAM family is checked
+against the upstream jam bus pattern. The vector subset compares each bus operation,
+sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
+`npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
+suite has 876 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+test, 275 cross-domain parity cases, 32 GoboScript port-algorithm comparisons against an integer-only mirror of
+the ported helpers, 13 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
 six focused controller tests, and
@@ -179,10 +182,17 @@ screen at frame 43 (cap: 60 frames), also seen in a temporary JSNES 2.1.0 refere
 one-million-cycle smoke stopped at frame 33 with a uniform palette-index-1 framebuffer and silent audio, before
 title initialization; a title-screen boot is not proof of gameplay compatibility.
 
-The Scratch/TurboWarp project currently embeds one build-time ROM as a file-backed GoboScript list (default:
+The Scratch/TurboWarp project embeds one build-time ROM as a file-backed GoboScript list (default:
 `test_rom.nes`), checks its first four bytes for `NES` plus the iNES end marker, and loads generated shared
-port vectors. The vectors are not executed in GoboScript yet; CPU, PPU, APU, mapper, controllers, rendering,
-sound, save states, and game execution remain unimplemented there. The TypeScript NROM/MMC3 mapper and
+port vectors. It now also ports the helper layer: `scratch/src/numeric.gs` (bit-free byte/word helpers plus
+`bit_at` and weight-loop AND/OR/XOR, because GoboScript has no bitwise operators), `cpu_status.gs`,
+`cpu_alu.gs` (ADC, SBC, AND, ORA, EOR, ASL, LSR, ROL, ROR, CMP, CPX, CPY, BIT, INC, DEC), `controller.gs`
+(both serial ports), and `cpu_bus.gs` (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`, and
+absent-device behavior for PPU/APU/OAM DMA/cartridge). `stage.gs` includes every header, so the Stage owns all
+shared state, and its green-flag handler runs `src/vector_selftest.gs`, which executes suites 1, 3, 7, and 8 of
+the fixture, counts suites 2, 4, 5, and 6 as skipped, and broadcasts a summary that `main.gs` reports. CPU
+fetch/decode/addressing/cycles/interrupts, cartridge parsing, mapper, PPU, APU, rendering, sound, save states,
+and game execution remain unimplemented there, and none of the `.gs` sources has been compiled. The TypeScript NROM/MMC3 mapper and
 `NesConsole` APIs copy/restore declared PRG and CHR NVRAM, excluding volatile RAM; restore validates both sizes
 before mutating either region. The browser shell stores both regions in per-ROM SHA-256 snapshots in local
 storage and accepts legacy PRG-only records. TurboWarp storage and full console save states are not implemented.
@@ -199,8 +209,14 @@ npm run build:scratch
 ```
 
 `npm run build:scratch` requires the GoboScript CLI to be installed separately. The local environment used
-to seed this repository did not have Rust/Cargo or GoboScript, so the `.gs` scaffold has not yet been
-compiled by the official compiler. Do not state that it builds until that check has passed. The initial ROM
+to seed this repository did not have Rust/Cargo or GoboScript, so the `.gs` sources have not yet been
+compiled by the official compiler. Do not state that the project builds, runs, or performs until that check
+has passed. Until then the port is validated indirectly: `tests/support/goboscript_port_algorithms.ts` mirrors
+every ported helper in integer-only TypeScript (Scratch's floored modulo and floor division, no bitwise
+operators), `tests/goboscript-port-algorithms.test.ts` compares that mirror exhaustively with the bitwise
+reference and replays the numeric/ALU/bus/controller vectors through it, and `tests/goboscript-source.test.ts`
+lints the sources for grammar shape, codegen-panic constructs, reserved block names, per-target name
+resolution, mirror name/arity parity, and self-test enum IDs that match the fixture. The initial ROM
 path is build-time bundling: `npm run scratch:assets -- --rom /path/to/rom.nes` selects a different static
 list without replacing the fixture. `npm run scratch:vectors` generates the portable numeric vectors consumed
 by `scratch/src/shared_vectors.gs`; `npm run build:scratch` runs both data generators before compiling. No
@@ -216,6 +232,13 @@ runtime ROM picker is planned for standard Scratch or TurboWarp in this initial 
   not typed bytes.
 - GoboScript has no direct TypeScript interoperability. Keep a deliberate, tested mapping for integer
   wrap, byte access, bit masks, signed/unsigned conversions, and multi-cycle clocking.
+- GoboScript language traps confirmed in the upstream compiler source and enforced by
+  `tests/goboscript-source.test.ts`: `return` inside a `proc` panics codegen; `%` and `//` are floored, not
+  truncated; `&` joins strings; there are no bitwise operators; `%include` is deduplicated per translation
+  unit and resolves relative to the root file; sprites resolve Stage variables, lists, and enums but compile
+  their own procs and funcs; `local` becomes a `procname:x` variable; a name matching a builtin block shape
+  becomes that block; and the Stage can neither `say` nor show a variable monitor. Details are in
+  `docs/GOBOSCRIPT_RESEARCH.md`.
 - An NES renders 256 by 240 pixels. Rendering 61,440 pixels with one Scratch block operation per pixel is
   likely too expensive. Benchmark output strategies in TurboWarp before committing to one.
 - NES timing, PPU side effects, DMA, interrupt ordering, and mapper writes are correctness-sensitive. Do

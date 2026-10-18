@@ -237,6 +237,48 @@ other available headers. The upstream docs say an unset `std` selects the latest
 seven days; pin a version in `goboscript.toml` when a project depends on it. This scaffold pins `std =
 "2.1.0"` and currently has no standard-library include.
 
+### Findings verified in the upstream compiler source
+
+The following were read out of the v3.3.0 source snapshot under `/tmp/goboscript-research/goboscript-main`
+(not from the prose docs) and directly shape how this project writes `.gs`. They are the reason the source
+lint in `tests/goboscript-source.test.ts` exists.
+
+- `return` inside a `proc` is not a warning, it is a crash: `src/codegen/sb3.rs` handles `Stmt::Return` with
+  `panic!()`. Procs must be structured as `if` / `elif` / `else` chains. In a `func`, `src/visitor/pass1.rs`
+  rewrites `return X;` into an assignment to `<func>:return` followed by a stop, so early and multiple
+  returns are safe there.
+- `%include` is deduplicated per translation unit (`src/translation_unit.rs` returns early when the resolved
+  path is already in `unit.included`), so headers may include a common header without producing duplicate
+  declarations. Paths resolve relative to the root file unless prefixed with `./` or `../`, the `.gs`
+  extension is added when missing, and a directive only counts at the start of a line.
+- Scratch `%` and `//` are not ECMAScript operators: `%` compiles to `operator_mod`, which is floored, and
+  `a // b` compiles to `floor(a / b)` (`src/visitor/transformations.rs`). `&` is the join block. Any
+  arithmetic that must match a bitwise TypeScript reference has to be written with those semantics; the
+  project mirror uses explicit floored helpers for exactly this reason.
+- A sprite resolves variable, list, enum, and struct names from the Stage (`src/visitor/pass2.rs` passes
+  `stage.vars`, `stage.lists`, `stage.enums`, and `stage.structs` as globals), but procs and funcs are not
+  global: each target compiles its own copies from the headers it includes. Shared state therefore belongs in
+  Stage-included headers only, and a header included by a sprite must not declare `var` or `list`.
+- Any proc or func whose name and arity match a builtin is emitted as that builtin
+  (`Block::from_shape` / `Repr::from_shape` in `src/blocks.rs`): 130 block and reporter shapes plus 64
+  keyword tokens from `src/lexer/token.rs`. The lint forbids all of them as declaration names.
+- `local` compiles to a variable named `procname:x`, so it is undefined behavior in recursive or non-warp
+  procs; the first `local` declares it and later plain assignments refer to it. Declaring locals before loop
+  bodies keeps one variable per proc.
+- Operator precedence, from `src/parser/grammar.lalrpop`: unary (`-`, `not`, `length`, `round`, `abs`,
+  `floor`, `ceil`, `sqrt`, trig/log), then `* / // %`, then `+ -`, then comparisons, then `&` (right
+  associative), then `in` / `not in` / `==` / `!=`, then `and`, then `or`. A ternary `if (c) t else f`
+  expression exists only in the newer snapshot, so this project does not use it while `std = "2.1.0"` is
+  pinned.
+- GoboScript has no show-variable or show-list block; the only `visible` control in `src/codegen/sb3.rs` is
+  the sprite's own. The Stage also has no `say`. Stage-side reporting therefore has to go through variables
+  that a sprite reads, or through a broadcast that a sprite reports.
+- The pinned standard library (`github.com/goboscript/std` v2.1.0) provides `math.gs` as macros over floats,
+  including `BIT(N, V)` built from `ln` / `antiln`. That is unsuitable for byte-exact emulator arithmetic, so
+  this project keeps its own integer-only helpers and does not include `std/math`.
+- An empty spinning `until cond { }` in a sprite never yields, which starves other threads (including the
+  Stage's), so cross-target handoff uses `broadcast` plus `on "message"` rather than polling.
+
 ### Costumes and assets
 
 A sprite or Stage declares costumes with a top-level `costumes` statement. Paths are project-root-relative.
@@ -294,6 +336,12 @@ assets, run `goboscript build`, open or reload the emitted `.sb3`, and test it i
    algorithm and keep the optimized result checked against the TypeScript reference.
 8. Treat graphics and audio as separate integration projects. A correct CPU core alone does not make a
    playable emulator.
+
+Position as of 2026-10-18: steps 1 through 4 are done for the helper layer (numeric, status, ALU, controller,
+and a CPU-bus subset), and step 6 is written but unrun, because the project cannot be compiled here. Step 5
+(CPU state transitions and yield policy) is the next porting work, and step 7 remains entirely blocked on a
+toolchain. The in-project self test replays suites 1, 3, 7, and 8 of the shared fixture and counts the CPU,
+MMC3, PPU, and APU suites as skipped rather than passing.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

@@ -1,6 +1,6 @@
 # Project progress
 
-Status snapshot: 2026-10-15
+Status snapshot: 2026-10-18
 
 ## Summary
 
@@ -42,6 +42,11 @@ MMC3 conversion of Japanese *Super Mario Bros. 2* (Lost Levels), likely Loopy's 
 remains unknown. `NesConsole` and a bounded integration test reach its title screen at frame 43, with an
 independent `jsnes` run showing the same screen. This demonstrates this ROM's title boot, not game compatibility
 or cycle-accurate emulation; the earlier one-million-cycle blank-screen smoke stopped before initialization.
+The CPU cycle sequencer now matches all 2,560,000 scenarios of the pinned MIT single-step corpus, and a
+1,026-vector subset of it is checked in. The GoboScript project has moved past scaffolding: bit-free numeric,
+status, ALU, controller, and CPU-bus-subset modules are written, the Stage runs a shared port-vector self test
+on the green flag, and the ported arithmetic is validated through an integer-only TypeScript mirror plus a
+source lint. None of it has been compiled, because the pinned GoboScript toolchain is still unobtainable here.
 
 ## Completed
 
@@ -158,7 +163,7 @@ or cycle-accurate emulation; the earlier one-million-cycle blank-screen smoke st
       offline runner checking registers, listed RAM, cycles, and ordered bus accesses. Ten additional cases
       cover page-crossing and non-crossing cases for all five unstable high-byte-store encodings. Provenance,
       license, full-source and selected-fixture hashes, setup, and expected result are in
-      `tests/fixtures/nes6502/`.
+      `tests/fixtures/nes6502/`. Superseded on 2026-10-18 by the 1,026-vector selection below.
 - [x] Inspected the supplied ROM header: 81,936 bytes, mapper 4, 4 PRG banks, 2 CHR banks, vertical
       mirroring, battery flag set, no trainer.
 - [x] Recorded its SHA-256 as `cdfc23e83dbbc0f11592446d1bdcc496101390ac5c3f8ac91a0596c7b2b1485f`;
@@ -175,11 +180,58 @@ or cycle-accurate emulation; the earlier one-million-cycle blank-screen smoke st
 - [x] Researched current GoboScript documentation and recorded the upstream snapshot, language
       behavior, build workflow, and Scratch/TurboWarp constraints.
 - [x] Added project architecture, structure, LLM handoff, porting, testing, todo, and completion docs.
+- [x] Fixed the KIL/JAM bus pattern to match the upstream corpus (read PC, read PC+1, then `$FFFF`/`$FFFE`
+      forever, with `final.pc = initial.pc + 1`) and validated the cycle sequencer against the complete
+      MIT `nes6502/v1` corpus: 2,560,000 of 2,560,000 scenarios across all 256 opcode files in about 20
+      seconds through the opt-in `npm run test:cpu-corpus` runner. The runner was mutation-checked by
+      corrupting corpus copies and confirming failures.
+- [x] Replaced the twenty-vector fixture with 1,026 deterministically selected vectors covering all 256
+      opcode bytes (225 unstable high-byte-store cases and 29 KIL cases), recorded the selection command and
+      upstream revision in `tests/fixtures/nes6502/README.md`, and added `SOURCE_MANIFEST.sha256` for the
+      upstream source files. `tests/cpu-single-step-vectors.test.ts` reports them as 257 grouped tests.
+- [x] Modeled two documented PPU render-time register quirks: OAMADDR is forced to zero during dots 257-320
+      of pre-render and visible scanlines, and OAMDATA writes during rendering are ignored. Two focused tests
+      cover both, and the remaining unmodeled quirks (evaluation start at dot 65, glitchy OAMADDR high-bit
+      increments, 2C02G OAM corruption on OAMADDR writes, and I/O latch decay) are listed in the source and
+      `docs/SUPPORTED_FEATURES.md` rather than approximated without timing evidence.
+- [x] Added an explicit ROM-rights notice to `scripts/generate_goboscript_rom_data.mjs` output and a matching
+      assertion in `tests/scratch-rom-assets.test.ts`: the supplied image is Nintendo-derived with unknown
+      dump provenance and must not be modified or redistributed.
+- [x] Wrote the first executable GoboScript port modules: `scratch/src/numeric.gs` (bit-free byte/word
+      helpers, `bit_at`, and weight-loop AND/OR/XOR), `cpu_status.gs` (status normalization, flag get/set,
+      Z/N updates, BRK and stack forms), `cpu_alu.gs` (ADC, SBC, AND, ORA, EOR, ASL, LSR, ROL, ROR, CMP,
+      CPX, CPY, BIT, INC, DEC), `controller.gs` (both serial ports), and `cpu_bus.gs` (RAM mirroring,
+      open-bus latch with driven masks, `$4016`/`$4017`, absent-device stubs elsewhere). `stage.gs` runs
+      `scratch/src/vector_selftest.gs` on the green flag and broadcasts a summary that `main.gs` reports.
+- [x] Grew the shared vector fixture from 15 to 274 records in eight suites: numeric operations 7-13 for the
+      arithmetic bit helpers, bus operation 2 with live controller ports pinning the driven-mask open-bus
+      merge and dropped writes to unported windows, and a new ALU suite whose expected value/status pairs were
+      derived by executing the production CPU rather than by hand.
+- [x] Added `tests/support/goboscript_port_algorithms.ts`, an integer-only TypeScript mirror of every ported
+      helper that uses Scratch's floored modulo and floor division and no bitwise operators, plus
+      `tests/goboscript-port-algorithms.test.ts` (32 tests): exhaustive sweeps against the bitwise reference
+      for ADC/SBC/AND/ORA/EOR/CMP/BIT/INC/DEC and all 256 status bytes for the shift/rotate steps, fixture
+      replay for the numeric/ALU/bus/controller suites, and differential checks of the mirrored bus and
+      controller ports against `NesCpuBus` and `NesControllerPorts`.
+- [x] Added `tests/goboscript-source.test.ts` (13 tests) as the compile substitute: ASCII, indentation,
+      line length, directive placement, resolvable `%include` paths, no `return` inside a `proc`, every `func`
+      ending in a `return`, no `local` inside a loop body, reserved keyword/block-name collisions, per-target
+      name resolution, mirror name/arity parity, and self-test enum IDs matched against the fixture. Each rule
+      was mutation-checked against deliberately broken sources.
+- [x] Added `tests/support/shared_port_vectors.ts` so both the reference test and the mirror test load the
+      canonical fixture through one loader.
 
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test`: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
+- `npm test` on 2026-10-18: passed all 876 tests in about 11.6 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 275 shared port-vector tests (274 records), 32 GoboScript port-algorithm
+  tests, 13 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
+- `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
+  scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
+  checked in.
+- `npm run scratch:vectors` on 2026-10-18: generated 2,808 decimal values for 274 vectors.
+- `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
   opcodes and all 105 unofficial encodings, 27 unofficial NOPs, six immediate ALU variants, ten LAX/SAX forms,
@@ -194,7 +246,8 @@ or cycle-accurate emulation; the earlier one-million-cycle blank-screen smoke st
   Every test has a 10-second timeout.
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
-  ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors.
+  ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
+  (2026-10-15 figures; the fixture has since grown to 274 records and 2,808 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only
@@ -244,6 +297,9 @@ hardware validation remains open.
   compiled here. Downloading the older official Linux archive was blocked in this environment; its version
   would not satisfy the pinned-toolchain task anyway.
 - The `.sb3` has not been opened in Scratch or TurboWarp.
+- No `.gs` source in `scratch/` has ever been compiled, so the in-project vector self test has never run and
+  its result is unknown. The TypeScript mirror and source lint validate the ported algorithms and the source
+  shape; they are not a compiler, a runtime, or a performance measurement.
 - The supplied ROM's exact dump provenance/revision and redistribution rights remain unknown despite its
   high-confidence identification as the MMC3 Japanese SMB2 conversion. Its first 1,000,000-cycle smoke reached
   PC `$7108` after 33 PPU frames with a uniform palette-index-1 framebuffer and silent audio; it ended before
@@ -251,8 +307,9 @@ hardware validation remains open.
 - No third-party CPU test ROM is bundled. The automated CPU reference fixture is a small, MIT-licensed
   subset of single-instruction vectors; it is not full-suite conformance and does not establish ROM boot
   compatibility.
-- The cycle sequencer has not been validated against the full 2.56-million-vector upstream corpus or
-  hardware-level interrupt edge traces. `NesConsole` now composes the CPU/PPU/APU and routes PPU NMI plus
+- The cycle sequencer now matches the full 2.56-million-vector upstream corpus, which validates this
+  implementation against a recorded reference, not against silicon; hardware-level interrupt edge traces
+  remain unavailable. `NesConsole` now composes the CPU/PPU/APU and routes PPU NMI plus
   APU/MMC3 IRQ levels; synthetic tests cover vblank NMI and APU frame IRQ, but exact interrupt/mapper phase
   remains unvalidated. Sprite-overflow false positives/negatives from the 2C02 diagonal bug, exact output
   pipeline timing, PPU bus races, OAM/DMC phase timing, exact frame-counter edges (only unit-tested), hardware-
@@ -264,6 +321,14 @@ hardware validation remains open.
   60 fps claim are unmeasured. Do not infer playable frame rates from the synthetic timing.
 
 ## Current milestone
+
+**Milestone 2: GoboScript port of the tested helper layer.** The TypeScript foundation from milestone 1 is
+unchanged and now carries a 1,026-vector CPU corpus fixture. The GoboScript project has executable source for
+numeric/status/ALU helpers, both controller ports, a CPU-bus subset, and a vector self test that the Stage runs
+on the green flag. Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively with
+the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints,
+but nothing has been compiled or run in Scratch/TurboWarp. The next port steps are cartridge metadata and CPU
+fetch/decode/addressing/cycles, each blocked on the same missing toolchain for validation.
 
 **Milestone 1: CPU instruction and interrupt foundation.** Register/status helpers, reset/stack behavior,
 all addressing modes, all 151 official opcodes, one-bus-transaction-per-cycle execution, branch cycles,
