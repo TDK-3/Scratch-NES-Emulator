@@ -411,6 +411,7 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "dispatcher",
     },
+    { source: "src/vector_selftest.gs", declaration: "run_nrom_vector", mirror: null, reason: "dispatcher" },
     {
         source: "src/cpu_control.gs",
         declaration: "cpu_clear_interrupt_state",
@@ -433,6 +434,17 @@ const MIRROR_CONTRACT: readonly {
         declaration: "cpu_begin_next_sequence",
         mirror: "GoboscriptCpuCore.begin_next_sequence",
     },
+    { source: "src/mapper.gs", declaration: "mapper_sum_memory_sizes", mirror: "mapper_sum_memory_sizes" },
+    { source: "src/mapper.gs", declaration: "mapper_resolve", mirror: "GoboscriptMapperSelection.resolve" },
+    { source: "src/mapper_000.gs", declaration: "nrom_reset_results", mirror: "GoboscriptNromMapper.reset_results" },
+    { source: "src/mapper_000.gs", declaration: "nrom_validate", mirror: "GoboscriptNromMapper.validate" },
+    { source: "src/mapper_000.gs", declaration: "nrom_check_prg_rom", mirror: "GoboscriptNromMapper.check_prg_rom" },
+    { source: "src/mapper_000.gs", declaration: "nrom_accept_prg_rom", mirror: "GoboscriptNromMapper.accept_prg_rom" },
+    {
+        source: "src/mapper_000.gs",
+        declaration: "nrom_apply_memory_limits",
+        mirror: "GoboscriptNromMapper.apply_memory_limits",
+    },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
 ];
 
@@ -453,6 +465,8 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_opcode.gs",
         "src/cpu_sequence.gs",
         "src/cpu_status.gs",
+        "src/mapper.gs",
+        "src/mapper_000.gs",
         "src/numeric.gs",
         "src/rom_loader.gs",
         "src/shared_vectors.gs",
@@ -906,6 +920,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "cpu_instruction",
             "cpu_opcode",
             "cpu_sequence",
+            "nrom",
             "numeric",
         ],
     );
@@ -1006,6 +1021,9 @@ test("the self-test operation ids match the shared vector fixture operations", (
     // Suite 14 runs the control loop, so it also has one operation per record, and its sequence
     // kind ids must be the ones the ported enum reports.
     assert.deepEqual([...fixture_operations("cpu_control")], [1], "the control loop has one operation");
+
+    // Suite 15 validates one board per record, so it has one operation as well.
+    assert.deepEqual([...fixture_operations("nrom")], [1], "board validation has one operation");
 
     const sequence_kinds = get_enum(get_source("src/cpu_control.gs"), "cpu_sequence_kind");
     assert.deepEqual(

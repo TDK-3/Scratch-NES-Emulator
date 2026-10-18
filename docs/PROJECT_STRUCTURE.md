@@ -132,6 +132,7 @@
             cpu_instruction_projection.ts  reference projection of one whole instruction
             cpu_opcode_projection.ts  reference projection of one opcode decode
             cpu_sequence_projection.ts  reference projection of one CPU cycle sequence
+            mapper_projection.ts  reference projection of mapper selection and NROM validation
             goboscript_port_algorithms.ts  integer-only mirror of the ported helpers
             nestest_runner.ts
             recording_cpu_bus.ts  bus recorder and absent-device factory shared by the CPU projections
@@ -162,6 +163,8 @@
             cpu_opcode.gs  mnemonic enum plus the generated opcode table decode
             cpu_sequence.gs  reset, BRK, JSR, RTI, RTS, interrupt, and branch cycle sequences
             cpu_status.gs  status normalization and flag updates
+            mapper.gs  exact mapper and submapper routing with numeric error codes
+            mapper_000.gs  NROM board validation and the memory sizes it would map
             numeric.gs  bit-free byte, word, and bitwise helpers
             rom_loader.gs  generated ROM list, header load, and signature check
             shared_vectors.gs  generated port-vector list
@@ -263,6 +266,15 @@ toolchain needs Cargo and rustc, which are unavailable here.
   clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind, which is what delays an
   IRQ after CLI and lets an already pending IRQ through after SEI. DMA stalls and the yield policy a frame
   loop needs are not ported.
+- `src/mapper.gs` routes a cartridge by an exact mapper and submapper pair, never by a default, and reports
+  whether the mapper or the submapper is the unsupported half. It also sums two declared memory sizes and
+  reports -1 when either one is unusable, which stands in for the reference's null sum.
+- `src/mapper_000.gs` validates a parsed header as an NROM board in the reference's check order: board
+  family, 16 KiB or 32 KiB of PRG ROM, at most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG
+  RAM, and either exactly 8 KiB of CHR ROM with no CHR RAM or up to 8 KiB of CHR RAM with no CHR ROM. It
+  reports the two memory sizes an accepted board would map. The reference's 512-byte trainer length check is
+  not ported, because the parser only ever reports a 512-byte trainer. PRG/CHR storage, the CPU and pattern
+  address windows, the trainer copy, and the NVRAM snapshots are not ported.
 - `src/cpu_opcode.gs` decodes one opcode byte through the generated `data/opcode_table.txt`: the 76-name
   mnemonic enum whose ids come from the canonical fixture, the record offset `3 + opcode * 6`, a length and
   header check that reports a table which failed to load, and the six decoded fields. Dispatch and

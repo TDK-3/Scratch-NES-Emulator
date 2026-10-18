@@ -25,6 +25,8 @@
 %include src/cpu_instruction
 %include src/cpu_control
 %include src/cartridge
+%include src/mapper
+%include src/mapper_000
 %include src/rom_loader
 %include src/shared_vectors
 
@@ -42,7 +44,8 @@ enum port_suite {
     cpu_sequence = 11,
     cpu_opcode = 12,
     cpu_instruction = 13,
-    cpu_control = 14
+    cpu_control = 14,
+    nrom = 15
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -165,6 +168,8 @@ proc run_next_port_vector {
         run_cpu_instruction_vector input_start;
     } elif suite_id == port_suite.cpu_control {
         run_cpu_control_vector input_start;
+    } elif suite_id == port_suite.nrom {
+        run_nrom_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -684,4 +689,28 @@ proc run_cpu_control_vector input_start {
         add to_number(cpu_access_log[log_index]) to port_actual_values;
         log_index++;
     }
+}
+
+# Suite 15: one board validation. Inputs are the declared image length and the sixteen header
+# bytes, so the record parses the header first and then validates it as an NROM board, exactly as
+# a loader would. Expected values are ok, the error code, the board kind, the PRG RAM bytes the
+# board would map, the CHR RAM bytes it would map, and the selection kind and error underneath.
+proc run_nrom_vector input_start {
+    local index = 0;
+    cartridge_image_bytes = to_number(shared_port_vectors[$input_start]);
+
+    repeat cartridge_limit.header_bytes {
+        cartridge_header[index + 1] = to_number(shared_port_vectors[$input_start + index + 1]);
+        index++;
+    }
+
+    cartridge_parse_header;
+    nrom_validate;
+    add nrom_ok to port_actual_values;
+    add nrom_error_code to port_actual_values;
+    add nrom_kind to port_actual_values;
+    add nrom_prg_ram_bytes to port_actual_values;
+    add nrom_chr_ram_bytes to port_actual_values;
+    add mapper_selection_kind to port_actual_values;
+    add mapper_selection_error_code to port_actual_values;
 }

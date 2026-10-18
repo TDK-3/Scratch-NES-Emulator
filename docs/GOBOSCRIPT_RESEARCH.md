@@ -367,12 +367,13 @@ assets, run `goboscript build`, open or reload the emitted `.sb3`, and test it i
 Position as of 2026-10-18: steps 1 through 4 are done for the helper layer (numeric, status, ALU, controller,
 a CPU-bus subset, cartridge header parsing, the CPU register/fetch/stack/addressing scaffolding, the reset,
 BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, the generated opcode decode, one whole
-instruction for all 151 official opcodes, and the control loop with interrupt acceptance, the jam vector
-reads, and the CLI/SEI/PLP IRQ poll mask), and step 6 is written but unrun, because the project cannot be
-compiled here. What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the
-cartridge payload copy and mapper dispatch are the next porting work, and step 7 remains entirely blocked on
-a toolchain. The in-project self test replays suites 1, 3, and 7 through 14 of the shared fixture and counts
-the CPU state, MMC3, PPU, and APU suites as skipped rather than passing.
+instruction for all 151 official opcodes, the control loop with interrupt acceptance, the jam vector reads,
+and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection, and the NROM board checks), and step
+6 is written but unrun, because the project cannot be compiled here. What step 5 still lacks is the yield
+policy a frame loop needs and the DMA stall path; the cartridge payload copy, the NROM memory windows, and the
+MMC3 board are the next porting work, and step 7 remains entirely blocked on a toolchain. The in-project self
+test replays suites 1, 3, and 7 through 15 of the shared fixture and counts the CPU state, MMC3, PPU, and APU
+suites as skipped rather than passing.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

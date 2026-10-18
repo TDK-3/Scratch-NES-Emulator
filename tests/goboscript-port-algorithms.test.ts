@@ -46,7 +46,13 @@ import {
     project_cpu_sequence,
     type CpuSequenceSetup,
 } from "./support/cpu_sequence_projection.js";
+import {
+    MAPPER_CREATION_VALUE_COUNT,
+    MAPPER_KIND_IDS,
+    MAPPER_SELECTION_ERROR_IDS,
+} from "./support/mapper_projection.js";
 import { parse_ines_rom } from "../src/nes/cartridge/ines.js";
+import { resolve_mapper } from "../src/nes/cartridge/mapper.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { get_shared_vector_suite, vector_input } from "./support/shared_port_vectors.js";
 
@@ -1422,6 +1428,25 @@ function make_mirror_cpu_instruction(vector_inputs: readonly number[]): ported.G
     return core;
 }
 
+/** Builds the mirrored board validator for a suite-15 record by parsing its header first. */
+function make_mirror_nrom(vector_inputs: readonly number[]): ported.GoboscriptNromMapper {
+    const header = vector_inputs.slice(1, 1 + CARTRIDGE_HEADER_BYTES);
+    const parsed = project_cartridge_header(vector_inputs[0] ?? 0, header);
+    assert.equal(parsed[0], 1, "a board record carries a header that parses");
+
+    const mapper = new ported.GoboscriptNromMapper();
+    mapper.mapper_id = parsed[3] ?? 0;
+    mapper.submapper = parsed[4] ?? 0;
+    mapper.has_trainer = parsed[7] ?? 0;
+    mapper.prg_rom_bytes = parsed[8] ?? 0;
+    mapper.chr_rom_bytes = parsed[9] ?? 0;
+    mapper.prg_ram_bytes = parsed[10] ?? 0;
+    mapper.prg_nvram_bytes = parsed[11] ?? 0;
+    mapper.chr_ram_bytes = parsed[12] ?? 0;
+    mapper.chr_nvram_bytes = parsed[13] ?? 0;
+    return mapper;
+}
+
 /** Builds a mirror core for a suite-14 control record, seeding the interrupt inputs. */
 function make_mirror_cpu_control(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
     const core = new ported.GoboscriptCpuCore();
@@ -1900,4 +1925,83 @@ test("the mirrored control loop keeps the state its records pin", () => {
     assert.equal(line.irq_line_asserted, 1);
     line.set_irq_line(0);
     assert.equal(line.irq_line_asserted, 0);
+});
+
+test("the mirrored board validation replays every suite 15 vector", () => {
+    const vectors = get_shared_vector_suite("nrom").vectors;
+    assert.ok(vectors.length >= 20, "suite 15 covers both header versions and every rejection");
+
+    for (const vector of vectors) {
+        const mapper = make_mirror_nrom([...vector.input]);
+        mapper.validate();
+        const reported = mapper.reported_values();
+        assert.deepEqual(reported, [...vector.expected], `nrom vector ${vector.id}`);
+        assert.equal(reported.length, MAPPER_CREATION_VALUE_COUNT);
+    }
+});
+
+test("the mirrored mapper selection routes exactly the registered boards", () => {
+    for (let mapper_id = 0; mapper_id < 256; mapper_id += 1) {
+        for (let submapper = 0; submapper < 16; submapper += 1) {
+            const selection = new ported.GoboscriptMapperSelection();
+            selection.resolve(mapper_id, submapper);
+
+            const reference = resolve_mapper({ mapper_id, submapper });
+            const expected_kind = reference.ok ? MAPPER_KIND_IDS[reference.value.kind] : 0;
+            const expected_error = reference.ok ? 0 : MAPPER_SELECTION_ERROR_IDS[reference.error.code];
+            const label = `mapper ${mapper_id} submapper ${submapper}`;
+            assert.equal(selection.kind, expected_kind, `${label} kind`);
+            assert.equal(selection.error_code, expected_error, `${label} error`);
+            assert.equal(selection.mapper_id, mapper_id, `${label} echoes the mapper`);
+            assert.equal(selection.submapper, submapper, `${label} echoes the submapper`);
+        }
+    }
+});
+
+test("the mirrored memory size sum rejects the sizes the parser reports as unusable", () => {
+    assert.equal(ported.mapper_sum_memory_sizes(0, 0), 0);
+    assert.equal(ported.mapper_sum_memory_sizes(2048, 2048), 4096);
+    assert.equal(ported.mapper_sum_memory_sizes(-1, 0), -1, "a size that lost precision poisons the sum");
+    assert.equal(ported.mapper_sum_memory_sizes(0, -1), -1);
+    assert.equal(ported.mapper_sum_memory_sizes(8192, 8192), 16384, "the limit check rejects it, not the sum");
+});
+
+test("the mirrored board validation refuses what it cannot map", () => {
+    // A header the parser rejected leaves zero sizes, so the board fails on its PRG ROM size
+    // instead of passing as an empty cartridge.
+    const unparsed = new ported.GoboscriptNromMapper();
+    unparsed.validate();
+    assert.equal(unparsed.ok, 0);
+    assert.equal(unparsed.error_code, ported.NROM_ERROR.UNSUPPORTED_PRG_ROM_SIZE);
+    assert.equal(unparsed.selection.kind, ported.MAPPER_KIND.NROM, "mapper 0 submapper 0 still routes");
+    assert.equal(unparsed.mapped_prg_ram_bytes, 0, "a rejected board maps nothing");
+
+    // A size the parser could not represent poisons its sum, which the limit check then reports.
+    const prg_precision_loss = new ported.GoboscriptNromMapper();
+    prg_precision_loss.prg_rom_bytes = 32768;
+    prg_precision_loss.chr_rom_bytes = 8192;
+    prg_precision_loss.prg_ram_bytes = -1;
+    prg_precision_loss.validate();
+    assert.equal(prg_precision_loss.error_code, ported.NROM_ERROR.UNSUPPORTED_PRG_RAM_SIZE);
+
+    const chr_precision_loss = new ported.GoboscriptNromMapper();
+    chr_precision_loss.prg_rom_bytes = 16384;
+    chr_precision_loss.chr_rom_bytes = 8192;
+    chr_precision_loss.chr_nvram_bytes = -1;
+    chr_precision_loss.validate();
+    assert.equal(chr_precision_loss.error_code, ported.NROM_ERROR.UNSUPPORTED_CHR_MEMORY);
+
+    // The trainer check runs after the PRG RAM limit, so an oversized trainer board reports the
+    // size problem first, exactly as the reference orders its checks.
+    const trainer_and_oversize = new ported.GoboscriptNromMapper();
+    trainer_and_oversize.prg_rom_bytes = 16384;
+    trainer_and_oversize.chr_rom_bytes = 8192;
+    trainer_and_oversize.has_trainer = 1;
+    trainer_and_oversize.prg_ram_bytes = 16384;
+    trainer_and_oversize.validate();
+    assert.equal(trainer_and_oversize.error_code, ported.NROM_ERROR.UNSUPPORTED_PRG_RAM_SIZE);
+
+    // Resetting clears every reported field, so a second validation cannot inherit a result.
+    trainer_and_oversize.reset_results();
+    assert.deepEqual(trainer_and_oversize.reported_values().slice(0, 5), [0, 0, 0, 0, 0]);
 });

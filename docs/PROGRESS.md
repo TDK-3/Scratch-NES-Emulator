@@ -262,6 +262,30 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported mapper selection and NROM board validation. `scratch/src/mapper.gs` routes a cartridge by an
+      exact mapper and submapper pair the way `resolve_mapper` does, so a registered mapper with an
+      unregistered submapper reports a different code than an unregistered mapper, and it sums two declared
+      memory sizes, reporting -1 where the reference returns null. `scratch/src/mapper_000.gs` then applies
+      every `NromMapper.create` check in the reference's order: board family, 16 KiB or 32 KiB of PRG ROM, at
+      most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG RAM at `$7000-$71FF`, and either
+      exactly 8 KiB of CHR ROM with no CHR RAM or up to 8 KiB of CHR RAM with no CHR ROM, and it reports the
+      two memory sizes an accepted board would map. The reference's 512-byte trainer length check is not
+      ported, because the parser only ever reports a 512-byte trainer; suite 9 covers a header that lies about
+      its payload. Suite 15 (`nrom`, 25 records) carries the declared image length and the sixteen header
+      bytes like suite 9, and spans both header versions: NROM-128 and NROM-256, battery-backed NVRAM,
+      four-screen mirroring, a trainer with and without PRG RAM, CHR ROM with the iNES 1.0 CHR RAM default,
+      NES 2.0 CHR RAM at 8 KiB and 2 KiB, split PRG RAM and NVRAM, the 8 KiB limit, and every rejection code.
+      The two mapped sizes are private to `NromMapper`, so the projection measures them through the public CPU
+      and pattern ports by aliasing: the first write offset that wraps onto the start of a region is that
+      region's size, and a pattern write that does not stick means CHR ROM is present. The mirror gained
+      `GoboscriptMapperSelection` and `GoboscriptNromMapper`, a replay test over all 25 records, a sweep of
+      all 4,096 mapper and submapper pairs against `resolve_mapper`, and rejection tests for the unusable
+      sizes a parsed header can report. Mutation checks caught routing MMC3 to the NROM family, blaming the
+      mapper for a bad submapper, accepting any PRG ROM of at least 16 KiB, ignoring a trainer with no PRG
+      RAM, letting CHR ROM coexist with declared CHR RAM, and letting CHR RAM exceed one pattern table. The
+      fixture is now fifteen suites and 513 records, and the generated list is 11,040 values. Not ported: PRG
+      and CHR storage, the CPU and pattern address windows, the trainer copy, the NVRAM snapshots, and the
+      MMC3 board; compile validation stays blocked by the missing toolchain.
 - [x] Ported the CPU control loop and interrupt acceptance. `scratch/src/cpu_control.gs` picks the next
       sequence the way `begin_next_sequence` does in `src/nes/cpu/cpu_2a03.ts`: a jammed CPU keeps reading its
       vector, a latched NMI wins over IRQ, an asserted IRQ line is accepted unless the interrupt-disable flag
@@ -380,13 +404,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,125 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 489 shared port-vector tests (488 records), 60 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,154 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 514 shared port-vector tests (513 records), 64 GoboScript port-algorithm
   tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 10,315 decimal values for 488 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 11,040 decimal values for 513 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -403,7 +427,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 488 records and 10,315 values).
+  (2026-10-15 figures; the fixture has since grown to 513 records and 11,040 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

@@ -7,7 +7,8 @@ every .gs file here is compile-unvalidated. Its algorithms are validated on the 
 side instead: tests/support/goboscript_port_algorithms.ts mirrors the arithmetic in
 src/numeric.gs, src/cpu_status.gs, src/cpu_alu.gs, src/controller.gs, src/cpu_bus.gs,
 src/cartridge.gs, src/cpu_core.gs, src/cpu_addressing.gs, src/cpu_sequence.gs,
-src/cpu_opcode.gs, src/cpu_instruction.gs, and src/cpu_control.gs, and the automated suite compares
+src/cpu_opcode.gs, src/cpu_instruction.gs, src/cpu_control.gs, src/mapper.gs, and
+src/mapper_000.gs, and the automated suite compares
 those mirrors exhaustively against the bitwise reference in src/nes/cpu/registers.ts,
 src/nes/cpu/alu.ts, src/nes/cpu/nes_cpu_bus.ts, src/nes/input/controller.ts,
 src/nes/cartridge/ines.ts, and src/nes/cpu/cpu_2a03.ts.
@@ -92,12 +93,26 @@ What the ported modules cover:
   IRQ poll mask that CLI, SEI, and PLP leave behind through cpu_finish_instruction, which is what
   delays an IRQ after CLI and lets an already pending IRQ through after SEI. DMA stalls and the
   yield policy a frame loop needs are not ported.
+* mapper.gs: routes a cartridge by an exact mapper and submapper pair, never by a default, and
+  reports which half of it is unsupported (1 unsupported mapper, 2 unsupported submapper). It
+  also sums two declared memory sizes and reports -1 when either one is unusable, which stands in
+  for the null sum the TypeScript reference returns.
+* mapper_000.gs: validates a parsed header as an NROM board in the same check order as
+  NromMapper.create: the board family, 16 KiB or 32 KiB of PRG ROM, at most 8 KiB of summed PRG
+  RAM and NVRAM, a trainer that needs PRG RAM at $7000-$71FF, and either exactly 8 KiB of CHR ROM
+  with no CHR RAM or up to 8 KiB of CHR RAM with no CHR ROM. It reports ok, one error code
+  (3 wrong board family, 4 unsupported PRG ROM size, 5 unsupported PRG RAM size, 6 unsupported
+  trainer, 7 unsupported CHR memory), the board kind, and the PRG RAM and CHR RAM bytes an
+  accepted board would map. The reference also rejects a trainer that is not 512 bytes long; the
+  parser only ever reports a 512-byte trainer, so that check cannot fail here and is not ported.
+  PRG and CHR storage, the CPU and pattern address windows, the trainer copy into PRG RAM at
+  offset $1000, and the NVRAM snapshots are not ported yet.
 * vector_selftest.gs: walks the generated list in data/shared_port_vectors.txt and compares
   each record with the value recorded from the TypeScript reference. Suites 1 (numeric), 3
   (bus), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing), 11 (CPU
-  cycle sequences), 12 (opcode decode), 13 (instruction execution), and 14 (control loop) are
-  replayed; records for the CPU state, MMC3, PPU, and APU suites are counted as skipped rather
-  than treated as passing.
+  cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), and 15
+  (NROM board validation) are replayed; records for the CPU state, MMC3, PPU, and APU suites
+  are counted as skipped rather than treated as passing.
 
 The green flag runs that self test on the Stage and broadcasts "port self test done"; the
 display sprite reports the summary. data/test_rom_bytes.txt, data/shared_port_vectors.txt, and
@@ -107,6 +122,6 @@ Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
 Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-and the yield policy a frame loop needs; cartridge payload copying into bank lists and RAM/NVRAM
-storage; PPU rendering; APU channels; MMC3 mapper banking and IRQ; and any frame loop or
-rendering path.
+and the yield policy a frame loop needs; cartridge payload copying into bank lists, RAM/NVRAM
+storage, and the NROM CPU and pattern address windows; PPU rendering; APU channels; MMC3 mapper
+banking and IRQ; and any frame loop or rendering path.

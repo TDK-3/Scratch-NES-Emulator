@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for fourteen suites and 488 records. TypeScript regression tests execute each vector
+inputs and expected outputs for fifteen suites and 513 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (10,315 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (11,040 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -59,6 +59,7 @@ suite and operation IDs present in the fixture.
 | 12 | Opcode decode | 1: input is one opcode byte. | Mnemonic id, addressing mode id, base cycles, operand access id, page-cross cycle flag, official flag, and decoder error code, read from `CPU_OPCODE_TABLE` in `src/nes/cpu/opcode_table.ts` and encoded by `tests/fixtures/goboscript/opcode_table.json`. |
 | 13 | Instruction execution | 1: inputs are PC, A, X, Y, SP, status, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.step()` behind a fresh decoder with no devices. |
 | 14 | Control loop | 1: inputs are PC, A, X, Y, SP, status, the pending-NMI flag, the IRQ line level, a step count, the step before which an NMI is requested, the step before which the IRQ line is asserted, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, one sequence kind per step (1 instruction, 2 IRQ, 3 jam, 4 NMI, 5 reset), then one `(kind, address, value)` triple per bus access. Recorded by driving `Cpu2A03.clock_cycle()` step by step behind a fresh decoder with no devices, so the kinds come from the public cycle result. |
+| 15 | NROM board | 1: inputs are the declared image length in bytes followed by all 16 header bytes, as for suite 9. | Seven values: ok, board error code (1 unsupported mapper, 2 unsupported submapper, 3 wrong board family, 4 unsupported PRG ROM size, 5 unsupported PRG RAM size, 6 unsupported trainer, 7 unsupported CHR memory), board kind, mapped PRG RAM bytes, mapped CHR RAM bytes, selection kind, and selection error code. Recorded by running `resolve_mapper` and `NromMapper.create` in `src/nes/cartridge/mapper_000.ts`, with the two mapped sizes measured through the public CPU and pattern ports by aliasing. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
 1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
@@ -134,7 +135,7 @@ stand in for that until the toolchain is available:
   `tests/goboscript-port-algorithms.test.ts` compares those mirrors exhaustively against the bitwise reference
   in `src/nes/cpu/registers.ts`, `src/nes/cpu/alu.ts`, and the instruction steps of `src/nes/cpu/cpu_2a03.ts`,
   replays every numeric, ALU, bus, controller, cartridge, addressing, sequence, opcode, instruction, and
-  control-loop vector through them, and
+  control-loop and board-validation vector through them, and
   differentially checks the bus, controller, cartridge, and CPU mirrors against `NesCpuBus`,
   `NesControllerPorts`, and `Cpu2A03`. The
   CPU mirror is `GoboscriptCpuCore`, which reproduces the register state, one logged bus transaction per
@@ -162,6 +163,9 @@ stand in for that until the toolchain is available:
   `GoboscriptCpuCore.begin_next_sequence()`, which composes the jam sequence, the NMI latch, the IRQ line,
   the poll mask CLI, SEI, and PLP leave behind, and the instruction dispatcher, and replays every suite 14
   record; the source lint also compares the ported `cpu_sequence_kind` enum with the projection's ids.
+  Mapper selection and NROM board validation are mirrored in `GoboscriptMapperSelection` and
+  `GoboscriptNromMapper`, which replay every suite 15 record and are swept against `resolve_mapper` for all
+  4,096 mapper and submapper pairs.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared

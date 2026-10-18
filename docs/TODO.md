@@ -225,7 +225,7 @@ separate from TypeScript success.
 - [x] Create an initial shared, generated vector set for numeric helpers, CPU instruction state/cycles,
       CPU-bus mirroring/open bus, MMC3 PRG banks/filtered IRQs, scheduled PPU vblank/NMI, pulse APU state,
       controller serialization, and per-instruction ALU results. `tests/fixtures/goboscript/shared_port_vectors.json`
-      is canonical: fourteen suites and 488 records, whose expected ALU bytes were derived by executing the
+      is canonical: fifteen suites and 513 records, whose expected ALU bytes were derived by executing the
       production CPU, whose expected cartridge header fields were derived by executing `parse_ines_rom`, and
       whose expected addressing operands and bus traces were derived by executing
       `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
@@ -278,6 +278,14 @@ separate from TypeScript success.
       `scripts/generate_goboscript_opcode_table.mjs` flattens it to the ignored
       `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. The `.gs` mnemonic enum,
       the list loader, and the decode proc that reads it landed in the next entry.
+- [x] Port mapper selection and NROM board validation. `scratch/src/mapper.gs` routes an exact mapper and
+      submapper pair and reports which half of it is unsupported, and `scratch/src/mapper_000.gs` applies
+      every `NromMapper.create` check in the reference's order and reports the PRG RAM and CHR RAM bytes an
+      accepted board would map. Suite 15 (25 records) spans both header versions and every rejection code;
+      the two mapped sizes are measured through the public CPU and pattern ports by aliasing, because
+      `NromMapper` keeps them private. Not ported: PRG and CHR storage, the CPU and pattern address windows,
+      the trainer copy into PRG RAM, the NVRAM snapshots, and the MMC3 board. Compile validation stays
+      blocked by the missing toolchain.
 - [x] Port the CPU control loop and interrupt acceptance. `scratch/src/cpu_control.gs` selects jam, NMI, IRQ,
       or one instruction the way `begin_next_sequence` does, and ports the NMI latch, the level-sensitive IRQ
       input, the jam vector reads (three the first time the CPU jams, one afterwards), the reset-shaped state
@@ -324,9 +332,11 @@ separate from TypeScript success.
       RTS, IRQ, NMI, and relative-branch sequences (`cpu_sequence.gs`), the generated opcode decode
       (`cpu_opcode.gs`), one whole instruction for all 151 official opcodes (`cpu_instruction.gs`), and the
       control loop with interrupt acceptance, the jam vector reads, and the CLI/SEI/PLP IRQ poll mask
-      (`cpu_control.gs`); PPU, APU, OAM DMA, and cartridge windows still behave as absent devices on the bus.
-      Not started: cartridge payload copying into bank lists and RAM/NVRAM storage, MMC3 banking and IRQ, PPU
-      rendering, APU channels, DMA stalls, and the frame-loop yield policy.
+      (`cpu_control.gs`), exact mapper and submapper selection (`mapper.gs`), and the NROM board checks with
+      the memory sizes an accepted board would map (`mapper_000.gs`); PPU, APU, OAM DMA, and cartridge windows
+      still behave as absent devices on the bus. Not started: cartridge payload copying into bank lists,
+      RAM/NVRAM storage, the NROM CPU and pattern address windows, MMC3 banking and IRQ, PPU rendering, APU
+      channels, DMA stalls, and the frame-loop yield policy.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,
@@ -340,7 +350,7 @@ separate from TypeScript success.
 
 - [x] Run CPU, PPU, APU, DMA, interrupt, mapper, and timing test suites; document skips and known
       failures. On 2026-10-15, `npm test` passed all 332 tests (including strict type-checking) and
-      `npm run build:ts` passed; on 2026-10-18 it passed all 1,125 tests. Coverage and known external-ROM
+      `npm run build:ts` passed; on 2026-10-18 it passed all 1,154 tests. Coverage and known external-ROM
       failures/skips are recorded in `docs/TESTING.md`.
 - [ ] Differentially compare CPU traces and framebuffer/audio outputs against trusted reference
       behavior. The first 5,003 external `nestest` trace entries match; TypeScript and a temporary JSNES 2.1.0
@@ -361,14 +371,14 @@ separate from TypeScript success.
       open under P6 and `docs/COMPLETION_CRITERIA.md`.
 - [x] From a clean npm install (`npm ci`), run TypeScript tests/build and regenerate the selected-ROM and
       shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed. Rechecked on
-      2026-10-18 with 1,125 tests passing and all three generators completing (10,315 vector values, 1,538
+      2026-10-18 with 1,154 tests passing and all three generators completing (11,040 vector values, 1,538
       opcode values, 81,936 ROM bytes).
 - [ ] Install the documented GoboScript compiler, build/open the `.sb3`, and validate it in TurboWarp;
       review source, asset, and ROM rights before distribution. Compiler availability and runtime validation
       remain blocked; see the P0 notes above.
 - [x] Keep `PROGRESS.md` and `COMPLETION_CRITERIA.md` current with test results, measurements, and open
       blockers. The 2026-10-15 clean-install run passed 332 tests, TypeScript build, and both data generators;
-      the 2026-10-18 run passed 1,125 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
+      the 2026-10-18 run passed 1,154 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
       is a progress record, not a claim that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria
       are complete.
 

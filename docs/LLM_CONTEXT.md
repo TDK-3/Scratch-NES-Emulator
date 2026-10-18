@@ -118,8 +118,8 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,125 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
-test, 489 cross-domain parity cases, 60 GoboScript port-algorithm comparisons against an integer-only mirror of
+suite has 1,154 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+test, 514 cross-domain parity cases, 64 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported modules, 16 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
@@ -201,12 +201,15 @@ the four stack instructions, the transfers, the flag instructions, INX, DEX, INY
 store, ALU, and read-modify-write instruction, so all 151 official opcodes are dispatched, with a numeric error
 code for the unofficial ones), and `cpu_control.gs` (the control loop: it selects jam, NMI, IRQ, or one
 instruction, ports the NMI latch, the level-sensitive IRQ line, the jam vector reads, the reset-shaped state
-clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind). `stage.gs` includes every
-header, so the Stage owns all shared state, and its green-flag handler runs `src/vector_selftest.gs`, which
-executes suites 1, 3, and 7 through 14 of the fixture, counts suites 2, 4, 5, and 6 as skipped, and broadcasts
-a summary that `main.gs` reports. Unofficial opcodes other than KIL, DMA stalls, cartridge payload copying and
-mapper dispatch, PPU, APU, rendering, sound, save states, and game execution remain unimplemented there, and
-none of the `.gs` sources has been compiled. The TypeScript NROM/MMC3 mapper and
+clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind), `mapper.gs` (exact mapper
+and submapper routing with the two selection error codes, plus the declared-memory size sum), and
+`mapper_000.gs` (every NROM board check in the reference's order and the two memory sizes an accepted board
+would map). `stage.gs` includes every header, so the Stage owns all shared state, and its green-flag handler
+runs `src/vector_selftest.gs`, which executes suites 1, 3, and 7 through 15 of the fixture, counts suites 2, 4,
+5, and 6 as skipped, and broadcasts a summary that `main.gs` reports. Unofficial opcodes other than KIL, DMA
+stalls, cartridge payload copying and the NROM memory windows, MMC3 banking and IRQ, PPU, APU, rendering,
+sound, save states, and game execution remain unimplemented there, and none of the `.gs` sources has been
+compiled. The TypeScript NROM/MMC3 mapper and
 `NesConsole` APIs copy/restore declared PRG and CHR NVRAM, excluding volatile RAM; restore validates both sizes
 before mutating either region. The browser shell stores both regions in per-ROM SHA-256 snapshots in local
 storage and accepts legacy PRG-only records. TurboWarp storage and full console save states are not implemented.

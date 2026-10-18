@@ -51,6 +51,14 @@ import {
 } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
+    MAPPER_CREATION_INPUT_COUNT,
+    MAPPER_CREATION_VALUE_COUNT,
+    MAPPER_KIND_IDS,
+    MAPPER_SELECTION_ERROR_IDS,
+    NROM_ERROR_IDS,
+    project_mapper_creation,
+} from "./support/mapper_projection.js";
+import {
     CPU_SEQUENCE_FIXED_INPUT_COUNT,
     CPU_SEQUENCE_FIXED_VALUE_COUNT,
     project_cpu_sequence,
@@ -739,6 +747,53 @@ for_each_vector("cpu_control", (vector) => {
             kinds.slice(first_jam).every((kind) => kind === jam_id),
             "a jammed CPU keeps jamming",
         );
+    }
+});
+
+for_each_vector("nrom", (vector) => {
+    assert.equal(vector.operation, 1, "Board validation vectors have a single operation.");
+    assert.equal(vector.input.length, MAPPER_CREATION_INPUT_COUNT, "one image length and sixteen header bytes");
+    assert.equal(vector.expected.length, MAPPER_CREATION_VALUE_COUNT);
+
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1);
+    const actual = project_mapper_creation(image_bytes, header);
+    assert.deepEqual(actual, [...vector.expected]);
+
+    const [ok, error_code, kind, prg_ram_bytes, chr_ram_bytes, selection_kind, selection_error] = actual;
+    assert.ok(ok === 0 || ok === 1, "ok is a flag");
+    assert.equal(ok === 1, error_code === 0, "an accepted board reports no code and a rejected one reports why");
+    assert.equal(kind === MAPPER_KIND_IDS.nrom, ok === 1, "only an accepted board reports its family");
+
+    if (ok === 1) {
+        assert.equal(selection_kind, MAPPER_KIND_IDS.nrom, "an accepted board was routed to NROM");
+        assert.equal(selection_error, 0);
+        assert.ok(
+            (prg_ram_bytes ?? 0) >= 0 && (prg_ram_bytes ?? 0) <= 0x2000,
+            "the mapped PRG RAM fits the $6000-$7FFF window",
+        );
+        assert.ok(
+            (chr_ram_bytes ?? 0) === 0 || (chr_ram_bytes ?? 0) <= 0x2000,
+            "the mapped CHR RAM fits one pattern table",
+        );
+    } else {
+        assert.equal(kind, 0, "a rejected board reports no family");
+        assert.equal(prg_ram_bytes, 0, "a rejected board maps nothing");
+        assert.equal(chr_ram_bytes, 0);
+        assert.ok(
+            Object.values(NROM_ERROR_IDS).includes(error_code as (typeof NROM_ERROR_IDS)[keyof typeof NROM_ERROR_IDS]),
+            `Error code ${error_code} is a ported board code`,
+        );
+
+        if (selection_error !== 0) {
+            assert.equal(
+                error_code,
+                selection_error === MAPPER_SELECTION_ERROR_IDS["unsupported-mapper"]
+                    ? NROM_ERROR_IDS["unsupported-mapper"]
+                    : NROM_ERROR_IDS["unsupported-submapper"],
+                "a failed selection is reported unchanged",
+            );
+        }
     }
 });
 

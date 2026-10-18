@@ -864,6 +864,193 @@ export const CPU_INTERRUPT_SOURCE = { NMI: 1, IRQ: 2 } as const;
 /** Mirror of the `cpu_sequence_error_code` enum in scratch/src/cpu_sequence.gs. */
 export const CPU_SEQUENCE_ERROR_CODE = { NONE: 0, NOT_RELATIVE_OPERAND: 1 } as const;
 
+/** Mirror of the `mapper_kind` enum in scratch/src/mapper.gs. */
+export const MAPPER_KIND = { NONE: 0, NROM: 1, MMC3: 2 } as const;
+
+/** Mirror of the `mapper_selection_error` enum in scratch/src/mapper.gs. */
+export const MAPPER_SELECTION_ERROR = { NONE: 0, UNSUPPORTED_MAPPER: 1, UNSUPPORTED_SUBMAPPER: 2 } as const;
+
+/** Mirror of the `nrom_error` enum in scratch/src/mapper_000.gs. */
+export const NROM_ERROR = {
+    NONE: 0,
+    UNSUPPORTED_MAPPER: 1,
+    UNSUPPORTED_SUBMAPPER: 2,
+    WRONG_MAPPER_FAMILY: 3,
+    UNSUPPORTED_PRG_ROM_SIZE: 4,
+    UNSUPPORTED_PRG_RAM_SIZE: 5,
+    UNSUPPORTED_TRAINER: 6,
+    UNSUPPORTED_CHR_MEMORY: 7,
+} as const;
+
+/** Mirror of the `nrom_limit` enum in scratch/src/mapper_000.gs. */
+export const NROM_LIMIT = {
+    PRG_RAM_BYTES: 8192,
+    PRG_ROM_16K_BYTES: 16384,
+    PRG_ROM_32K_BYTES: 32768,
+    PATTERN_BYTES: 8192,
+} as const;
+
+/** Mirror of `mapper_sum_memory_sizes(first, second)`. */
+export function mapper_sum_memory_sizes(first: number, second: number): number {
+    if (first < 0) {
+        return -1;
+    }
+
+    if (second < 0) {
+        return -1;
+    }
+
+    return first + second;
+}
+
+/**
+ * Mirror of scratch/src/mapper.gs. Selection routes an exact mapper and submapper pair, so a known
+ * mapper with an unregistered submapper reports a different code than an unknown mapper.
+ */
+export class GoboscriptMapperSelection {
+    kind: number = MAPPER_KIND.NONE;
+    error_code: number = MAPPER_SELECTION_ERROR.NONE;
+    mapper_id = 0;
+    submapper = 0;
+
+    /** Mirror of `mapper_resolve mapper_id, submapper`. */
+    resolve(mapper_id: number, submapper: number): void {
+        this.mapper_id = mapper_id;
+        this.submapper = submapper;
+        this.kind = MAPPER_KIND.NONE;
+        this.error_code = MAPPER_SELECTION_ERROR.NONE;
+
+        if (mapper_id === 0 && submapper === 0) {
+            this.kind = MAPPER_KIND.NROM;
+        } else if (mapper_id === 4 && submapper === 0) {
+            this.kind = MAPPER_KIND.MMC3;
+        } else if (mapper_id === 0 || mapper_id === 4) {
+            this.error_code = MAPPER_SELECTION_ERROR.UNSUPPORTED_SUBMAPPER;
+        } else {
+            this.error_code = MAPPER_SELECTION_ERROR.UNSUPPORTED_MAPPER;
+        }
+    }
+}
+
+/**
+ * Mirror of scratch/src/mapper_000.gs. The fields named after the parsed header stand for the
+ * `cartridge_*` globals the ported validation reads, and the rest stand for the `nrom_*` globals it
+ * writes. Storage, the CPU and pattern windows, and the trainer copy are not ported yet, so this
+ * mirror only decides whether a board is acceptable and which sizes it would map.
+ */
+export class GoboscriptNromMapper {
+    mapper_id = 0;
+    submapper = 0;
+    prg_rom_bytes = 0;
+    chr_rom_bytes = 0;
+    prg_ram_bytes = 0;
+    prg_nvram_bytes = 0;
+    chr_ram_bytes = 0;
+    chr_nvram_bytes = 0;
+    has_trainer = 0;
+
+    ok = 0;
+    error_code: number = NROM_ERROR.NONE;
+    kind: number = MAPPER_KIND.NONE;
+    mapped_prg_ram_bytes = 0;
+    mapped_chr_ram_bytes = 0;
+
+    readonly selection = new GoboscriptMapperSelection();
+
+    /** Mirror of `nrom_reset_results`. */
+    reset_results(): void {
+        this.ok = 0;
+        this.error_code = NROM_ERROR.NONE;
+        this.kind = MAPPER_KIND.NONE;
+        this.mapped_prg_ram_bytes = 0;
+        this.mapped_chr_ram_bytes = 0;
+    }
+
+    /** Mirror of `nrom_validate`. */
+    validate(): void {
+        this.reset_results();
+        this.selection.resolve(this.mapper_id, this.submapper);
+
+        if (this.selection.error_code !== MAPPER_SELECTION_ERROR.NONE) {
+            this.error_code = this.selection.error_code;
+        } else if (this.selection.kind !== MAPPER_KIND.NROM) {
+            this.error_code = NROM_ERROR.WRONG_MAPPER_FAMILY;
+        } else {
+            this.check_prg_rom();
+        }
+    }
+
+    /** Mirror of `nrom_check_prg_rom`. */
+    check_prg_rom(): void {
+        let prg_rom_ok = 0;
+
+        if (this.prg_rom_bytes === NROM_LIMIT.PRG_ROM_16K_BYTES) {
+            prg_rom_ok = 1;
+        } else if (this.prg_rom_bytes === NROM_LIMIT.PRG_ROM_32K_BYTES) {
+            prg_rom_ok = 1;
+        }
+
+        if (prg_rom_ok === 0) {
+            this.error_code = NROM_ERROR.UNSUPPORTED_PRG_ROM_SIZE;
+        } else {
+            this.accept_prg_rom();
+        }
+    }
+
+    /** Mirror of `nrom_accept_prg_rom`. */
+    accept_prg_rom(): void {
+        this.apply_memory_limits(
+            mapper_sum_memory_sizes(this.prg_ram_bytes, this.prg_nvram_bytes),
+            mapper_sum_memory_sizes(this.chr_ram_bytes, this.chr_nvram_bytes),
+        );
+    }
+
+    /** Mirror of `nrom_apply_memory_limits prg_ram_bytes, chr_ram_bytes`. */
+    apply_memory_limits(prg_ram_bytes: number, chr_ram_bytes: number): void {
+        let has_chr_rom = 0;
+        let chr_ok = 0;
+
+        if (this.chr_rom_bytes !== 0) {
+            has_chr_rom = 1;
+        }
+
+        if (has_chr_rom === 1 && this.chr_rom_bytes === NROM_LIMIT.PATTERN_BYTES && chr_ram_bytes === 0) {
+            chr_ok = 1;
+        } else if (has_chr_rom === 0 && chr_ram_bytes > 0 && chr_ram_bytes <= NROM_LIMIT.PATTERN_BYTES) {
+            chr_ok = 1;
+        }
+
+        if (prg_ram_bytes < 0 || prg_ram_bytes > NROM_LIMIT.PRG_RAM_BYTES) {
+            this.error_code = NROM_ERROR.UNSUPPORTED_PRG_RAM_SIZE;
+        } else if (this.has_trainer === 1 && prg_ram_bytes === 0) {
+            this.error_code = NROM_ERROR.UNSUPPORTED_TRAINER;
+        } else if (chr_ok === 0) {
+            this.error_code = NROM_ERROR.UNSUPPORTED_CHR_MEMORY;
+        } else {
+            this.ok = 1;
+            this.kind = MAPPER_KIND.NROM;
+            this.mapped_prg_ram_bytes = prg_ram_bytes;
+
+            if (has_chr_rom === 0) {
+                this.mapped_chr_ram_bytes = chr_ram_bytes;
+            }
+        }
+    }
+
+    /** The seven values suite 15 reports for one board validation. */
+    reported_values(): number[] {
+        return [
+            this.ok,
+            this.error_code,
+            this.kind,
+            this.mapped_prg_ram_bytes,
+            this.mapped_chr_ram_bytes,
+            this.selection.kind,
+            this.selection.error_code,
+        ];
+    }
+}
+
 /** Mirror of the `cpu_sequence_kind` enum in scratch/src/cpu_control.gs. */
 export const CPU_SEQUENCE_KIND = { INSTRUCTION: 1, IRQ: 2, JAM: 3, NMI: 4, RESET: 5 } as const;
 
