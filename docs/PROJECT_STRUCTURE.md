@@ -128,6 +128,9 @@
             NromTestBus.ts
             cartridge_projection.ts  reference projection of a header parse onto suite 9
             cpu_addressing_projection.ts  reference projection of one addressing-mode resolution
+            cpu_control_projection.ts  reference projection of a control-loop record
+            cpu_instruction_projection.ts  reference projection of one whole instruction
+            cpu_opcode_projection.ts  reference projection of one opcode decode
             cpu_sequence_projection.ts  reference projection of one CPU cycle sequence
             goboscript_port_algorithms.ts  integer-only mirror of the ported helpers
             nestest_runner.ts
@@ -153,6 +156,7 @@
             cpu_addressing.gs  all thirteen addressing modes with dummy reads and page-cross cycles
             cpu_alu.gs  ADC, SBC, logic, shift, compare, BIT, INC, DEC
             cpu_bus.gs  RAM mirroring, open bus, controller window
+            cpu_control.gs  sequence selection, interrupt acceptance, jam vector reads, IRQ poll mask
             cpu_core.gs  registers, one logged bus transaction per cycle, fetch and stack operations
             cpu_instruction.gs  one whole instruction: dispatch, operands, ALU, branches, jumps, stack
             cpu_opcode.gs  mnemonic enum plus the generated opcode table decode
@@ -251,8 +255,14 @@ toolchain needs Cargo and rustc, which are unavailable here.
   addressing modes, the ALU group, the shifts, rotates, and counters on the accumulator and in memory, the
   transfers, the flag instructions, the stack instructions, the branches, both JMP forms, BRK, JSR, RTI, RTS,
   NOP, and the KIL jam flag. It reports `cpu_instruction_error` for an undecodable opcode, an unofficial
-  opcode, an unresolved operand, or an operand kind a mnemonic cannot use. Unofficial opcodes other than KIL,
-  the unstable high-byte stores, the jam vector reads, and interrupt acceptance are not ported.
+  opcode, an unresolved operand, or an operand kind a mnemonic cannot use. Unofficial opcodes other than KIL
+  and the unstable high-byte stores are not ported.
+- `src/cpu_control.gs` picks the next sequence: a jam, a latched NMI, an asserted IRQ line the
+  interrupt-disable flag does not mask, or one instruction. It holds the NMI latch, the level-sensitive IRQ
+  input, the jam vector reads (three the first time the CPU jams, one afterwards), the reset-shaped state
+  clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind, which is what delays an
+  IRQ after CLI and lets an already pending IRQ through after SEI. DMA stalls and the yield policy a frame
+  loop needs are not ported.
 - `src/cpu_opcode.gs` decodes one opcode byte through the generated `data/opcode_table.txt`: the 76-name
   mnemonic enum whose ids come from the canonical fixture, the record offset `3 + opcode * 6`, a length and
   header check that reports a table which failed to load, and the six decoded fields. Dispatch and

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { CPU_INSTRUCTION_PORTED_MNEMONICS } from "./support/cpu_instruction_projection.js";
+import { CPU_CONTROL_SEQUENCE_KINDS } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, opcode_table_fixture } from "./support/cpu_opcode_projection.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { shared_port_fixture } from "./support/shared_port_vectors.js";
@@ -404,6 +405,34 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "dispatcher",
     },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_cpu_control_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
+    {
+        source: "src/cpu_control.gs",
+        declaration: "cpu_clear_interrupt_state",
+        mirror: "GoboscriptCpuCore.clear_interrupt_state",
+    },
+    { source: "src/cpu_control.gs", declaration: "cpu_request_nmi", mirror: "GoboscriptCpuCore.request_nmi" },
+    { source: "src/cpu_control.gs", declaration: "cpu_set_irq_line", mirror: "GoboscriptCpuCore.set_irq_line" },
+    {
+        source: "src/cpu_control.gs",
+        declaration: "cpu_execute_jammed_cycles",
+        mirror: "GoboscriptCpuCore.execute_jammed_cycles",
+    },
+    {
+        source: "src/cpu_control.gs",
+        declaration: "cpu_finish_instruction",
+        mirror: "GoboscriptCpuCore.finish_instruction",
+    },
+    {
+        source: "src/cpu_control.gs",
+        declaration: "cpu_begin_next_sequence",
+        mirror: "GoboscriptCpuCore.begin_next_sequence",
+    },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
 ];
 
@@ -418,6 +447,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_addressing.gs",
         "src/cpu_alu.gs",
         "src/cpu_bus.gs",
+        "src/cpu_control.gs",
         "src/cpu_core.gs",
         "src/cpu_instruction.gs",
         "src/cpu_opcode.gs",
@@ -872,6 +902,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "cartridge",
             "controller",
             "cpu_addressing",
+            "cpu_control",
             "cpu_instruction",
             "cpu_opcode",
             "cpu_sequence",
@@ -971,6 +1002,19 @@ test("the self-test operation ids match the shared vector fixture operations", (
     // an executed record for. A mnemonic missing from any of the three would let an unported
     // instruction pass as executed, or an executed one be recorded as refused.
     assert.deepEqual([...fixture_operations("cpu_instruction")], [1], "instruction execution has one operation");
+
+    // Suite 14 runs the control loop, so it also has one operation per record, and its sequence
+    // kind ids must be the ones the ported enum reports.
+    assert.deepEqual([...fixture_operations("cpu_control")], [1], "the control loop has one operation");
+
+    const sequence_kinds = get_enum(get_source("src/cpu_control.gs"), "cpu_sequence_kind");
+    assert.deepEqual(
+        [...sequence_kinds.entries()]
+            .map(([name, id]) => ({ id, name }))
+            .sort((first, second) => first.id - second.id),
+        [...CPU_CONTROL_SEQUENCE_KINDS],
+        "the ported sequence kind ids are the projection's ids",
+    );
 
     const dispatched = new Set(
         (get_source("src/cpu_instruction.gs").text.match(/cpu_mnemonic\.op_(\w+)/g) ?? []).map((match) =>

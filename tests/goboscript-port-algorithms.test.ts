@@ -23,6 +23,10 @@ import {
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
 import {
+    CPU_CONTROL_FIXED_INPUT_COUNT,
+    CPU_CONTROL_FIXED_VALUE_COUNT,
+} from "./support/cpu_control_projection.js";
+import {
     CPU_INSTRUCTION_ERROR_IDS,
     CPU_INSTRUCTION_FIXED_INPUT_COUNT,
     CPU_INSTRUCTION_FIXED_VALUE_COUNT,
@@ -1418,6 +1422,41 @@ function make_mirror_cpu_instruction(vector_inputs: readonly number[]): ported.G
     return core;
 }
 
+/** Builds a mirror core for a suite-14 control record, seeding the interrupt inputs. */
+function make_mirror_cpu_control(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
+    const core = new ported.GoboscriptCpuCore();
+    core.decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
+    core.reset_registers();
+    core.bus.clear_ram();
+    core.bus.reset();
+    core.program_counter = vector_inputs[0] ?? 0;
+    core.a = vector_inputs[1] ?? 0;
+    core.x = vector_inputs[2] ?? 0;
+    core.y = vector_inputs[3] ?? 0;
+    core.stack_pointer = vector_inputs[4] ?? 0;
+    core.status = vector_inputs[5] ?? 0;
+    core.clear_interrupt_state();
+    core.set_irq_line(vector_inputs[7] ?? 0);
+
+    if ((vector_inputs[6] ?? 0) === 1) {
+        core.request_nmi();
+    }
+
+    const program_count = vector_inputs[CPU_CONTROL_FIXED_INPUT_COUNT - 2] ?? 0;
+    const setup_count = vector_inputs[CPU_CONTROL_FIXED_INPUT_COUNT - 1] ?? 0;
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const pair_start = CPU_CONTROL_FIXED_INPUT_COUNT + program_count + index * 2;
+        core.bus.write(vector_inputs[pair_start] ?? 0, vector_inputs[pair_start + 1] ?? 0);
+    }
+
+    for (let index = 0; index < program_count; index += 1) {
+        core.bus.write(core.program_counter + index, vector_inputs[CPU_CONTROL_FIXED_INPUT_COUNT + index] ?? 0);
+    }
+
+    return core;
+}
+
 function make_mirror_cpu_sequence(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
     const core = new ported.GoboscriptCpuCore();
     core.reset_registers();
@@ -1803,4 +1842,62 @@ test("the mirrored dispatcher executes every official opcode and refuses the res
     }
 
     assert.equal(officials, 151, "every official opcode is dispatched");
+});
+
+test("the mirrored control loop replays every suite 14 vector", () => {
+    const vectors = get_shared_vector_suite("cpu_control").vectors;
+    assert.ok(vectors.length >= 15, "suite 14 covers the jam, NMI, IRQ, and poll-mask cases");
+
+    for (const vector of vectors) {
+        const core = make_mirror_cpu_control([...vector.input]);
+        const step_count = vector.input[8] ?? 0;
+        const reported = core.run_control_steps(step_count, vector.input[9] ?? 0, vector.input[10] ?? 0);
+
+        assert.deepEqual(reported, [...vector.expected], `cpu_control vector ${vector.id}`);
+        assert.equal(
+            reported.length,
+            CPU_CONTROL_FIXED_VALUE_COUNT + step_count + core.cycles * 3,
+            "one kind per step and one triple per cycle",
+        );
+    }
+});
+
+test("the mirrored control loop keeps the state its records pin", () => {
+    // A jammed core keeps jamming: the first jam sequence reads the vector three times and every
+    // later one reads it once.
+    const jammed = make_mirror_cpu_control([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 0, 0, 3, 0, 0, 1, 0, 0x02]);
+    jammed.run_control_steps(3, 0, 0);
+    assert.equal(jammed.jammed, 1);
+    assert.equal(jammed.jam_vector_reads_issued, 1);
+    assert.equal(jammed.cycles, 6, "the KIL fetch and read, then three reads, then one");
+    assert.equal(jammed.selected_sequence, ported.CPU_SEQUENCE_KIND.JAM);
+
+    // Clearing the interrupt state drops the jam flags and the latch together, as reset does.
+    jammed.clear_interrupt_state();
+    assert.equal(jammed.jammed, 0);
+    assert.equal(jammed.jam_vector_reads_issued, 0);
+    assert.equal(jammed.nmi_pending, 0);
+    assert.equal(jammed.irq_poll_mask_override_active, 0);
+
+    // CLI leaves a poll mask that the next poll consumes, so a still asserted line waits once.
+    const cli = make_mirror_cpu_control([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 0, 1, 3, 0, 0, 3, 0, 0x58, 0xea, 0xea]);
+    cli.run_control_steps(2, 0, 0);
+    assert.equal(cli.irq_poll_mask_override_active, 0, "the masked poll cleared the mask");
+    assert.equal(cli.selected_sequence, ported.CPU_SEQUENCE_KIND.INSTRUCTION, "the mask held the IRQ off");
+    cli.run_control_steps(1, 0, 0);
+    assert.equal(cli.selected_sequence, ported.CPU_SEQUENCE_KIND.IRQ, "the next boundary takes the IRQ");
+
+    // A pending NMI is latched until it is accepted, and acceptance clears the latch.
+    const nmi = make_mirror_cpu_control([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 1, 0, 1, 0, 0, 1, 0, 0xea]);
+    assert.equal(nmi.nmi_pending, 1);
+    nmi.run_control_steps(1, 0, 0);
+    assert.equal(nmi.nmi_pending, 0, "accepting the NMI clears the latch");
+    assert.equal(nmi.selected_sequence, ported.CPU_SEQUENCE_KIND.NMI);
+
+    // Any nonzero level asserts the IRQ line, and zero drops it.
+    const line = new ported.GoboscriptCpuCore();
+    line.set_irq_line(7);
+    assert.equal(line.irq_line_asserted, 1);
+    line.set_irq_line(0);
+    assert.equal(line.irq_line_asserted, 0);
 });

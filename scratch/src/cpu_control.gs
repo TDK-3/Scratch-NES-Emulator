@@ -1,0 +1,140 @@
+# The CPU control loop for the GoboScript port.
+#
+# This header picks the next sequence the way begin_next_sequence does in
+# src/nes/cpu/cpu_2a03.ts: a jammed CPU keeps reading its vector, a latched NMI wins over IRQ,
+# an asserted IRQ line is accepted unless the interrupt-disable flag masks it, and otherwise one
+# instruction runs. It also ports the two pieces of state that policy needs: the NMI latch, which
+# request_nmi sets and acceptance clears, and the one-instruction IRQ poll mask that CLI, SEI,
+# and PLP leave behind through finish_instruction.
+#
+# The poll mask is what makes the documented delay visible: after a CLI that ran with interrupt
+# disable set, the next poll still uses the old value, so an IRQ waits one more instruction; after
+# an SEI that ran with it clear, the next poll uses the old clear value, so an already pending IRQ
+# is accepted even though the flag is now set. RTI needs no override, because it restores the
+# status byte before the next boundary.
+#
+# The jam vector reads follow the reference-corpus convention: the first jam sequence reads
+# $FFFF, $FFFE, and $FFFE, and every later jam sequence reads $FFFF only. Reset is not selected
+# here, because the reference reaches it through request_reset rather than through the poll, so a
+# caller runs cpu_execute_reset_cycles itself; the enum keeps its id for the reports.
+
+%include src/numeric
+%include src/cpu_status
+%include src/cpu_core
+%include src/cpu_addressing
+%include src/cpu_alu
+%include src/cpu_sequence
+%include src/cpu_opcode
+%include src/cpu_instruction
+
+enum cpu_sequence_kind {
+    instruction = 1,
+    irq = 2,
+    jam = 3,
+    nmi = 4,
+    reset = 5
+}
+
+# The sequence the last cpu_begin_next_sequence ran.
+var cpu_selected_sequence = 0;
+
+# The NMI latch: set by cpu_request_nmi, cleared when the sequence is accepted.
+var cpu_nmi_pending = 0;
+
+# The level-sensitive external IRQ input.
+var cpu_irq_line_asserted = 0;
+
+# The one-instruction IRQ poll mask left by CLI, SEI, and PLP. The reference stores an optional
+# boolean, so the port keeps the presence and the value in two flags.
+var cpu_irq_poll_mask_override_active = 0;
+var cpu_irq_poll_mask_override_value = 0;
+
+# Whether the first jam sequence has already issued its three vector reads.
+var cpu_jam_vector_reads_issued = 0;
+
+# Clears the control-loop state the way request_reset does: the jam flags, the NMI latch, and the
+# poll mask. The external IRQ line is left alone, because it is driven from outside the CPU.
+proc cpu_clear_interrupt_state {
+    cpu_jammed = 0;
+    cpu_jam_vector_reads_issued = 0;
+    cpu_nmi_pending = 0;
+    cpu_irq_poll_mask_override_active = 0;
+    cpu_irq_poll_mask_override_value = 0;
+}
+
+# Latches an external NMI rising edge until the CPU accepts it.
+proc cpu_request_nmi {
+    cpu_nmi_pending = 1;
+}
+
+# Sets the level-sensitive external IRQ input; any nonzero level asserts it.
+proc cpu_set_irq_line asserted {
+    if $asserted == 0 {
+        cpu_irq_line_asserted = 0;
+    } else {
+        cpu_irq_line_asserted = 1;
+    }
+}
+
+# The jam sequence. Three vector reads the first time the CPU jams, one read per jam afterwards.
+proc cpu_execute_jammed_cycles {
+    cpu_selected_sequence = cpu_sequence_kind.jam;
+
+    if cpu_jam_vector_reads_issued == 0 {
+        cpu_jam_vector_reads_issued = 1;
+        cpu_read_cycle cpu_vector_address.irq_brk_high;
+        cpu_read_cycle cpu_vector_address.irq_brk_low;
+        cpu_read_cycle cpu_vector_address.irq_brk_low;
+    } else {
+        cpu_read_cycle cpu_vector_address.irq_brk_high;
+    }
+}
+
+# The instruction-boundary effect of CLI, SEI, and PLP: the next poll uses the interrupt-disable
+# value the instruction started with, which is what delays or allows one IRQ.
+proc cpu_finish_instruction interrupt_disabled_before {
+    local delays_irq_poll = 0;
+
+    if cpu_opcode_mnemonic == cpu_mnemonic.op_cli {
+        delays_irq_poll = 1;
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sei {
+        delays_irq_poll = 1;
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_plp {
+        delays_irq_poll = 1;
+    }
+
+    if delays_irq_poll == 1 {
+        cpu_irq_poll_mask_override_active = 1;
+        cpu_irq_poll_mask_override_value = $interrupt_disabled_before;
+    }
+}
+
+# Runs the next sequence: jam, then a latched NMI, then an unmasked asserted IRQ, then one
+# instruction. Cycle accounting is left running, so a caller that wants per-step counts resets it
+# between steps.
+proc cpu_begin_next_sequence {
+    local interrupt_disabled_before = has_status_flag(cpu_status, cpu_flag.interrupt_disable);
+    local interrupt_disabled_for_poll = interrupt_disabled_before;
+
+    if cpu_irq_poll_mask_override_active == 1 {
+        interrupt_disabled_for_poll = cpu_irq_poll_mask_override_value;
+    }
+
+    if cpu_jammed == 1 {
+        cpu_execute_jammed_cycles;
+    } elif cpu_nmi_pending == 1 {
+        cpu_nmi_pending = 0;
+        cpu_irq_poll_mask_override_active = 0;
+        cpu_selected_sequence = cpu_sequence_kind.nmi;
+        cpu_execute_hardware_interrupt_cycles cpu_interrupt_source.nmi;
+    } elif cpu_irq_line_asserted == 1 and interrupt_disabled_for_poll == 0 {
+        cpu_irq_poll_mask_override_active = 0;
+        cpu_selected_sequence = cpu_sequence_kind.irq;
+        cpu_execute_hardware_interrupt_cycles cpu_interrupt_source.irq;
+    } else {
+        cpu_irq_poll_mask_override_active = 0;
+        cpu_selected_sequence = cpu_sequence_kind.instruction;
+        cpu_execute_instruction;
+        cpu_finish_instruction interrupt_disabled_before;
+    }
+}

@@ -42,6 +42,13 @@ import {
     project_cpu_instruction,
     type CpuInstructionSetup,
 } from "./support/cpu_instruction_projection.js";
+import {
+    CPU_CONTROL_FIXED_INPUT_COUNT,
+    CPU_CONTROL_FIXED_VALUE_COUNT,
+    CPU_CONTROL_SEQUENCE_KINDS,
+    project_cpu_control,
+    type CpuControlSetup,
+} from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
     CPU_SEQUENCE_FIXED_INPUT_COUNT,
@@ -634,6 +641,104 @@ for_each_vector("cpu_instruction", (vector) => {
         // A refused instruction spends only its opcode fetch and reads that byte.
         assert.equal(actual[0], 1, "a refused instruction spends one cycle");
         assert.deepEqual(actual.slice(CPU_INSTRUCTION_FIXED_VALUE_COUNT), [0, program_counter, opcode]);
+    }
+});
+
+for_each_vector("cpu_control", (vector) => {
+    assert.equal(vector.operation, 1, "Control vectors have a single operation.");
+    const [
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        nmi_pending,
+        irq_line,
+        step_count,
+        nmi_request_step,
+        irq_assert_step,
+        program_count,
+        setup_count,
+    ] = vector.input;
+    assert.ok(
+        program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            nmi_pending !== undefined &&
+            irq_line !== undefined &&
+            step_count !== undefined &&
+            nmi_request_step !== undefined &&
+            irq_assert_step !== undefined &&
+            program_count !== undefined &&
+            setup_count !== undefined,
+        "Control vectors supply all six registers, both interrupt inputs, and the step schedule.",
+    );
+    assert.ok(step_count >= 1, "A control record runs at least one step.");
+    assert.equal(vector.input.length, CPU_CONTROL_FIXED_INPUT_COUNT + program_count + setup_count * 2);
+
+    const program: number[] = [];
+
+    for (let index = 0; index < program_count; index += 1) {
+        const byte = vector.input[CPU_CONTROL_FIXED_INPUT_COUNT + index];
+        assert.ok(byte !== undefined, `Program byte ${index} is present.`);
+        program.push(byte);
+    }
+
+    const setup: CpuControlSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_CONTROL_FIXED_INPUT_COUNT + program_count + index * 2];
+        const value = vector.input[CPU_CONTROL_FIXED_INPUT_COUNT + program_count + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    const actual = project_cpu_control(
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        nmi_pending,
+        irq_line,
+        step_count,
+        nmi_request_step,
+        irq_assert_step,
+        program,
+        setup,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+
+    const cycles = actual[0] ?? 0;
+    const kinds = actual.slice(CPU_CONTROL_FIXED_VALUE_COUNT, CPU_CONTROL_FIXED_VALUE_COUNT + step_count);
+    assert.equal(actual.length, CPU_CONTROL_FIXED_VALUE_COUNT + step_count + cycles * 3, "one triple per cycle");
+    assert.equal(kinds.length, step_count, "one sequence kind per step");
+
+    for (const kind of kinds) {
+        assert.ok(
+            CPU_CONTROL_SEQUENCE_KINDS.some((entry) => entry.id === kind),
+            `Sequence kind ${kind} is a ported id.`,
+        );
+    }
+
+    // The control loop never selects reset, and a jam is sticky: once the CPU jams, every later
+    // sequence is another jam.
+    const reset_id = CPU_CONTROL_SEQUENCE_KINDS.find((entry) => entry.name === "reset")?.id ?? 0;
+    assert.ok(!kinds.includes(reset_id), "reset is reached through request_reset, not the poll");
+
+    const jam_id = CPU_CONTROL_SEQUENCE_KINDS.find((entry) => entry.name === "jam")?.id ?? 0;
+    const first_jam = kinds.indexOf(jam_id);
+
+    if (first_jam >= 0) {
+        assert.ok(
+            kinds.slice(first_jam).every((kind) => kind === jam_id),
+            "a jammed CPU keeps jamming",
+        );
     }
 });
 

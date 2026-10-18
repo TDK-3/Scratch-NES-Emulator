@@ -864,6 +864,9 @@ export const CPU_INTERRUPT_SOURCE = { NMI: 1, IRQ: 2 } as const;
 /** Mirror of the `cpu_sequence_error_code` enum in scratch/src/cpu_sequence.gs. */
 export const CPU_SEQUENCE_ERROR_CODE = { NONE: 0, NOT_RELATIVE_OPERAND: 1 } as const;
 
+/** Mirror of the `cpu_sequence_kind` enum in scratch/src/cpu_control.gs. */
+export const CPU_SEQUENCE_KIND = { INSTRUCTION: 1, IRQ: 2, JAM: 3, NMI: 4, RESET: 5 } as const;
+
 /** Mirror of the `cpu_instruction_error_code` enum in scratch/src/cpu_instruction.gs. */
 export const CPU_INSTRUCTION_ERROR_CODE = {
     NONE: 0,
@@ -984,6 +987,12 @@ export class GoboscriptCpuCore {
     instruction_error = 0;
     jammed = 0;
     store_value = 0;
+    selected_sequence = 0;
+    nmi_pending = 0;
+    irq_line_asserted = 0;
+    irq_poll_mask_override_active = 0;
+    irq_poll_mask_override_value = 0;
+    jam_vector_reads_issued = 0;
     alu_value = 0;
     alu_status = 0;
 
@@ -1376,6 +1385,125 @@ export class GoboscriptCpuCore {
 
             this.program_counter = this.resolved_address;
         }
+    }
+
+    /** Mirror of `cpu_clear_interrupt_state`. */
+    clear_interrupt_state(): void {
+        this.jammed = 0;
+        this.jam_vector_reads_issued = 0;
+        this.nmi_pending = 0;
+        this.irq_poll_mask_override_active = 0;
+        this.irq_poll_mask_override_value = 0;
+    }
+
+    /** Mirror of `cpu_request_nmi`. */
+    request_nmi(): void {
+        this.nmi_pending = 1;
+    }
+
+    /** Mirror of `cpu_set_irq_line asserted`. */
+    set_irq_line(asserted: number): void {
+        this.irq_line_asserted = asserted === 0 ? 0 : 1;
+    }
+
+    /** Mirror of `cpu_execute_jammed_cycles`. */
+    execute_jammed_cycles(): void {
+        this.selected_sequence = CPU_SEQUENCE_KIND.JAM;
+
+        if (this.jam_vector_reads_issued === 0) {
+            this.jam_vector_reads_issued = 1;
+            this.read_cycle(CPU_VECTOR_ADDRESS.IRQ_BRK_HIGH);
+            this.read_cycle(CPU_VECTOR_ADDRESS.IRQ_BRK_LOW);
+            this.read_cycle(CPU_VECTOR_ADDRESS.IRQ_BRK_LOW);
+            return;
+        }
+
+        this.read_cycle(CPU_VECTOR_ADDRESS.IRQ_BRK_HIGH);
+    }
+
+    /** Mirror of `cpu_finish_instruction interrupt_disabled_before`. */
+    finish_instruction(interrupt_disabled_before: number): void {
+        const mnemonic = this.decoder?.mnemonic ?? 0;
+        let delays_irq_poll = 0;
+
+        if (mnemonic === CPU_MNEMONIC.CLI) {
+            delays_irq_poll = 1;
+        } else if (mnemonic === CPU_MNEMONIC.SEI) {
+            delays_irq_poll = 1;
+        } else if (mnemonic === CPU_MNEMONIC.PLP) {
+            delays_irq_poll = 1;
+        }
+
+        if (delays_irq_poll === 1) {
+            this.irq_poll_mask_override_active = 1;
+            this.irq_poll_mask_override_value = interrupt_disabled_before;
+        }
+    }
+
+    /** Mirror of `cpu_begin_next_sequence`. */
+    begin_next_sequence(): void {
+        const interrupt_disabled_before = has_status_flag(this.status, CPU_FLAG.INTERRUPT_DISABLE);
+        let interrupt_disabled_for_poll = interrupt_disabled_before;
+
+        if (this.irq_poll_mask_override_active === 1) {
+            interrupt_disabled_for_poll = this.irq_poll_mask_override_value;
+        }
+
+        if (this.jammed === 1) {
+            this.execute_jammed_cycles();
+        } else if (this.nmi_pending === 1) {
+            this.nmi_pending = 0;
+            this.irq_poll_mask_override_active = 0;
+            this.selected_sequence = CPU_SEQUENCE_KIND.NMI;
+            this.execute_hardware_interrupt_cycles(CPU_INTERRUPT_SOURCE.NMI);
+        } else if (this.irq_line_asserted === 1 && interrupt_disabled_for_poll === 0) {
+            this.irq_poll_mask_override_active = 0;
+            this.selected_sequence = CPU_SEQUENCE_KIND.IRQ;
+            this.execute_hardware_interrupt_cycles(CPU_INTERRUPT_SOURCE.IRQ);
+        } else {
+            this.irq_poll_mask_override_active = 0;
+            this.selected_sequence = CPU_SEQUENCE_KIND.INSTRUCTION;
+            this.execute_instruction();
+            this.finish_instruction(interrupt_disabled_before);
+        }
+    }
+
+    /**
+     * Mirror of the suite-14 handler: runs `step_count` control-loop steps, requesting an NMI and
+     * asserting the IRQ line before the steps the record names, and returns the eight fixed
+     * values, one sequence kind per step, and the access trace.
+     */
+    run_control_steps(step_count: number, nmi_request_step: number, irq_assert_step: number): number[] {
+        const kinds: number[] = [];
+
+        this.reset_cycle_accounting();
+        this.reset_instruction_error();
+
+        for (let step = 1; step <= step_count; step += 1) {
+            if (step === nmi_request_step) {
+                this.request_nmi();
+            }
+
+            if (step === irq_assert_step) {
+                this.set_irq_line(1);
+            }
+
+            this.begin_next_sequence();
+            kinds.push(this.selected_sequence);
+        }
+
+        return [
+            this.cycles,
+            this.program_counter,
+            this.stack_pointer,
+            this.status,
+            this.a,
+            this.x,
+            this.y,
+            this.instruction_error,
+            ...kinds,
+            ...this.access_log,
+        ];
     }
 
     /** Mirror of `cpu_reset_instruction_error`. */

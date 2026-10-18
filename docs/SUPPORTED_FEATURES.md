@@ -91,9 +91,11 @@ controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven ma
 and NES 2.0 cartridge header parsing (mapper and submapper, mirroring, battery, trainer, ROM and RAM sizes,
 payload offsets, and six numeric error codes), CPU register state with one logged bus transaction per cycle,
 fetch and stack operations, all thirteen addressing modes including dummy reads and the JMP indirect pointer
-wrap, the reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, and a Stage-run self test
-that replays 350 shared vectors from
-`scratch/data/shared_port_vectors.txt`, counting the CPU instruction, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
+wrap, the reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, the generated opcode
+decode, one whole instruction for all 151 official opcodes, the control loop that selects jam, NMI, IRQ, or an
+instruction with the jam vector reads and the CLI/SEI/PLP IRQ poll mask, and a Stage-run self test
+that replays 488 shared vectors from
+`scratch/data/shared_port_vectors.txt`, counting the CPU state, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
 Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
 obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared
 exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic

@@ -262,6 +262,25 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported the CPU control loop and interrupt acceptance. `scratch/src/cpu_control.gs` picks the next
+      sequence the way `begin_next_sequence` does in `src/nes/cpu/cpu_2a03.ts`: a jammed CPU keeps reading its
+      vector, a latched NMI wins over IRQ, an asserted IRQ line is accepted unless the interrupt-disable flag
+      masks it, and otherwise one instruction runs. It ports the NMI latch (`cpu_request_nmi`), the
+      level-sensitive IRQ input (`cpu_set_irq_line`), the jam vector reads (`cpu_execute_jammed_cycles`:
+      `$FFFF`, `$FFFE`, `$FFFE` the first time the CPU jams and `$FFFF` on every later jam), the reset-shaped
+      state clear (`cpu_clear_interrupt_state`), and the one-instruction IRQ poll mask that CLI, SEI, and PLP
+      leave behind through `cpu_finish_instruction`, which is what delays an IRQ after a CLI and lets an
+      already pending IRQ through after an SEI. Suite 14 (`cpu_control`, 19 records) runs several steps per
+      record over a program, so it pins the policy rather than one instruction: jam over NMI and over IRQ, NMI
+      over IRQ, IRQ masked by the flag, the CLI and PLP delays, SEI and BRK at a boundary where the line is
+      asserted late, RTI needing no delay, the latch clearing after one acceptance, and the later jam reading
+      once. The sequence kinds come from the public `clock_cycle()` result, so no private reference state is
+      read, and the record inputs name the steps at which an NMI is requested or the IRQ line is asserted. The
+      mirror gained the same six procedures plus a replay test and a state test; mutations that dropped the
+      poll mask, made every jam read three times, let an NMI outrank a jam, or left the latch set were all
+      caught. The fixture is now fourteen suites and 488 records, and the generated list is 10,315 values. Not
+      ported: DMA stalls and the yield policy a frame loop needs, cartridge payload copying and mapper
+      dispatch, PPU, and APU; compile validation stays blocked by the missing toolchain.
 - [x] Completed instruction dispatch for every official opcode. `scratch/src/cpu_instruction.gs` now routes
       the operand instructions through `cpu_execute_regular_instruction`, which resolves the operand and spends
       the cycles its kind needs: a dummy read of the opcode byte for the implied and accumulator forms, nothing
@@ -361,13 +380,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,104 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 470 shared port-vector tests (469 records), 58 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,125 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 489 shared port-vector tests (488 records), 60 GoboScript port-algorithm
   tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 9,300 decimal values for 469 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 10,315 decimal values for 488 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -384,7 +403,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 350 records and 5,669 values).
+  (2026-10-15 figures; the fixture has since grown to 488 records and 10,315 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

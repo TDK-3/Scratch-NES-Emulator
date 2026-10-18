@@ -23,6 +23,7 @@
 %include src/cpu_sequence
 %include src/cpu_opcode
 %include src/cpu_instruction
+%include src/cpu_control
 %include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
@@ -40,7 +41,8 @@ enum port_suite {
     cpu_addressing = 10,
     cpu_sequence = 11,
     cpu_opcode = 12,
-    cpu_instruction = 13
+    cpu_instruction = 13,
+    cpu_control = 14
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -92,6 +94,7 @@ var port_self_test_done = 0;
 var port_self_test_summary = "";
 list port_actual_values;
 list port_bus_reads;
+list port_sequence_kinds;
 
 # Runs every shared vector and writes a human-readable summary for the Stage monitor.
 proc run_port_self_test {
@@ -160,6 +163,8 @@ proc run_next_port_vector {
         run_cpu_opcode_vector input_start;
     } elif suite_id == port_suite.cpu_instruction {
         run_cpu_instruction_vector input_start;
+    } elif suite_id == port_suite.cpu_control {
+        run_cpu_control_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -584,6 +589,95 @@ proc run_cpu_instruction_vector input_start {
     add cpu_x to port_actual_values;
     add cpu_y to port_actual_values;
     add cpu_instruction_error to port_actual_values;
+    log_count = length cpu_access_log;
+
+    repeat log_count {
+        add to_number(cpu_access_log[log_index]) to port_actual_values;
+        log_index++;
+    }
+}
+
+# Replays one control-loop record: write the setup pairs and the program bytes, seed the interrupt
+# inputs, run the steps the record asks for through the ported control loop, and report the eight
+# fixed values, one sequence kind per step, and one (kind, address, value) triple per bus access.
+proc run_cpu_control_vector input_start {
+    local program_counter = to_number(shared_port_vectors[$input_start]);
+    local step_count = to_number(shared_port_vectors[$input_start + 8]);
+    local nmi_request_step = to_number(shared_port_vectors[$input_start + 9]);
+    local irq_assert_step = to_number(shared_port_vectors[$input_start + 10]);
+    local program_count = to_number(shared_port_vectors[$input_start + 11]);
+    local setup_count = to_number(shared_port_vectors[$input_start + 12]);
+    local program_start = $input_start + 13;
+    local setup_start = program_start + program_count;
+    local program_index = 0;
+    local setup_index = 0;
+    local setup_address = 0;
+    local setup_value = 0;
+    local log_index = 1;
+    local log_count = 0;
+    local kind_index = 1;
+    local step = 1;
+    cpu_reset_registers;
+    cpu_bus_clear_ram;
+    cpu_bus_reset;
+    cpu_program_counter = program_counter;
+    cpu_a = to_number(shared_port_vectors[$input_start + 1]);
+    cpu_x = to_number(shared_port_vectors[$input_start + 2]);
+    cpu_y = to_number(shared_port_vectors[$input_start + 3]);
+    cpu_stack_pointer = to_number(shared_port_vectors[$input_start + 4]);
+    cpu_status = to_number(shared_port_vectors[$input_start + 5]);
+    cpu_clear_interrupt_state;
+    cpu_set_irq_line to_number(shared_port_vectors[$input_start + 7]);
+    delete port_sequence_kinds;
+
+    if to_number(shared_port_vectors[$input_start + 6]) == 1 {
+        cpu_request_nmi;
+    }
+
+    repeat setup_count {
+        setup_address = to_number(shared_port_vectors[setup_start + (setup_index * 2)]);
+        setup_value = to_number(shared_port_vectors[setup_start + 1 + (setup_index * 2)]);
+        cpu_bus_write setup_address, setup_value;
+        setup_index++;
+    }
+
+    repeat program_count {
+        setup_address = program_counter + program_index;
+        setup_value = to_number(shared_port_vectors[program_start + program_index]);
+        cpu_bus_write setup_address, setup_value;
+        program_index++;
+    }
+
+    cpu_reset_cycle_accounting;
+
+    repeat step_count {
+        if step == nmi_request_step {
+            cpu_request_nmi;
+        }
+
+        if step == irq_assert_step {
+            cpu_set_irq_line 1;
+        }
+
+        cpu_begin_next_sequence;
+        add cpu_selected_sequence to port_sequence_kinds;
+        step++;
+    }
+
+    add cpu_cycles to port_actual_values;
+    add cpu_program_counter to port_actual_values;
+    add cpu_stack_pointer to port_actual_values;
+    add cpu_status to port_actual_values;
+    add cpu_a to port_actual_values;
+    add cpu_x to port_actual_values;
+    add cpu_y to port_actual_values;
+    add cpu_instruction_error to port_actual_values;
+
+    repeat step_count {
+        add to_number(port_sequence_kinds[kind_index]) to port_actual_values;
+        kind_index++;
+    }
+
     log_count = length cpu_access_log;
 
     repeat log_count {

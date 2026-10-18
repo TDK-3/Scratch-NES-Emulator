@@ -51,8 +51,11 @@ host adapter and capability/permission validation.
    all 99 suite-13 vectors, covering every official mnemonic: the transfers, flag instructions, stack
    instructions, branches, jumps, BRK, JSR, RTI, RTS, NOP, the KIL jam flag, the loads and stores across all
    twelve memory addressing modes, the ALU group, and the shifts, rotates, and counters on the accumulator and
-   in memory. Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, the jam vector
-   reads and interrupt acceptance policy between instructions, and `finish_instruction`.
+   in memory. The control loop (`scratch/src/cpu_control.gs`) picks jam, NMI, IRQ, or one instruction and
+   replays all 19 suite-14 vectors, covering the NMI latch, the level-sensitive IRQ line, the jam vector reads,
+   the reset-shaped state clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind.
+   Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls, and the
+   yield policy a frame loop needs.
 5. **CPU bus and NROM.** Exercise RAM mirroring, PPU register dispatch, and a minimal mapper. Use a fake
    bus for CPU unit tests and real bus tests for integration. `scratch/src/cpu_bus.gs` ports RAM
    mirroring, the open-bus latch with driven masks, and the `$4016`/`$4017` window; PPU, APU, OAM DMA,
@@ -87,10 +90,11 @@ func is compiled separately into each target that includes it.
 | `src/rom_loader.gs` | iNES signature check, header load into the parser, header state text | ROM selection at runtime |
 | `src/cpu_core.gs` | register state, one logged bus access per cycle, fetch byte/word, push/pop byte/word, status push and restore | reset sequencing, interrupts, opcode fetch and decode |
 | `src/cpu_addressing.gs` | all thirteen addressing modes with dummy reads, page-cross detection, and the JMP indirect pointer wrap | operand read/write/modify helpers, unstable high-byte stores |
-| `src/cpu_sequence.gs` | reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences | opcode fetch and dispatch, interrupt acceptance policy, the remaining instruction sequences |
+| `src/cpu_sequence.gs` | reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences | opcode fetch and dispatch, and the sequence selection that picks one (`src/cpu_control.gs`) |
 | `src/cpu_opcode.gs` | the 76-mnemonic enum, the generated table load with its length and header check, and the six-field decode of one opcode byte | opcode dispatch, per-instruction execution, operand access by mnemonic |
-| `src/cpu_instruction.gs` | one whole instruction for all 151 official opcodes: fetch and decode, the KIL jam flag, BRK, JSR, RTI, RTS, the eight branches, both JMP forms, the four stack instructions, the transfers, the flag instructions, INX, DEX, INY, DEY, NOP, the loads and stores, the ALU group, the read-modify-write group, and five numeric refusal codes | unofficial opcodes other than KIL and the unstable high-byte stores, the jam vector reads, interrupt acceptance, `finish_instruction` |
-| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9, 10, 11, 12, 13 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
+| `src/cpu_instruction.gs` | one whole instruction for all 151 official opcodes: fetch and decode, the KIL jam flag, BRK, JSR, RTI, RTS, the eight branches, both JMP forms, the four stack instructions, the transfers, the flag instructions, INX, DEX, INY, DEY, NOP, the loads and stores, the ALU group, the read-modify-write group, and five numeric refusal codes | unofficial opcodes other than KIL and the unstable high-byte stores |
+| `src/cpu_control.gs` | sequence selection (jam, NMI, IRQ, instruction), the NMI latch, the level-sensitive IRQ line, the jam vector reads, the reset-shaped state clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind | DMA stalls and the yield policy a frame loop needs |
+| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9, 10, 11, 12, 13, 14 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
 
 Overflow for ADC/SBC is derived from signed arithmetic rather than bit masks, and every mask or shift is
 floor division and modulo, because GoboScript exposes no bitwise operators and its `%` and `//` are Scratch's
@@ -129,7 +133,7 @@ divergence in the ported arithmetic fails in Node even though the `.gs` sources 
 ## Shared vectors
 
 The parity contract is in [`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md), with canonical cases at
-`tests/fixtures/goboscript/shared_port_vectors.json`: thirteen suites and 469 records covering byte/word/status
+`tests/fixtures/goboscript/shared_port_vectors.json`: fourteen suites and 488 records covering byte/word/status
 and bit helpers, instruction results and cycles, CPU-bus mirroring, open bus, and driven-mask controller
 reads, MMC3 PRG banks and filtered IRQ edges, scheduled PPU vblank/NMI, pulse APU status, serial controller
 reads, per-instruction ALU value/status results, iNES/NES 2.0 header decode with its error codes, and

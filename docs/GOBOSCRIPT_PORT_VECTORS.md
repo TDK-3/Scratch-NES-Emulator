@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for thirteen suites and 469 records. TypeScript regression tests execute each vector
+inputs and expected outputs for fourteen suites and 488 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (9,300 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (10,315 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -58,6 +58,7 @@ suite and operation IDs present in the fixture.
 | 11 | CPU cycle sequence | Operation id is the sequence (1 reset, 2 BRK, 3 JSR, 4 RTI, 5 RTS, 6 IRQ, 7 NMI, 8 relative branch). Inputs: PC, A, X, Y, SP, status, taken flag, setup count, then `(address, value)` pairs. | Cycles, final PC, SP, status, A, X, Y, sequence error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.reset()` or `step()` behind a fresh decoder with no devices. |
 | 12 | Opcode decode | 1: input is one opcode byte. | Mnemonic id, addressing mode id, base cycles, operand access id, page-cross cycle flag, official flag, and decoder error code, read from `CPU_OPCODE_TABLE` in `src/nes/cpu/opcode_table.ts` and encoded by `tests/fixtures/goboscript/opcode_table.json`. |
 | 13 | Instruction execution | 1: inputs are PC, A, X, Y, SP, status, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.step()` behind a fresh decoder with no devices. |
+| 14 | Control loop | 1: inputs are PC, A, X, Y, SP, status, the pending-NMI flag, the IRQ line level, a step count, the step before which an NMI is requested, the step before which the IRQ line is asserted, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, one sequence kind per step (1 instruction, 2 IRQ, 3 jam, 4 NMI, 5 reset), then one `(kind, address, value)` triple per bus access. Recorded by driving `Cpu2A03.clock_cycle()` step by step behind a fresh decoder with no devices, so the kinds come from the public cycle result. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
 1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
@@ -132,8 +133,8 @@ stand in for that until the toolchain is available:
   Scratch's floored modulo and floor division instead of ECMAScript operators and no bitwise operators at all.
   `tests/goboscript-port-algorithms.test.ts` compares those mirrors exhaustively against the bitwise reference
   in `src/nes/cpu/registers.ts`, `src/nes/cpu/alu.ts`, and the instruction steps of `src/nes/cpu/cpu_2a03.ts`,
-  replays every numeric, ALU, bus, controller, cartridge, addressing, sequence, and opcode vector through
-  them, and
+  replays every numeric, ALU, bus, controller, cartridge, addressing, sequence, opcode, instruction, and
+  control-loop vector through them, and
   differentially checks the bus, controller, cartridge, and CPU mirrors against `NesCpuBus`,
   `NesControllerPorts`, and `Cpu2A03`. The
   CPU mirror is `GoboscriptCpuCore`, which reproduces the register state, one logged bus transaction per
@@ -141,7 +142,10 @@ stand in for that until the toolchain is available:
   BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch sequences; it is
   compared against `Cpu2A03.resolve_addressing_mode()` through
   `tests/support/cpu_addressing_projection.ts`, against `Cpu2A03.reset()` and `step()` through
-  `tests/support/cpu_sequence_projection.ts`, and its stack transactions are compared against the bus
+  `tests/support/cpu_sequence_projection.ts`, against `Cpu2A03.step()` for one whole instruction through
+  `tests/support/cpu_instruction_projection.ts`, against a step-by-step `Cpu2A03.clock_cycle()` drive for the
+  control loop through `tests/support/cpu_control_projection.ts`, and its stack transactions are compared
+  against the bus
   traces of real PHA, PLA, JSR, RTS, BRK, and RTI instructions. Both CPU projections share the bus recorder
   and absent-device factory in `tests/support/recording_cpu_bus.ts`. The cartridge mirror is
   `GoboscriptCartridgeParser`, which is compared against `parse_ines_rom` for every `flags6` byte, every
@@ -154,7 +158,10 @@ stand in for that until the toolchain is available:
   the sequences, and the status helpers, replays every suite 13 record, and executes all 151 official opcodes
   while refusing the 104 unofficial ones other than KIL; the source lint additionally
   compares the mnemonics named in the `.gs` dispatch chains with the mirror's `CPU_MNEMONIC` ids and with the
-  projection's ported set, so the three cannot drift.
+  projection's ported set, so the three cannot drift. The control loop is mirrored in
+  `GoboscriptCpuCore.begin_next_sequence()`, which composes the jam sequence, the NMI latch, the IRQ line,
+  the poll mask CLI, SEI, and PLP leave behind, and the instruction dispatcher, and replays every suite 14
+  record; the source lint also compares the ported `cpu_sequence_kind` enum with the projection's ids.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared
