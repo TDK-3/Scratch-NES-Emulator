@@ -7,7 +7,7 @@ import test from "node:test";
 import { CPU_INSTRUCTION_PORTED_MNEMONICS } from "./support/cpu_instruction_projection.js";
 import { CPU_CONTROL_SEQUENCE_KINDS } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, opcode_table_fixture } from "./support/cpu_opcode_projection.js";
-import { NROM_MEMORY_OPS } from "./support/mapper_projection.js";
+import { MMC3_OPS, NROM_MEMORY_OPS } from "./support/mapper_projection.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { shared_port_fixture } from "./support/shared_port_vectors.js";
 
@@ -417,7 +417,19 @@ const MIRROR_CONTRACT: readonly {
         source: "src/cartridge_loader.gs",
         declaration: "cartridge_load_board",
         mirror: null,
-        reason: "composes the parser, board validation, payload copy, and bus attachment",
+        reason: "composes the parser, mapper selection, and the two board attachments",
+    },
+    {
+        source: "src/cartridge_loader.gs",
+        declaration: "cartridge_attach_nrom",
+        mirror: null,
+        reason: "composes the board validation, payload copy, and bus attachment",
+    },
+    {
+        source: "src/cartridge_loader.gs",
+        declaration: "cartridge_attach_mmc3",
+        mirror: null,
+        reason: "composes the board validation, payload copy, and bus attachment",
     },
     { source: "src/mapper_000.gs", declaration: "nrom_reset_memory", mirror: "GoboscriptNromMapper.reset_memory" },
     { source: "src/mapper_000.gs", declaration: "nrom_copy_prg_rom", mirror: "GoboscriptNromMapper.copy_prg_rom" },
@@ -443,6 +455,25 @@ const MIRROR_CONTRACT: readonly {
         declaration: "run_cartridge_bus_vector",
         mirror: null,
         reason: "dispatcher",
+    },
+    { source: "src/vector_selftest.gs", declaration: "run_mmc3_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_reset", mirror: "GoboscriptMmc3Mapper.reset" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_validate", mirror: "GoboscriptMmc3Mapper.validate" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_reset_memory", mirror: "GoboscriptMmc3Mapper.reset_memory" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_copy_prg_rom", mirror: "GoboscriptMmc3Mapper.copy_prg_rom" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_copy_chr_rom", mirror: "GoboscriptMmc3Mapper.copy_chr_rom" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_copy_trainer", mirror: "GoboscriptMmc3Mapper.copy_trainer" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_load_payload", mirror: "GoboscriptMmc3Mapper.load_payload" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_prg_bank", mirror: "GoboscriptMmc3Mapper.prg_bank" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_chr_bank", mirror: "GoboscriptMmc3Mapper.chr_bank" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_write_register", mirror: "GoboscriptMmc3Mapper.write_register" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_read_cpu", mirror: "GoboscriptMmc3Mapper.read_cpu" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_write_cpu", mirror: "GoboscriptMmc3Mapper.write_cpu" },
+    { source: "src/mapper_004.gs", declaration: "mmc3_read_pattern", mirror: "GoboscriptMmc3Mapper.read_pattern" },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_write_pattern",
+        mirror: "GoboscriptMmc3Mapper.write_pattern",
     },
     {
         source: "src/cpu_control.gs",
@@ -500,6 +531,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_status.gs",
         "src/mapper.gs",
         "src/mapper_000.gs",
+        "src/mapper_004.gs",
         "src/numeric.gs",
         "src/rom_loader.gs",
         "src/shared_vectors.gs",
@@ -925,21 +957,23 @@ test("the ported board enums match the mirror's constants", () => {
     // in a compiled project. Comparing the enum values with the mirror's constants catches it: a
     // trainer offset of 1024 instead of $1000, or a window that starts at the wrong address, fails
     // here rather than silently mapping the wrong bytes.
-    const source = get_source("src/mapper_000.gs");
-
-    for (const [enumeration, constants] of [
-        ["nrom_limit", ported.NROM_LIMIT],
-        ["nrom_window", ported.NROM_WINDOW],
+    for (const [file, enumeration, constants] of [
+        ["src/mapper.gs", "mapper_error", ported.MAPPER_ERROR],
+        ["src/mapper_000.gs", "nrom_limit", ported.NROM_LIMIT],
+        ["src/mapper_000.gs", "nrom_window", ported.NROM_WINDOW],
+        ["src/mapper_004.gs", "mmc3_limit", ported.MMC3_LIMIT],
+        ["src/mapper_004.gs", "mmc3_register", ported.MMC3_REGISTER],
+        ["src/mapper_004.gs", "mmc3_op", ported.MMC3_OP],
     ] as const) {
-        const variants = get_enum(source, enumeration);
+        const variants = get_enum(get_source(file), enumeration);
         const expected = Object.entries(constants);
         assert.equal(variants.size, expected.length, `${enumeration} has an entry the mirror lacks`);
 
         for (const [name, value] of variants) {
             const mirror_name = name.toUpperCase();
             const mirror_value = (constants as unknown as Record<string, number>)[mirror_name];
-            assert.ok(mirror_value !== undefined, `${enumeration}.${name} is mirrored as ${mirror_name}`);
-            assert.equal(value, mirror_value, `${enumeration}.${name} is ${mirror_value}`);
+            assert.ok(mirror_value !== undefined, `${file} ${enumeration}.${name} is mirrored as ${mirror_name}`);
+            assert.equal(value, mirror_value, `${file} ${enumeration}.${name} is ${mirror_value}`);
         }
     }
 });
@@ -978,6 +1012,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "cpu_instruction",
             "cpu_opcode",
             "cpu_sequence",
+            "mmc3",
             "nrom",
             "nrom_memory",
             "numeric",
@@ -1086,6 +1121,17 @@ test("the self-test operation ids match the shared vector fixture operations", (
     assert.deepEqual([...fixture_operations("nrom")], [1], "board validation has one operation");
     assert.deepEqual([...fixture_operations("nrom_memory")], [1], "board memory has one operation");
     assert.deepEqual([...fixture_operations("cartridge_bus")], [1], "the cartridge bus has one operation");
+    assert.deepEqual([...fixture_operations("mmc3")], [1], "an MMC3 board has one operation");
+
+    // The MMC3 operation kinds the self-test dispatches are the projection's ids.
+    const mmc3_ops = get_enum(get_source("src/mapper_004.gs"), "mmc3_op");
+    assert.deepEqual(
+        [...mmc3_ops.entries()]
+            .map(([name, id]) => ({ id, name: name.replace(/_/g, "-") }))
+            .sort((first, second) => first.id - second.id),
+        [...MMC3_OPS],
+        "the ported MMC3 operation ids are the projection's ids",
+    );
 
     // The memory operation kinds the self-test dispatches are the projection's ids.
     const memory_ops = get_enum(get_source("src/mapper_000.gs"), "nrom_memory_op");

@@ -262,6 +262,42 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported the MMC3 board's registers, banking, and windows, and attached it to the bus.
+      `scratch/src/mapper_004.gs` mirrors `Mmc3Mapper` for everything but its IRQ: the creation checks in the
+      reference's order (board family, PRG ROM in whole 8 KiB banks of at least 32 KiB, at most 8 KiB of summed
+      PRG RAM and NVRAM, a trainer that needs PRG RAM, and one CHR region of at least 8 KiB in whole 1 KiB
+      banks that is not CHR ROM beside declared CHR RAM), the eight banking registers with the masks bank data
+      applies to each of them (registers 0 and 1 forced even, 6 kept to six bits, 7 to seven), PRG and CHR bank
+      selection in both modes including the two PRG slots that always hold the last and second-to-last banks,
+      the PRG RAM enable and write-protect bits, the mirroring register with its four-screen override, the
+      payload and trainer copies, and the CPU and pattern windows. Scratch has no bitwise operators, so the
+      register an address selects is `bitwise_and(address, $E001)` and every mask is a `bitwise_and` or a
+      `bit_at`, and the mirroring ids are the cartridge parser's (1 horizontal, 2 vertical, 3 four-screen),
+      which is the opposite of the shorthand the register's low bit suggests: a zero low bit selects vertical.
+      The IRQ latch, counter, reload, enable, and acknowledge registers, the PPU A12 filter with its ten-dot low
+      window, and both boards' NVRAM snapshots are not ported, so an attached MMC3 board never raises a mapper
+      IRQ. `cartridge_loader.gs` now routes the mapper selection and attaches either board, and `cpu_bus.gs`
+      dispatches its cartridge window to whichever one is attached, so the embedded MMC3 image drives the bus.
+      Suite 18 (`mmc3`, 21 records) prepares payload bytes and then runs CPU and pattern operations plus a
+      mirroring report: bank select and bank data placing both swappable PRG banks, PRG mode 1 swapping the
+      outer slots, CHR mode 0 pairing a register across two slots and mode 1 swapping the groups, a paired
+      register forced even, CHR and PRG bank wrap-around, PRG RAM writes at both ends of the window, the
+      protect register enabling, protecting, and disabling it, the mirroring register switching modes, a
+      four-screen header ignoring it, a CHR RAM board banking its writable pattern memory, a battery-backed
+      board, and every rejection code. The mapped CHR RAM size is not reported, because a bank register decides
+      which part of CHR RAM a pattern address reaches, so the aliasing probe suite 16 uses would measure a bank
+      switch instead of a wrap. The mirror replays all 21 records, is compared with a reference `Mmc3Mapper`
+      over a synthetic trainer image for the payload copy, the registers, and both modes, and is attached to
+      the mirrored bus and compared with a production `NesCpuBus` across seventeen addresses before banking,
+      after ten register writes, after RAM writes, in PRG mode 1, and with PRG RAM disabled. The masks on
+      registers 6 and 7 are invisible at practical bank counts, so one test builds a 128-bank, one-megabyte
+      board where an unmasked `$FF` would select bank 127 and the masked value selects bank 63. Mutations that
+      stopped PRG mode 1 from swapping the outer slots, dropped the even mask on a paired CHR register, left
+      CHR mode 1 in the mode 0 order, inverted the mirroring low bit, ignored write protection, answered reads
+      from a disabled PRG RAM window, or forgot to wrap a bank index were all caught, as were two that stopped
+      the bus from reaching an attached MMC3 board. The fixture is now eighteen suites and 562 records, and the
+      generated list is 13,471 values. Not ported: the MMC3 IRQ and A12 filter, the NVRAM snapshots, PPU, and
+      APU; compile validation stays blocked by the missing toolchain.
 - [x] Wired the NROM board into the ported CPU bus and added the cartridge boot path.
       `scratch/src/cpu_bus.gs` dispatches its `$4020-$FFFF` window to an attached board: a mapped address
       drives its byte through the same driven-mask merge the RAM window uses, an unmapped one returns the
@@ -449,13 +485,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,188 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 542 shared port-vector tests (541 records), 69 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,214 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 563 shared port-vector tests (562 records), 74 GoboScript port-algorithm
   tests, 17 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 12,357 decimal values for 541 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 13,471 decimal values for 562 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -472,7 +508,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 541 records and 12,357 values).
+  (2026-10-15 figures; the fixture has since grown to 562 records and 13,471 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

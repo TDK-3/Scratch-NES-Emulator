@@ -60,8 +60,10 @@ loading, persistence, and known-limitations statement.
   the NROM board checks with the memory sizes an accepted board would map, the NROM memory windows with
   the payload copy, the trainer at PRG RAM offset `$1000`, PRG ROM mirroring, and the writable PRG RAM and CHR
   RAM regions, and a boot path that validates a board, copies its payload, and attaches it to the bus. The
-  embedded default image is MMC3, so that path reports a wrong board family until mapper 4 is ported.
-  Its Stage runs a self test over the 541 generated parity vectors and reports a summary; the CPU state,
+  embedded default image is MMC3, and the loader attaches it: its creation checks, banking registers, both
+  bank modes, the PRG RAM protect bits, the mirroring control, and the CPU and pattern windows are ported,
+  while its IRQ registers, PPU A12 filter, and NVRAM snapshots are not.
+  Its Stage runs a self test over the 562 generated parity vectors and reports a summary; the CPU state,
   mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
   been compiled, because the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
@@ -109,7 +111,7 @@ sample-rate/channel output, register/frame-sequencer/mixer behavior, PPU registe
 output, pinned MIT SquarePlayer and NoisePlayer controller-to-APU smoke tests, browser keyboard mapping,
 Web Audio filtering and sink scheduling, canvas conversion/scaling and frame scheduling,
 optional instruction-level traces, byte-exact build-time Scratch ROM asset generation with source-overwrite
-protection, a 541-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
+protection, a 562-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
 APU, controller, ALU, cartridge-header, CPU addressing, CPU cycle-sequence, opcode-decode, instruction,
 control-loop, NROM board-validation, NROM memory-window, and cartridge-bus behavior, and 1,026 selected
 MIT-licensed NES

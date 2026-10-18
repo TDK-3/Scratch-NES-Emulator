@@ -27,6 +27,7 @@
 %include src/cartridge
 %include src/mapper
 %include src/mapper_000
+%include src/mapper_004
 %include src/cartridge_loader
 %include src/rom_loader
 %include src/shared_vectors
@@ -48,7 +49,8 @@ enum port_suite {
     cpu_control = 14,
     nrom = 15,
     nrom_memory = 16,
-    cartridge_bus = 17
+    cartridge_bus = 17,
+    mmc3 = 18
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -179,6 +181,8 @@ proc run_next_port_vector {
         run_nrom_memory_vector input_start;
     } elif suite_id == port_suite.cartridge_bus {
         run_cartridge_bus_vector input_start;
+    } elif suite_id == port_suite.mmc3 {
+        run_mmc3_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -872,6 +876,98 @@ proc run_cartridge_bus_vector input_start {
         }
 
         add cpu_bus_read(8192) to port_actual_values;
+        index++;
+    }
+}
+
+# Suite 18: one MMC3 board. Inputs are the declared image length, the sixteen header bytes, the PRG
+# ROM and CHR ROM prepare counts, the operation count, then the prepared (index, value) pairs for each
+# ROM region and the (kind, address, value) operations, where kind 1 reads the CPU window, 2 writes
+# it, 3 reads the pattern table, 4 writes it, and 5 reports the mirroring mode the board would give
+# the PPU. Expected values are ok, the board error code, the mapped PRG RAM bytes, then three values
+# per operation: whether the board took it, the byte a read returned, and the bits a CPU read drove.
+# The mapped CHR RAM size is not reported, because a bank register decides which part of CHR RAM a
+# pattern address reaches, so no aliasing probe can measure it; the records that wrap a CHR bank pin
+# the bank count instead.
+proc run_mmc3_vector input_start {
+    local prg_count = to_number(shared_port_vectors[$input_start + 17]);
+    local chr_count = to_number(shared_port_vectors[$input_start + 18]);
+    local op_count = to_number(shared_port_vectors[$input_start + 19]);
+    local prg_start = $input_start + 20;
+    local chr_start = prg_start + (prg_count * 2);
+    local op_start = chr_start + (chr_count * 2);
+    local index = 0;
+    local prepare_index = 0;
+    local op_kind = 0;
+    local op_address = 0;
+    local op_value = 0;
+    cartridge_image_bytes = to_number(shared_port_vectors[$input_start]);
+
+    repeat cartridge_limit.header_bytes {
+        cartridge_header[index + 1] = to_number(shared_port_vectors[$input_start + index + 1]);
+        index++;
+    }
+
+    cartridge_parse_header;
+    mmc3_validate;
+    add mmc3_ok to port_actual_values;
+    add mmc3_error_code to port_actual_values;
+    add mmc3_prg_ram_bytes to port_actual_values;
+    mmc3_reset_memory;
+    index = 0;
+
+    repeat prg_count {
+        prepare_index = to_number(shared_port_vectors[prg_start + (index * 2)]) + 1;
+        mmc3_prg_rom[prepare_index] = to_number(shared_port_vectors[prg_start + 1 + (index * 2)]);
+        index++;
+    }
+
+    index = 0;
+
+    repeat chr_count {
+        prepare_index = to_number(shared_port_vectors[chr_start + (index * 2)]) + 1;
+        mmc3_chr_rom[prepare_index] = to_number(shared_port_vectors[chr_start + 1 + (index * 2)]);
+        index++;
+    }
+
+    index = 0;
+
+    repeat op_count {
+        op_kind = to_number(shared_port_vectors[op_start + (index * 3)]);
+        op_address = to_number(shared_port_vectors[op_start + 1 + (index * 3)]);
+        op_value = to_number(shared_port_vectors[op_start + 2 + (index * 3)]);
+
+        if op_kind == mmc3_op.cpu_read {
+            mmc3_read_cpu op_address;
+            add mmc3_cpu_mapped to port_actual_values;
+            add mmc3_cpu_value to port_actual_values;
+            add mmc3_cpu_driven_mask to port_actual_values;
+        } elif op_kind == mmc3_op.cpu_write {
+            mmc3_write_cpu op_address, op_value;
+            add mmc3_cpu_write_accepted to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.pattern_read {
+            mmc3_read_pattern op_address;
+            add 1 to port_actual_values;
+            add mmc3_pattern_value to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.pattern_write {
+            mmc3_write_pattern op_address, op_value;
+            add mmc3_pattern_write_accepted to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.report_mirroring {
+            add 1 to port_actual_values;
+            add mmc3_mirroring to port_actual_values;
+            add 0 to port_actual_values;
+        } else {
+            # No record carries another kind; report an operation the board did not take.
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        }
+
         index++;
     }
 }

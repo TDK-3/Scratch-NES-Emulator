@@ -26,8 +26,8 @@ What the ported modules cover:
 * controller.gs: both serial controller ports with strobe, latch on the falling edge, and the
   trailing 1 bits after the eighth read.
 * cpu_bus.gs: 2 KiB RAM with $0000-$1FFF mirroring, the open-bus latch with driven masks, the
-  $4016/$4017 controller window, and the $4020-$FFFF cartridge window, which an attached NROM
-  board drives and which stays undriven until one validates. PPU, APU, and $4014 OAM DMA are not
+  $4016/$4017 controller window, and the $4020-$FFFF cartridge window, which an attached NROM or
+  MMC3 board drives and which stays undriven until one validates. PPU, APU, and $4014 OAM DMA are not
   ported yet, so reads of those addresses return the retained latch and writes are dropped.
 * cartridge.gs: iNES 1.0 and NES 2.0 header parsing into the cartridge_* result globals,
   covering the signature, version bits, mapper and submapper, mirroring, battery, trainer
@@ -112,21 +112,35 @@ What the ported modules cover:
   PRG RAM at offset $1000 out of the generated cartridge list, and the CPU and pattern windows
   report a mapped flag, a byte, and the driven bits instead of returning a null read: $8000-$FFFF
   is PRG ROM modulo its size, so a 16 KiB board mirrors twice; $6000-$7FFF is PRG RAM modulo the
-  mapped size when the board has any; and a write only lands in RAM. The NVRAM snapshots and the
-  hookup to cpu_bus.gs, whose cartridge window still behaves as an absent device, are not ported
-  yet.
+  mapped size when the board has any; and a write only lands in RAM. The NVRAM snapshots are not
+  ported yet.
+* mapper_004.gs: the MMC3 board, mirroring Mmc3Mapper for everything but its IRQ. It runs the
+  creation checks in the reference's order (PRG ROM in whole 8 KiB banks of at least 32 KiB, at
+  most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG RAM, and one CHR region of at
+  least 8 KiB in whole 1 KiB banks that is not CHR ROM beside declared CHR RAM), holds the eight
+  banking registers with the masks bank data applies to each of them (registers 0 and 1 forced
+  even, 6 kept to six bits, 7 to seven), selects PRG and CHR banks in both modes including the
+  two PRG slots that always hold the last and second-to-last banks, honors the PRG RAM enable and
+  write-protect bits and the mirroring register with its four-screen override, copies the payload
+  and the trainer, and answers the CPU and pattern windows. Scratch has no bitwise operators, so
+  the register an address selects is bitwise_and(address, $E001) and every mask is a bitwise_and
+  or a bit_at. The mirroring ids are the cartridge parser's, 1 horizontal, 2 vertical, and 3
+  four-screen, which is the opposite of the shorthand the register's low bit suggests: a zero low
+  bit selects vertical. The IRQ latch, counter, reload, enable, and acknowledge registers, the PPU
+  A12 filter with its ten-dot low window, and the NVRAM snapshots are not ported, so an attached
+  MMC3 board never raises a mapper IRQ.
 * cartridge_loader.gs: the boot path. It checks the embedded image's signature, copies and parses
-  its header, validates the board, copies the payload, and attaches the board to the CPU bus, and
-  it records one summary line so a report can say why the cartridge window is undriven. The
-  embedded default image is an MMC3 cartridge, so this reports board error 3, a wrong board
-  family, and leaves the window undriven until mapper 4 is ported.
+  its header, routes the mapper selection, then validates, copies, and attaches whichever ported
+  board that selection names, and it records one summary line so a report can say why the
+  cartridge window is undriven. The embedded default image is an MMC3 cartridge, so it attaches
+  through the MMC3 path.
 * vector_selftest.gs: walks the generated list in data/shared_port_vectors.txt and compares
   each record with the value recorded from the TypeScript reference. Suites 1 (numeric), 3
   (bus), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing), 11 (CPU
   cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), 15 (NROM
-  board validation), 16 (NROM memory windows), and 17 (cartridge bus) are replayed; records for
-  the CPU state, MMC3, PPU, and APU suites are counted as skipped rather than treated as
-  passing. Its summary reports the ROM header state and the board state the loader recorded.
+  board validation), 16 (NROM memory windows), 17 (cartridge bus), and 18 (MMC3) are replayed;
+  records for the CPU state, mapper, PPU, and APU suites are counted as skipped rather than
+  treated as passing. Its summary reports the ROM header state and the board state the loader recorded.
 
 The green flag runs that self test on the Stage and broadcasts "port self test done"; the
 display sprite reports the summary. data/test_rom_bytes.txt, data/shared_port_vectors.txt, and
@@ -136,6 +150,5 @@ Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
 Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-and the yield policy a frame loop needs; the NVRAM snapshots; PPU rendering; APU channels; MMC3
-mapper banking and IRQ, which is why the embedded MMC3 image cannot be attached; and any frame
-loop or rendering path.
+and the yield policy a frame loop needs; the MMC3 IRQ registers and its PPU A12 filter; the NVRAM
+snapshots of both boards; PPU rendering; APU channels; and any frame loop or rendering path.

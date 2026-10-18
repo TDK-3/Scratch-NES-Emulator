@@ -13,6 +13,7 @@
 %include src/controller
 %include src/mapper
 %include src/mapper_000
+%include src/mapper_004
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
@@ -75,6 +76,12 @@ func cpu_bus_read(address) {
         if nrom_cpu_mapped == 1 {
             return cpu_apply_driven_value(nrom_cpu_value, nrom_cpu_driven_mask);
         }
+    } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+        mmc3_read_cpu numeric_address;
+
+        if mmc3_cpu_mapped == 1 {
+            return cpu_apply_driven_value(mmc3_cpu_value, mmc3_cpu_driven_mask);
+        }
     }
 
     return cpu_open_bus;
@@ -109,6 +116,8 @@ proc cpu_bus_write address, value {
 
     if cpu_bus_cartridge_kind == mapper_kind.nrom {
         nrom_write_cpu numeric_address, numeric_value;
+    } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+        mmc3_write_cpu numeric_address, numeric_value;
     }
 
     # PPU, APU, and $4014 OAM DMA writes are not ported yet.

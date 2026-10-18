@@ -46,6 +46,21 @@ func mapper_sum_memory_sizes(first, second) {
     return $first + $second;
 }
 
+# The creation-error codes every board reports. They match the reference's creation-error strings
+# one for one, so a board that rejects an image says why in the same terms whichever board it is:
+# the selection half is shared with mapper_selection_error, and the board half is the size, trainer,
+# and CHR memory checks each board performs.
+enum mapper_error {
+    none = 0,
+    unsupported_mapper = 1,
+    unsupported_submapper = 2,
+    wrong_mapper_family = 3,
+    unsupported_prg_rom_size = 4,
+    unsupported_prg_ram_size = 5,
+    unsupported_trainer = 6,
+    unsupported_chr_memory = 7
+}
+
 # Routes one exact mapper and submapper pair, or reports which half of it is unsupported.
 proc mapper_resolve mapper_id, submapper {
     mapper_selection_mapper_id = $mapper_id;

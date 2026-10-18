@@ -1,8 +1,9 @@
 import { parse_ines_rom } from "../../src/nes/cartridge/ines.js";
 import { resolve_mapper } from "../../src/nes/cartridge/mapper.js";
 import { NromMapper } from "../../src/nes/cartridge/mapper_000.js";
+import { Mmc3Mapper } from "../../src/nes/cartridge/mapper_004.js";
 import { NesCpuBus } from "../../src/nes/cpu/nes_cpu_bus.js";
-import { make_cartridge_image } from "./cartridge_projection.js";
+import { CARTRIDGE_MIRRORING_IDS, make_cartridge_image } from "./cartridge_projection.js";
 import { make_absent_bus_devices } from "./recording_cpu_bus.js";
 
 /**
@@ -31,7 +32,7 @@ export const MAPPER_SELECTION_ERROR_IDS = {
  * Board validation error ids in `nrom_error`. The first two are the selection codes, because the
  * ported validation reports a failed selection unchanged.
  */
-export const NROM_ERROR_IDS = {
+export const MAPPER_ERROR_IDS = {
     "unsupported-mapper": 1,
     "unsupported-submapper": 2,
     "wrong-mapper-family": 3,
@@ -57,7 +58,18 @@ const PROBE_ALIAS = 0x3c;
  * Measures the mapped PRG RAM by finding the offset that wraps onto `$6000`. The full 8 KiB case
  * has no in-window alias, because `$8000` is already PRG ROM, so no alias means the whole window.
  */
-function probe_prg_ram_bytes(mapper: NromMapper): number {
+/**
+ * The public memory ports both boards expose, which is all the size probes need: neither mapper
+ * publishes its mapped sizes, so a probe measures them by aliasing through these methods.
+ */
+interface MemoryProbePort {
+    read_cpu(address: number, open_bus: number): { readonly value: number; readonly driven_mask: number } | null;
+    write_cpu(address: number, value: number): void;
+    read_pattern(address: number): number;
+    write_pattern(address: number, value: number): void;
+}
+
+function probe_prg_ram_bytes(mapper: MemoryProbePort): number {
     if (mapper.read_cpu(CPU_PRG_RAM_START, 0) === null) {
         return 0;
     }
@@ -80,7 +92,7 @@ function probe_prg_ram_bytes(mapper: NromMapper): number {
  * Measures the mapped CHR RAM the same way, reporting zero when pattern writes do not stick. A
  * pattern address of `$2000` is outside the port, so a full 8 KiB CHR RAM has no in-window alias.
  */
-function probe_chr_ram_bytes(mapper: NromMapper): number {
+function probe_chr_ram_bytes(mapper: MemoryProbePort): number {
     const rom_byte = mapper.read_pattern(0);
 
     if (rom_byte === PROBE_MARK || rom_byte === PROBE_ALIAS) {
@@ -119,7 +131,7 @@ export function project_mapper_creation(image_bytes: number, header: readonly nu
     const created = NromMapper.create(rom);
 
     if (!created.ok) {
-        return [0, NROM_ERROR_IDS[created.error.code], 0, 0, 0, selection_kind, selection_error];
+        return [0, MAPPER_ERROR_IDS[created.error.code], 0, 0, 0, selection_kind, selection_error];
     }
 
     const mapper = created.value;
@@ -230,7 +242,7 @@ function build_board(
     const created = NromMapper.create(parsed.value);
 
     if (!created.ok) {
-        return { mapper: null, error_code: NROM_ERROR_IDS[created.error.code] };
+        return { mapper: null, error_code: MAPPER_ERROR_IDS[created.error.code] };
     }
 
     return { mapper: created.value, error_code: 0 };
@@ -373,6 +385,162 @@ export function project_cartridge_bus(
         }
 
         values.push(bus.read_cpu(OPEN_BUS_PROBE_ADDRESS));
+    }
+
+    return values;
+}
+
+/** Values reported before the per-operation results: ok, board error code, and mapped PRG RAM bytes. */
+export const MMC3_FIXED_VALUE_COUNT = 3;
+
+/** Number of fixed inputs before a record's payload pairs and operations, as in suite 16. */
+export const MMC3_FIXED_INPUT_COUNT = 20;
+
+/** Values reported per operation, as in suite 16: taken, the byte a read returned, driven bits. */
+export const MMC3_VALUES_PER_OP = 3;
+
+/**
+ * Suite 18 ("mmc3") runs an MMC3 board the way suite 16 runs an NROM one, with one extra operation:
+ * reporting the mirroring mode the board would hand the PPU. The four IRQ registers, the PPU A12
+ * filter, and the NVRAM snapshots are not ported yet, so a record never writes $C000, $C001, $E000,
+ * or $E001 and never observes an IRQ.
+ */
+
+/** Operation kinds a suite-18 record can run, in the order the ported handler dispatches them. */
+export const MMC3_OPS: readonly { readonly id: number; readonly name: string }[] = [
+    { id: 1, name: "cpu-read" },
+    { id: 2, name: "cpu-write" },
+    { id: 3, name: "pattern-read" },
+    { id: 4, name: "pattern-write" },
+    { id: 5, name: "report-mirroring" },
+];
+
+export const MMC3_CPU_READ = 1;
+export const MMC3_CPU_WRITE = 2;
+export const MMC3_PATTERN_READ = 3;
+export const MMC3_PATTERN_WRITE = 4;
+export const MMC3_REPORT_MIRRORING = 5;
+
+/** Builds the MMC3 board a record describes, or reports why the reference rejected it. */
+function build_mmc3_board(
+    image_bytes: number,
+    header: readonly number[],
+    prg_prepare: readonly NromMemoryPrepare[],
+    chr_prepare: readonly NromMemoryPrepare[],
+): { readonly mapper: Mmc3Mapper | null; readonly error_code: number } {
+    const plain = parse_ines_rom(make_cartridge_image(image_bytes, header));
+
+    if (!plain.ok) {
+        throw new RangeError(`An MMC3 record needs a header that parses; this one reported ${plain.error.code}.`);
+    }
+
+    const prg_rom_offset = 16 + (plain.value.trainer === null ? 0 : 512);
+    const chr_rom_offset = prg_rom_offset + plain.value.prg_rom.byteLength;
+    const image = make_cartridge_image(image_bytes, header);
+
+    for (const entry of prg_prepare) {
+        if (entry.index < 0 || entry.index >= plain.value.prg_rom.byteLength) {
+            throw new RangeError(`PRG ROM prepare index ${entry.index} is outside the declared payload.`);
+        }
+
+        image[prg_rom_offset + entry.index] = entry.value;
+    }
+
+    for (const entry of chr_prepare) {
+        if (entry.index < 0 || entry.index >= plain.value.chr_rom.byteLength) {
+            throw new RangeError(`CHR ROM prepare index ${entry.index} is outside the declared payload.`);
+        }
+
+        image[chr_rom_offset + entry.index] = entry.value;
+    }
+
+    const parsed = parse_ines_rom(image);
+
+    if (!parsed.ok) {
+        throw new RangeError(`The prepared image stopped parsing as ${parsed.error.code}.`);
+    }
+
+    const created = Mmc3Mapper.create(parsed.value);
+
+    if (!created.ok) {
+        return { mapper: null, error_code: MAPPER_ERROR_IDS[created.error.code] };
+    }
+
+    return { mapper: created.value, error_code: 0 };
+}
+
+/**
+ * Runs one suite-18 record. A CPU write reports whether it landed in PRG RAM; a write to $8000 or
+ * above is a bank register write, which reports zero there and shows up in the reads that follow it.
+ */
+export function project_mmc3_memory(
+    image_bytes: number,
+    header: readonly number[],
+    prg_prepare: readonly NromMemoryPrepare[],
+    chr_prepare: readonly NromMemoryPrepare[],
+    ops: readonly NromMemoryOp[],
+): number[] {
+    const built = build_mmc3_board(image_bytes, header, prg_prepare, chr_prepare);
+
+    if (built.mapper === null) {
+        if (ops.length !== 0) {
+            throw new RangeError("A rejected MMC3 board runs no memory operations.");
+        }
+
+        return [0, built.error_code, 0];
+    }
+
+    const mapper = built.mapper;
+    const probed = build_mmc3_board(image_bytes, header, prg_prepare, chr_prepare);
+    const probe_mapper = probed.mapper;
+
+    if (probe_mapper === null) {
+        throw new RangeError("The second MMC3 board was rejected after the first was accepted.");
+    }
+
+    // Only the PRG RAM size is probed. The CHR RAM aliasing probe suite 16 uses is meaningless here,
+    // because a bank register decides which part of CHR RAM a pattern address reaches, so an alias it
+    // finds is a bank switch rather than a wrap. The CHR bank count is observable instead, and the
+    // records that wrap a CHR bank pin it.
+    const values: number[] = [1, 0, probe_prg_ram_bytes(probe_mapper)];
+
+    for (const op of ops) {
+        if (op.value < 0 || op.value > 0xff) {
+            throw new RangeError(`Operation value ${op.value} is outside the byte range the reference accepts.`);
+        }
+
+        if (op.kind === MMC3_CPU_READ) {
+            const read = mapper.read_cpu(op.address, 0);
+            values.push(read === null ? 0 : 1, read?.value ?? 0, read?.driven_mask ?? 0);
+        } else if (op.kind === MMC3_CPU_WRITE) {
+            if (op.address >= 0x6000 && op.address < 0x8000) {
+                const before = mapper.read_cpu(op.address, 0);
+
+                if (before !== null && before.value === op.value) {
+                    throw new RangeError("A PRG RAM write record has to change the byte, or it is not observable.");
+                }
+
+                mapper.write_cpu(op.address, op.value);
+                const after = mapper.read_cpu(op.address, 0);
+                values.push(after !== null && after.value === op.value ? 1 : 0, 0, 0);
+            } else {
+                mapper.write_cpu(op.address, op.value);
+                values.push(0, 0, 0);
+            }
+        } else if (op.kind === MMC3_PATTERN_READ) {
+            values.push(1, mapper.read_pattern(op.address), 0);
+        } else if (op.kind === MMC3_PATTERN_WRITE) {
+            if (mapper.read_pattern(op.address) === op.value) {
+                throw new RangeError("A pattern write record has to change the byte it writes.");
+            }
+
+            mapper.write_pattern(op.address, op.value);
+            values.push(mapper.read_pattern(op.address) === op.value ? 1 : 0, 0, 0);
+        } else if (op.kind === MMC3_REPORT_MIRRORING) {
+            values.push(1, CARTRIDGE_MIRRORING_IDS[mapper.get_nametable_mirroring()], 0);
+        } else {
+            throw new RangeError(`Unknown MMC3 operation kind ${op.kind}.`);
+        }
     }
 
     return values;

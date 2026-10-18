@@ -28,17 +28,6 @@
 # lists and globals.
 %include src/rom_loader
 
-enum nrom_error {
-    none = 0,
-    unsupported_mapper = 1,
-    unsupported_submapper = 2,
-    wrong_mapper_family = 3,
-    unsupported_prg_rom_size = 4,
-    unsupported_prg_ram_size = 5,
-    unsupported_trainer = 6,
-    unsupported_chr_memory = 7
-}
-
 enum nrom_limit {
     prg_ram_bytes = 8192,
     prg_rom_16k_bytes = 16384,
@@ -88,7 +77,7 @@ var nrom_pattern_write_accepted = 0;
 # Whether the last validation accepted the board.
 var nrom_ok = 0;
 
-# Why it did not, using nrom_error. Codes 1 and 2 are the selection codes, because a failed
+# Why it did not, using mapper_error. Codes 1 and 2 are the selection codes, because a failed
 # selection is reported unchanged.
 var nrom_error_code = 0;
 
@@ -104,7 +93,7 @@ var nrom_chr_ram_bytes = 0;
 # Clears every result the validation reports.
 proc nrom_reset_results {
     nrom_ok = 0;
-    nrom_error_code = nrom_error.none;
+    nrom_error_code = mapper_error.none;
     nrom_kind = mapper_kind.none;
     nrom_prg_ram_bytes = 0;
     nrom_chr_ram_bytes = 0;
@@ -119,7 +108,7 @@ proc nrom_validate {
     if mapper_selection_error_code != mapper_selection_error.none {
         nrom_error_code = mapper_selection_error_code;
     } elif mapper_selection_kind != mapper_kind.nrom {
-        nrom_error_code = nrom_error.wrong_mapper_family;
+        nrom_error_code = mapper_error.wrong_mapper_family;
     } else {
         nrom_check_prg_rom;
     }
@@ -136,7 +125,7 @@ proc nrom_check_prg_rom {
     }
 
     if prg_rom_ok == 0 {
-        nrom_error_code = nrom_error.unsupported_prg_rom_size;
+        nrom_error_code = mapper_error.unsupported_prg_rom_size;
     } else {
         nrom_accept_prg_rom;
     }
@@ -166,11 +155,11 @@ proc nrom_apply_memory_limits prg_ram_bytes, chr_ram_bytes {
     }
 
     if $prg_ram_bytes < 0 or $prg_ram_bytes > nrom_limit.prg_ram_bytes {
-        nrom_error_code = nrom_error.unsupported_prg_ram_size;
+        nrom_error_code = mapper_error.unsupported_prg_ram_size;
     } elif cartridge_has_trainer == 1 and $prg_ram_bytes == 0 {
-        nrom_error_code = nrom_error.unsupported_trainer;
+        nrom_error_code = mapper_error.unsupported_trainer;
     } elif chr_ok == 0 {
-        nrom_error_code = nrom_error.unsupported_chr_memory;
+        nrom_error_code = mapper_error.unsupported_chr_memory;
     } else {
         nrom_ok = 1;
         nrom_kind = mapper_kind.nrom;

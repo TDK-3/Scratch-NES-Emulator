@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for seventeen suites and 541 records. TypeScript regression tests execute each vector
+inputs and expected outputs for eighteen suites and 562 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (12,357 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (13,471 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -61,6 +61,7 @@ suite and operation IDs present in the fixture.
 | 14 | Control loop | 1: inputs are PC, A, X, Y, SP, status, the pending-NMI flag, the IRQ line level, a step count, the step before which an NMI is requested, the step before which the IRQ line is asserted, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, one sequence kind per step (1 instruction, 2 IRQ, 3 jam, 4 NMI, 5 reset), then one `(kind, address, value)` triple per bus access. Recorded by driving `Cpu2A03.clock_cycle()` step by step behind a fresh decoder with no devices, so the kinds come from the public cycle result. |
 | 15 | NROM board | 1: inputs are the declared image length in bytes followed by all 16 header bytes, as for suite 9. | Seven values: ok, board error code (1 unsupported mapper, 2 unsupported submapper, 3 wrong board family, 4 unsupported PRG ROM size, 5 unsupported PRG RAM size, 6 unsupported trainer, 7 unsupported CHR memory), board kind, mapped PRG RAM bytes, mapped CHR RAM bytes, selection kind, and selection error code. Recorded by running `resolve_mapper` and `NromMapper.create` in `src/nes/cartridge/mapper_000.ts`, with the two mapped sizes measured through the public CPU and pattern ports by aliasing. |
 | 16 | NROM memory | 1: inputs are the declared image length, all 16 header bytes, a PRG ROM prepare count, a CHR ROM prepare count, an operation count, that many `(index, value)` pairs for each ROM region, and that many `(kind, address, value)` operations where kind 1 reads the CPU window, 2 writes it, 3 reads the pattern table, and 4 writes it. | Ok, board error code, mapped PRG RAM bytes, mapped CHR RAM bytes, then three values per operation: whether the board took it, the byte a read returned, and the bits a CPU read drove. Recorded by running `NromMapper.read_cpu()`, `write_cpu()`, `read_pattern()`, and `write_pattern()` over an image carrying the prepared payload bytes. |
+| 18 | MMC3 | 1: inputs are the declared image length, all 16 header bytes, a PRG ROM prepare count, a CHR ROM prepare count, an operation count, that many `(index, value)` pairs for each ROM region, and that many `(kind, address, value)` operations where kinds 1 through 4 are the suite-16 CPU and pattern operations and kind 5 reports the mirroring mode the board would give the PPU. | Ok, board error code, mapped PRG RAM bytes, then three values per operation. Recorded by running `Mmc3Mapper.create()`, its CPU and pattern ports, and `get_nametable_mirroring()` over an image carrying the prepared payload bytes. The mapped CHR RAM size is not reported: a bank register decides which part of CHR RAM a pattern address reaches, so the aliasing probe suite 16 uses would measure a bank switch rather than a wrap, and the records that wrap a CHR bank pin the bank count instead. |
 | 17 | Cartridge bus | 1: inputs are the declared image length, all 16 header bytes, an attach flag, a PRG ROM prepare count, an operation count, that many `(index, value)` PRG ROM pairs, and that many `(kind, address, value)` operations where kind 1 writes the bus and any other kind reads it, as in suite 3. | Whether a board is attached and the board error code, then two values per operation: the byte the bus returned and the open-bus latch it left behind, read back through `$2000`, an address no ported device drives. Recorded by running the production `NesCpuBus` with the record's `NromMapper` attached as its cartridge port and every other device absent. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
@@ -173,7 +174,14 @@ stand in for that until the toolchain is available:
   `nrom_limit` and `nrom_window` enum values with the mirror's constants, so a wrong literal in a `.gs` file
   fails without a compiler. The mirrored bus dispatches its cartridge window to the mirrored board, replays
   every suite 17 record, and is compared address by address with a production `NesCpuBus` carrying a real
-  `NromMapper` over a synthetic NROM image, both before and after writes to RAM, PRG RAM, and PRG ROM.
+  `NromMapper` over a synthetic NROM image, both before and after writes to RAM, PRG RAM, and PRG ROM. The MMC3
+  board is mirrored the same way: `GoboscriptMmc3Mapper` replays every suite 18 record, is compared with a
+  reference `Mmc3Mapper` over a synthetic trainer image for the payload copy, the banking registers, and both
+  modes, and is attached to the mirrored bus and compared with a production `NesCpuBus` across seventeen
+  addresses before banking, after ten register writes, after RAM writes, in PRG mode 1, and with PRG RAM
+  disabled. The masks bank data applies to registers 6 and 7 are invisible at practical bank counts, because
+  the bank index wraps to the same slot either way, so one test builds a 128-bank, one-megabyte board where an
+  unmasked `$FF` would select bank 127 and the masked value selects bank 63.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared

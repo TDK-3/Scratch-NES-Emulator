@@ -418,8 +418,11 @@ export class GoboscriptCpuBus {
     /** Mirror of `cpu_bus_cartridge_kind`: the board the loader attached, if any. */
     cartridge_kind: number = MAPPER_KIND.NONE;
 
-    /** The attached board, or null while the cartridge window has no device. */
+    /** The attached NROM board, or null while the cartridge window has no device. */
     board: GoboscriptNromMapper | null = null;
+
+    /** The attached MMC3 board, or null. Only one of the two boards is attached at a time. */
+    mmc3_board: GoboscriptMmc3Mapper | null = null;
 
     reset(): void {
         this.open_bus = 0;
@@ -455,6 +458,12 @@ export class GoboscriptCpuBus {
             if (this.board.cpu_mapped === 1) {
                 return this.apply_driven_value(this.board.cpu_value, this.board.cpu_driven_mask);
             }
+        } else if (this.cartridge_kind === MAPPER_KIND.MMC3 && this.mmc3_board !== null) {
+            this.mmc3_board.read_cpu(numeric_address);
+
+            if (this.mmc3_board.cpu_mapped === 1) {
+                return this.apply_driven_value(this.mmc3_board.cpu_value, this.mmc3_board.cpu_driven_mask);
+            }
         }
 
         return this.open_bus;
@@ -475,6 +484,8 @@ export class GoboscriptCpuBus {
 
         if (this.cartridge_kind === MAPPER_KIND.NROM && this.board !== null) {
             this.board.write_cpu(numeric_address, numeric_value);
+        } else if (this.cartridge_kind === MAPPER_KIND.MMC3 && this.mmc3_board !== null) {
+            this.mmc3_board.write_cpu(numeric_address, numeric_value);
         }
     }
 
@@ -888,8 +899,8 @@ export const MAPPER_KIND = { NONE: 0, NROM: 1, MMC3: 2 } as const;
 /** Mirror of the `mapper_selection_error` enum in scratch/src/mapper.gs. */
 export const MAPPER_SELECTION_ERROR = { NONE: 0, UNSUPPORTED_MAPPER: 1, UNSUPPORTED_SUBMAPPER: 2 } as const;
 
-/** Mirror of the `nrom_error` enum in scratch/src/mapper_000.gs. */
-export const NROM_ERROR = {
+/** Mirror of the `mapper_error` enum in scratch/src/mapper.gs. */
+export const MAPPER_ERROR = {
     NONE: 0,
     UNSUPPORTED_MAPPER: 1,
     UNSUPPORTED_SUBMAPPER: 2,
@@ -993,7 +1004,7 @@ export class GoboscriptNromMapper {
     trainer_offset = 0;
 
     ok = 0;
-    error_code: number = NROM_ERROR.NONE;
+    error_code: number = MAPPER_ERROR.NONE;
     kind: number = MAPPER_KIND.NONE;
     mapped_prg_ram_bytes = 0;
     mapped_chr_ram_bytes = 0;
@@ -1022,7 +1033,7 @@ export class GoboscriptNromMapper {
     /** Mirror of `nrom_reset_results`. */
     reset_results(): void {
         this.ok = 0;
-        this.error_code = NROM_ERROR.NONE;
+        this.error_code = MAPPER_ERROR.NONE;
         this.kind = MAPPER_KIND.NONE;
         this.mapped_prg_ram_bytes = 0;
         this.mapped_chr_ram_bytes = 0;
@@ -1036,7 +1047,7 @@ export class GoboscriptNromMapper {
         if (this.selection.error_code !== MAPPER_SELECTION_ERROR.NONE) {
             this.error_code = this.selection.error_code;
         } else if (this.selection.kind !== MAPPER_KIND.NROM) {
-            this.error_code = NROM_ERROR.WRONG_MAPPER_FAMILY;
+            this.error_code = MAPPER_ERROR.WRONG_MAPPER_FAMILY;
         } else {
             this.check_prg_rom();
         }
@@ -1053,7 +1064,7 @@ export class GoboscriptNromMapper {
         }
 
         if (prg_rom_ok === 0) {
-            this.error_code = NROM_ERROR.UNSUPPORTED_PRG_ROM_SIZE;
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_PRG_ROM_SIZE;
         } else {
             this.accept_prg_rom();
         }
@@ -1083,11 +1094,11 @@ export class GoboscriptNromMapper {
         }
 
         if (prg_ram_bytes < 0 || prg_ram_bytes > NROM_LIMIT.PRG_RAM_BYTES) {
-            this.error_code = NROM_ERROR.UNSUPPORTED_PRG_RAM_SIZE;
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_PRG_RAM_SIZE;
         } else if (this.has_trainer === 1 && prg_ram_bytes === 0) {
-            this.error_code = NROM_ERROR.UNSUPPORTED_TRAINER;
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_TRAINER;
         } else if (chr_ok === 0) {
-            this.error_code = NROM_ERROR.UNSUPPORTED_CHR_MEMORY;
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_CHR_MEMORY;
         } else {
             this.ok = 1;
             this.kind = MAPPER_KIND.NROM;
@@ -1331,6 +1342,441 @@ const CPU_VECTOR_ADDRESS = {
     IRQ_BRK_LOW: 0xfffe,
     IRQ_BRK_HIGH: 0xffff,
 } as const;
+
+/** Mirror of the `mmc3_limit` enum in scratch/src/mapper_004.gs. */
+export const MMC3_LIMIT = {
+    PRG_BANK_BYTES: 8192,
+    MIN_PRG_ROM_BYTES: 32768,
+    CHR_BANK_BYTES: 1024,
+    MIN_CHR_MEMORY_BYTES: 8192,
+    PRG_RAM_BYTES: 8192,
+    PATTERN_BYTES: 8192,
+    PATTERN_SPACE_BYTES: 16384,
+    TRAINER_BYTES: 512,
+    TRAINER_PRG_RAM_OFFSET: 4096,
+    PRG_RAM_START: 0x6000,
+    PRG_ROM_START: 0x8000,
+    PRG_ROM_OFFSET_MASK: 8191,
+    CHR_OFFSET_MASK: 1023,
+    FULL_BYTE_MASK: 255,
+} as const;
+
+/** Mirror of the `mmc3_register` enum in scratch/src/mapper_004.gs. */
+export const MMC3_REGISTER = {
+    BANK_SELECT: 0x8000,
+    BANK_DATA: 0x8001,
+    MIRRORING: 0xa000,
+    PRG_RAM_PROTECT: 0xa001,
+    IRQ_LATCH: 0xc000,
+    IRQ_RELOAD: 0xc001,
+    IRQ_DISABLE: 0xe000,
+    IRQ_ENABLE: 0xe001,
+} as const;
+
+/** Mirror of the `mmc3_op` enum in scratch/src/mapper_004.gs. */
+export const MMC3_OP = {
+    CPU_READ: 1,
+    CPU_WRITE: 2,
+    PATTERN_READ: 3,
+    PATTERN_WRITE: 4,
+    REPORT_MIRRORING: 5,
+} as const;
+
+/**
+ * Mirror of scratch/src/mapper_004.gs: the MMC3 creation checks, the eight banking registers with the
+ * masks bank execute applies to them, PRG and CHR bank selection in both modes, the PRG RAM enable
+ * and write-protect bits, the mirroring register with its four-screen override, and the CPU and
+ * pattern windows. The fields named after the parsed header stand for the `cartridge_*` globals the
+ * ported validation reads, including the mirroring the header declared. The IRQ registers, the PPU
+ * A12 filter, and the NVRAM snapshots are not ported yet, so this mirror does not carry them either.
+ */
+export class GoboscriptMmc3Mapper {
+    mapper_id = 0;
+    submapper = 0;
+    prg_rom_bytes = 0;
+    chr_rom_bytes = 0;
+    prg_ram_bytes = 0;
+    prg_nvram_bytes = 0;
+    chr_ram_bytes = 0;
+    chr_nvram_bytes = 0;
+    has_trainer = 0;
+    header_mirroring = 1;
+
+    prg_rom_offset = 0;
+    chr_rom_offset = 0;
+    trainer_offset = 0;
+
+    ok = 0;
+    error_code: number = MAPPER_ERROR.NONE;
+    kind: number = MAPPER_KIND.NONE;
+    mapped_prg_ram_bytes = 0;
+    mapped_chr_ram_bytes = 0;
+    prg_bank_count = 0;
+    chr_bank_count = 0;
+    four_screen = 0;
+    mirroring = 1;
+    bank_select = 0;
+    prg_mode = 0;
+    chr_mode = 0;
+    prg_ram_enabled = 1;
+    prg_ram_write_protected = 0;
+    irq_latch = 0;
+    irq_counter = 0;
+    irq_reload_pending = 0;
+    irq_enabled = 0;
+    irq_line_asserted = 0;
+    ppu_a12_high = 0;
+    a12_low_dots = 0;
+
+    readonly selection = new GoboscriptMapperSelection();
+
+    /** Mirror of the Stage-owned `cartridge_bytes` list that `mmc3_load_payload` copies from. */
+    cartridge_bytes: readonly number[] = [];
+
+    /** Mirrors of the board's memory lists and its eight bank registers. */
+    readonly prg_rom: number[] = [];
+    readonly chr_rom: number[] = [];
+    readonly prg_ram: number[] = new Array<number>(MMC3_LIMIT.PRG_RAM_BYTES).fill(0);
+    readonly chr_ram: number[] = new Array<number>(MMC3_LIMIT.PATTERN_BYTES).fill(0);
+    readonly bank_registers: number[] = new Array<number>(8).fill(0);
+
+    cpu_mapped = 0;
+    cpu_value = 0;
+    cpu_driven_mask = 0;
+    cpu_write_accepted = 0;
+    pattern_value = 0;
+    pattern_write_accepted = 0;
+
+    /** Mirror of `mmc3_reset`. */
+    reset(): void {
+        this.mirroring = this.header_mirroring;
+        this.bank_select = 0;
+        this.prg_mode = 0;
+        this.chr_mode = 0;
+        this.prg_ram_enabled = 1;
+        this.prg_ram_write_protected = 0;
+        this.irq_latch = 0;
+        this.irq_counter = 0;
+        this.irq_reload_pending = 0;
+        this.irq_enabled = 0;
+        this.irq_line_asserted = 0;
+        this.ppu_a12_high = 0;
+        this.a12_low_dots = 0;
+        this.bank_registers.fill(0);
+    }
+
+    /** Mirror of `mmc3_validate`. */
+    validate(): void {
+        this.ok = 0;
+        this.error_code = MAPPER_ERROR.NONE;
+        this.kind = MAPPER_KIND.NONE;
+        this.mapped_prg_ram_bytes = 0;
+        this.mapped_chr_ram_bytes = 0;
+        this.prg_bank_count = 0;
+        this.chr_bank_count = 0;
+        this.four_screen = 0;
+        this.mirroring = this.header_mirroring;
+        this.selection.resolve(this.mapper_id, this.submapper);
+
+        if (this.selection.error_code !== MAPPER_SELECTION_ERROR.NONE) {
+            this.error_code = this.selection.error_code;
+            return;
+        }
+
+        if (this.selection.kind !== MAPPER_KIND.MMC3) {
+            this.error_code = MAPPER_ERROR.WRONG_MAPPER_FAMILY;
+            return;
+        }
+
+        const prg_ram_total = mapper_sum_memory_sizes(this.prg_ram_bytes, this.prg_nvram_bytes);
+        const chr_ram_total = mapper_sum_memory_sizes(this.chr_ram_bytes, this.chr_nvram_bytes);
+
+        if (this.prg_rom_bytes < MMC3_LIMIT.MIN_PRG_ROM_BYTES) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_PRG_ROM_SIZE;
+            return;
+        }
+
+        if (scratch_mod(this.prg_rom_bytes, MMC3_LIMIT.PRG_BANK_BYTES) !== 0) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_PRG_ROM_SIZE;
+            return;
+        }
+
+        if (prg_ram_total < 0 || prg_ram_total > MMC3_LIMIT.PRG_RAM_BYTES) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_PRG_RAM_SIZE;
+            return;
+        }
+
+        if (this.has_trainer === 1 && prg_ram_total === 0) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_TRAINER;
+            return;
+        }
+
+        if (chr_ram_total < 0) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_CHR_MEMORY;
+            return;
+        }
+
+        const chr_memory_bytes = this.chr_rom_bytes > 0 ? this.chr_rom_bytes : chr_ram_total;
+
+        if (chr_memory_bytes < MMC3_LIMIT.MIN_CHR_MEMORY_BYTES) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_CHR_MEMORY;
+            return;
+        }
+
+        if (scratch_mod(chr_memory_bytes, MMC3_LIMIT.CHR_BANK_BYTES) !== 0) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_CHR_MEMORY;
+            return;
+        }
+
+        if (this.chr_rom_bytes > 0 && chr_ram_total !== 0) {
+            this.error_code = MAPPER_ERROR.UNSUPPORTED_CHR_MEMORY;
+            return;
+        }
+
+        this.ok = 1;
+        this.kind = MAPPER_KIND.MMC3;
+        this.mapped_prg_ram_bytes = prg_ram_total;
+        this.mapped_chr_ram_bytes = this.chr_rom_bytes === 0 ? chr_ram_total : 0;
+        this.prg_bank_count = scratch_floor_divide(this.prg_rom_bytes, MMC3_LIMIT.PRG_BANK_BYTES);
+        this.chr_bank_count = scratch_floor_divide(
+            this.chr_rom_bytes + this.mapped_chr_ram_bytes,
+            MMC3_LIMIT.CHR_BANK_BYTES,
+        );
+        this.four_screen = this.header_mirroring === 3 ? 1 : 0;
+        this.reset();
+    }
+
+    /** Mirror of `mmc3_reset_memory`. */
+    reset_memory(): void {
+        this.prg_rom.length = 0;
+        this.chr_rom.length = 0;
+
+        for (let index = 0; index < this.prg_rom_bytes; index += 1) {
+            this.prg_rom.push(0);
+        }
+
+        for (let index = 0; index < this.chr_rom_bytes; index += 1) {
+            this.chr_rom.push(0);
+        }
+
+        this.prg_ram.fill(0);
+        this.chr_ram.fill(0);
+    }
+
+    /** Mirror of `mmc3_copy_prg_rom`. */
+    copy_prg_rom(): void {
+        for (let index = 0; index < this.prg_rom_bytes; index += 1) {
+            this.prg_rom[index] = list_byte(this.cartridge_bytes, this.prg_rom_offset + index);
+        }
+    }
+
+    /** Mirror of `mmc3_copy_chr_rom`. */
+    copy_chr_rom(): void {
+        for (let index = 0; index < this.chr_rom_bytes; index += 1) {
+            this.chr_rom[index] = list_byte(this.cartridge_bytes, this.chr_rom_offset + index);
+        }
+    }
+
+    /** Mirror of `mmc3_copy_trainer`. */
+    copy_trainer(): void {
+        if (this.has_trainer !== 1 || this.mapped_prg_ram_bytes <= 0) {
+            return;
+        }
+
+        for (let index = 0; index < MMC3_LIMIT.TRAINER_BYTES; index += 1) {
+            const ram_index = (MMC3_LIMIT.TRAINER_PRG_RAM_OFFSET + index) % this.mapped_prg_ram_bytes;
+            this.prg_ram[ram_index] = list_byte(this.cartridge_bytes, this.trainer_offset + index);
+        }
+    }
+
+    /** Mirror of `mmc3_load_payload`. */
+    load_payload(): void {
+        this.reset_memory();
+        this.copy_prg_rom();
+        this.copy_chr_rom();
+        this.copy_trainer();
+    }
+
+    /** Mirror of `mmc3_prg_bank(slot)`. */
+    prg_bank(slot: number): number {
+        const last_bank = this.prg_bank_count - 1;
+        const second_last_bank = this.prg_bank_count - 2;
+        const bank6 = this.bank_registers[6] ?? 0;
+        const bank7 = this.bank_registers[7] ?? 0;
+        let bank = 0;
+
+        if (this.prg_mode === 0) {
+            bank = slot === 0 ? bank6 : slot === 1 ? bank7 : slot === 2 ? second_last_bank : last_bank;
+        } else {
+            bank = slot === 0 ? second_last_bank : slot === 1 ? bank7 : slot === 2 ? bank6 : last_bank;
+        }
+
+        return scratch_mod(bank, this.prg_bank_count);
+    }
+
+    /** Mirror of `mmc3_chr_bank(slot)`. */
+    chr_bank(slot: number): number {
+        const register0 = this.bank_registers[0] ?? 0;
+        const register1 = this.bank_registers[1] ?? 0;
+        let bank = 0;
+
+        if (this.chr_mode === 0) {
+            if (slot === 0) {
+                bank = register0;
+            } else if (slot === 1) {
+                bank = register0 + 1;
+            } else if (slot === 2) {
+                bank = register1;
+            } else if (slot === 3) {
+                bank = register1 + 1;
+            } else {
+                bank = this.bank_registers[slot - 2] ?? 0;
+            }
+        } else if (slot < 4) {
+            bank = this.bank_registers[slot + 2] ?? 0;
+        } else if (slot === 4) {
+            bank = register0;
+        } else if (slot === 5) {
+            bank = register0 + 1;
+        } else if (slot === 6) {
+            bank = register1;
+        } else {
+            bank = register1 + 1;
+        }
+
+        return scratch_mod(bank, this.chr_bank_count);
+    }
+
+    /** Mirror of `mmc3_write_register address, value`. */
+    write_register(address: number, value: number): void {
+        const register_id = bitwise_and(normalize_word(address), 0xe001);
+        let bank_value = normalize_byte(value);
+
+        if (register_id === MMC3_REGISTER.BANK_SELECT) {
+            this.bank_select = bitwise_and(bank_value, 7);
+            this.prg_mode = bit_at(bank_value, 64);
+            this.chr_mode = bit_at(bank_value, 128);
+        } else if (register_id === MMC3_REGISTER.BANK_DATA) {
+            if (this.bank_select === 0 || this.bank_select === 1) {
+                bank_value = bitwise_and(bank_value, 254);
+            } else if (this.bank_select === 6) {
+                bank_value = bitwise_and(bank_value, 63);
+            } else if (this.bank_select === 7) {
+                bank_value = bitwise_and(bank_value, 127);
+            }
+
+            this.bank_registers[this.bank_select] = bank_value;
+        } else if (register_id === MMC3_REGISTER.MIRRORING) {
+            if (this.four_screen === 0) {
+                this.mirroring = bitwise_and(bank_value, 1) === 0 ? 2 : 1;
+            }
+        } else if (register_id === MMC3_REGISTER.PRG_RAM_PROTECT) {
+            this.prg_ram_enabled = bit_at(bank_value, 128);
+            this.prg_ram_write_protected = bit_at(bank_value, 64);
+        }
+    }
+
+    /** Mirror of `mmc3_read_cpu address`. */
+    read_cpu(address: number): void {
+        const numeric_address = normalize_word(address);
+        this.cpu_mapped = 0;
+        this.cpu_value = 0;
+        this.cpu_driven_mask = 0;
+
+        if (numeric_address >= MMC3_LIMIT.PRG_ROM_START) {
+            const slot = scratch_floor_divide(numeric_address - MMC3_LIMIT.PRG_ROM_START, MMC3_LIMIT.PRG_BANK_BYTES);
+            const offset = this.prg_bank(slot) * MMC3_LIMIT.PRG_BANK_BYTES +
+                bitwise_and(numeric_address, MMC3_LIMIT.PRG_ROM_OFFSET_MASK);
+            this.cpu_mapped = 1;
+            this.cpu_value = list_byte(this.prg_rom, offset);
+            this.cpu_driven_mask = MMC3_LIMIT.FULL_BYTE_MASK;
+        } else if (numeric_address >= MMC3_LIMIT.PRG_RAM_START && this.prg_ram_enabled === 1) {
+            if (this.mapped_prg_ram_bytes > 0) {
+                const offset = scratch_mod(numeric_address - MMC3_LIMIT.PRG_RAM_START, this.mapped_prg_ram_bytes);
+                this.cpu_mapped = 1;
+                this.cpu_value = list_byte(this.prg_ram, offset);
+                this.cpu_driven_mask = MMC3_LIMIT.FULL_BYTE_MASK;
+            }
+        }
+    }
+
+    /** Mirror of `mmc3_write_cpu address, value`. */
+    write_cpu(address: number, value: number): void {
+        const numeric_address = normalize_word(address);
+        this.cpu_write_accepted = 0;
+
+        if (numeric_address >= MMC3_LIMIT.PRG_RAM_START && numeric_address < MMC3_LIMIT.PRG_ROM_START) {
+            const writable = this.prg_ram_enabled === 1 && this.prg_ram_write_protected === 0;
+
+            if (writable && this.mapped_prg_ram_bytes > 0) {
+                const offset = scratch_mod(numeric_address - MMC3_LIMIT.PRG_RAM_START, this.mapped_prg_ram_bytes);
+                this.prg_ram[offset] = normalize_byte(value);
+                this.cpu_write_accepted = 1;
+            }
+        } else if (numeric_address >= MMC3_LIMIT.PRG_ROM_START) {
+            this.write_register(numeric_address, value);
+        }
+    }
+
+    /** Mirror of `mmc3_read_pattern address`. */
+    read_pattern(address: number): void {
+        const numeric_address = scratch_mod(normalize_word(address), MMC3_LIMIT.PATTERN_SPACE_BYTES);
+        const slot = scratch_floor_divide(numeric_address, MMC3_LIMIT.CHR_BANK_BYTES);
+        const offset = this.chr_bank(slot) * MMC3_LIMIT.CHR_BANK_BYTES +
+            bitwise_and(numeric_address, MMC3_LIMIT.CHR_OFFSET_MASK);
+        this.pattern_value = 0;
+
+        if (this.chr_rom_bytes > 0) {
+            this.pattern_value = list_byte(this.chr_rom, offset);
+        } else if (this.mapped_chr_ram_bytes > 0) {
+            this.pattern_value = list_byte(this.chr_ram, offset);
+        }
+    }
+
+    /** Mirror of `mmc3_write_pattern address, value`. */
+    write_pattern(address: number, value: number): void {
+        const numeric_address = scratch_mod(normalize_word(address), MMC3_LIMIT.PATTERN_SPACE_BYTES);
+        const slot = scratch_floor_divide(numeric_address, MMC3_LIMIT.CHR_BANK_BYTES);
+        const offset = this.chr_bank(slot) * MMC3_LIMIT.CHR_BANK_BYTES +
+            bitwise_and(numeric_address, MMC3_LIMIT.CHR_OFFSET_MASK);
+        this.pattern_write_accepted = 0;
+
+        if (this.mapped_chr_ram_bytes > 0) {
+            this.chr_ram[offset] = normalize_byte(value);
+            this.pattern_write_accepted = 1;
+        }
+    }
+
+    /**
+     * Mirror of the suite-18 handler's operation loop: runs each (kind, address, value) triple and
+     * returns the four board values followed by three values per operation.
+     */
+    run_memory_operations(ops: readonly (readonly [number, number, number])[]): number[] {
+        const values = [this.ok, this.error_code, this.mapped_prg_ram_bytes];
+
+        for (const [kind, address, value] of ops) {
+            if (kind === MMC3_OP.CPU_READ) {
+                this.read_cpu(address);
+                values.push(this.cpu_mapped, this.cpu_value, this.cpu_driven_mask);
+            } else if (kind === MMC3_OP.CPU_WRITE) {
+                this.write_cpu(address, value);
+                values.push(this.cpu_write_accepted, 0, 0);
+            } else if (kind === MMC3_OP.PATTERN_READ) {
+                this.read_pattern(address);
+                values.push(1, this.pattern_value, 0);
+            } else if (kind === MMC3_OP.PATTERN_WRITE) {
+                this.write_pattern(address, value);
+                values.push(this.pattern_write_accepted, 0, 0);
+            } else if (kind === MMC3_OP.REPORT_MIRRORING) {
+                values.push(1, this.mirroring, 0);
+            } else {
+                values.push(0, 0, 0);
+            }
+        }
+
+        return values;
+    }
+}
 
 /**
  * Mirror of scratch/src/cpu_core.gs and scratch/src/cpu_addressing.gs: register state, one

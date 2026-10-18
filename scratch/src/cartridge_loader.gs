@@ -6,11 +6,13 @@
 # image reads the open-bus latch instead of fetching garbage, and the reason stays in the
 # nrom_error_code global the validation reports.
 #
-# The embedded default image is an MMC3 cartridge, so this reports a wrong board family until
-# mapper 4 is ported. An NROM image attaches, and the ported CPU can then fetch from $8000.
+# Both ported boards attach: an NROM image and an MMC3 image. The MMC3 board's IRQ registers, its PPU
+# A12 filter, and the NVRAM snapshots are not ported yet, so an attached MMC3 image fetches and banks
+# correctly but never raises a mapper IRQ.
 
 %include src/rom_loader
 %include src/mapper_000
+%include src/mapper_004
 %include src/cpu_bus
 
 # Whether a board is driving the cartridge window, echoed for the reports.
@@ -19,7 +21,9 @@ var cartridge_board_attached = 0;
 # One summary line for the board, so a report can say why the cartridge window is undriven.
 var cartridge_board_state_text = "";
 
-# Loads the embedded image and attaches its board when the header parses and the board validates.
+# Loads the embedded image and attaches its board when the header parses and the board the mapper
+# selection routes to validates. A header that routes nowhere, or a board that rejects its own sizes,
+# leaves the cartridge window undriven and says why in the state text.
 proc cartridge_load_board {
     cartridge_board_attached = 0;
     cpu_bus_cartridge_kind = mapper_kind.none;
@@ -30,18 +34,47 @@ proc cartridge_load_board {
         cartridge_parse_header;
 
         if cartridge_ok == 1 {
-            nrom_validate;
+            mapper_resolve cartridge_mapper_id, cartridge_submapper;
 
-            if nrom_ok == 1 {
-                nrom_load_payload;
-                cpu_bus_cartridge_kind = mapper_kind.nrom;
-                cartridge_board_attached = 1;
-                cartridge_board_state_text = "nrom prg ram " & nrom_prg_ram_bytes;
+            if mapper_selection_error_code != mapper_selection_error.none {
+                cartridge_board_state_text = "selection error " & mapper_selection_error_code;
+            } elif mapper_selection_kind == mapper_kind.nrom {
+                cartridge_attach_nrom;
+            } elif mapper_selection_kind == mapper_kind.mmc3 {
+                cartridge_attach_mmc3;
             } else {
-                cartridge_board_state_text = "board error " & nrom_error_code;
+                cartridge_board_state_text = "no board for kind " & mapper_selection_kind;
             }
         } else {
             cartridge_board_state_text = "header error " & cartridge_error_code;
         }
+    }
+}
+
+# Validates an NROM board, copies its payload, and attaches it.
+proc cartridge_attach_nrom {
+    nrom_validate;
+
+    if nrom_ok == 1 {
+        nrom_load_payload;
+        cpu_bus_cartridge_kind = mapper_kind.nrom;
+        cartridge_board_attached = 1;
+        cartridge_board_state_text = "nrom prg ram " & nrom_prg_ram_bytes;
+    } else {
+        cartridge_board_state_text = "board error " & nrom_error_code;
+    }
+}
+
+# Validates an MMC3 board, copies its payload, and attaches it.
+proc cartridge_attach_mmc3 {
+    mmc3_validate;
+
+    if mmc3_ok == 1 {
+        mmc3_load_payload;
+        cpu_bus_cartridge_kind = mapper_kind.mmc3;
+        cartridge_board_attached = 1;
+        cartridge_board_state_text = "mmc3 banks " & mmc3_prg_bank_count;
+    } else {
+        cartridge_board_state_text = "board error " & mmc3_error_code;
     }
 }

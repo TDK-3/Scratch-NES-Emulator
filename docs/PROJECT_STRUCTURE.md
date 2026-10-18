@@ -166,6 +166,7 @@
             cpu_status.gs  status normalization and flag updates
             mapper.gs  exact mapper and submapper routing with numeric error codes
             mapper_000.gs  NROM validation, payload copy, and the CPU and pattern windows
+            mapper_004.gs  MMC3 validation, banking registers, both modes, and the windows
             numeric.gs  bit-free byte, word, and bitwise helpers
             rom_loader.gs  generated ROM list, header load, and signature check
             shared_vectors.gs  generated port-vector list
@@ -244,13 +245,18 @@ toolchain needs Cargo and rustc, which are unavailable here.
   status in `alu_status`.
 - `src/controller.gs` holds both serial controller ports.
 - `src/cpu_bus.gs` holds the CPU decoder subset: RAM and mirroring, the open-bus latch with driven masks, the
-  `$4016`/`$4017` window, and the cartridge window an attached board drives. PPU, APU, and OAM DMA behave as
-  absent devices, and the cartridge window stays undriven until a board validates, so its reads return the
-  latch and its writes are dropped.
+  `$4016`/`$4017` window, and the cartridge window an attached NROM or MMC3 board drives. PPU, APU, and OAM
+  DMA behave as absent devices, and the cartridge window stays undriven until a board validates, so its reads
+  return the latch and its writes are dropped.
+- `src/mapper_004.gs` holds the MMC3 board: the creation checks, the eight banking registers with the masks
+  bank data applies to each of them, PRG and CHR bank selection in both modes, the PRG RAM enable and
+  write-protect bits, the mirroring register with its four-screen override, the payload and trainer copies,
+  and the CPU and pattern windows. Its IRQ registers, the PPU A12 filter with its ten-dot low window, and the
+  NVRAM snapshots are not ported, so an attached MMC3 board never raises a mapper IRQ.
 - `src/cartridge_loader.gs` composes the boot path: check the embedded image's signature, copy and parse its
-  header, validate the board, copy the payload, and attach the board to the bus, recording one summary line
-  for the report. The embedded default image is an MMC3 cartridge, so it reports a wrong board family and
-  leaves the window undriven until mapper 4 is ported.
+  header, route the mapper selection, then validate, copy, and attach whichever ported board that selection
+  names, recording one summary line for the report. The embedded default image is an MMC3 cartridge, so it
+  attaches through the MMC3 path.
 - `src/cpu_core.gs` holds the six CPU registers, one logged bus transaction per cycle in `cpu_access_log`,
   fetch byte/word, and push/pop byte/word with status push and restore.
 - `src/cpu_addressing.gs` resolves all thirteen addressing modes, including the zero-page and indexed dummy

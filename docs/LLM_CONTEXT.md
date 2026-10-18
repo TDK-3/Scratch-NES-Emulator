@@ -118,8 +118,8 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,188 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
-test, 542 cross-domain parity cases, 69 GoboScript port-algorithm comparisons against an integer-only mirror of
+suite has 1,214 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+test, 563 cross-domain parity cases, 74 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported modules, 17 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
@@ -209,11 +209,15 @@ map, the payload copy including the trainer at PRG RAM offset `$1000`, and the C
 with PRG ROM mirroring and the writable RAM regions), and `cartridge_loader.gs` (the boot path that validates
 a board, copies its payload, attaches it to the bus, and reports why an image was rejected). `stage.gs`
 includes every header, so the Stage owns all shared state, and its green-flag handler runs
-`src/vector_selftest.gs`, which executes suites 1, 3, and 7 through 17 of the fixture, counts suites 2, 4, 5,
-and 6 as skipped, and broadcasts a summary that `main.gs` reports. The embedded default image is MMC3, so the
-loader reports a wrong board family and the cartridge window stays undriven until mapper 4 is ported.
-Unofficial opcodes other than KIL, DMA stalls, the NVRAM snapshots, MMC3 banking and IRQ, PPU, APU, rendering,
-sound, save states, and game execution remain unimplemented there, and none of the `.gs` sources has been
+`src/vector_selftest.gs`, which executes suites 1, 3, and 7 through 18 of the fixture, counts suites 2, 4, 5,
+and 6 as skipped, and broadcasts a summary that `main.gs` reports. The loader attaches either ported board, so
+the embedded MMC3 image now drives the cartridge window; that board's IRQ registers, its PPU A12 filter, and
+the NVRAM snapshots are not ported, so it never raises a mapper IRQ. `mapper_004.gs` carries the MMC3 board:
+the creation checks, the eight banking registers with the masks bank data applies, PRG and CHR bank selection
+in both modes, the PRG RAM enable and write-protect bits, the mirroring register with its four-screen
+override, the payload and trainer copies, and the CPU and pattern windows.
+Unofficial opcodes other than KIL, DMA stalls, the MMC3 IRQ and A12 filter, the NVRAM snapshots, PPU, APU,
+rendering, sound, save states, and game execution remain unimplemented there, and none of the `.gs` sources has been
 compiled. The TypeScript NROM/MMC3 mapper and
 `NesConsole` APIs copy/restore declared PRG and CHR NVRAM, excluding volatile RAM; restore validates both sizes
 before mutating either region. The browser shell stores both regions in per-ROM SHA-256 snapshots in local

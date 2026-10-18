@@ -51,6 +51,15 @@ import {
 } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
+    MMC3_CPU_READ,
+    MMC3_CPU_WRITE,
+    MMC3_FIXED_INPUT_COUNT,
+    MMC3_FIXED_VALUE_COUNT,
+    MMC3_OPS,
+    MMC3_PATTERN_READ,
+    MMC3_REPORT_MIRRORING,
+    MMC3_VALUES_PER_OP,
+    project_mmc3_memory,
     CARTRIDGE_BUS_FIXED_INPUT_COUNT,
     CARTRIDGE_BUS_FIXED_VALUE_COUNT,
     CARTRIDGE_BUS_OPS,
@@ -72,7 +81,7 @@ import {
     MAPPER_CREATION_VALUE_COUNT,
     MAPPER_KIND_IDS,
     MAPPER_SELECTION_ERROR_IDS,
-    NROM_ERROR_IDS,
+    MAPPER_ERROR_IDS,
     project_mapper_creation,
 } from "./support/mapper_projection.js";
 import {
@@ -798,7 +807,8 @@ for_each_vector("nrom", (vector) => {
         assert.equal(prg_ram_bytes, 0, "a rejected board maps nothing");
         assert.equal(chr_ram_bytes, 0);
         assert.ok(
-            Object.values(NROM_ERROR_IDS).includes(error_code as (typeof NROM_ERROR_IDS)[keyof typeof NROM_ERROR_IDS]),
+            Object.values(MAPPER_ERROR_IDS).includes(
+                error_code as (typeof MAPPER_ERROR_IDS)[keyof typeof MAPPER_ERROR_IDS]),
             `Error code ${error_code} is a ported board code`,
         );
 
@@ -806,8 +816,8 @@ for_each_vector("nrom", (vector) => {
             assert.equal(
                 error_code,
                 selection_error === MAPPER_SELECTION_ERROR_IDS["unsupported-mapper"]
-                    ? NROM_ERROR_IDS["unsupported-mapper"]
-                    : NROM_ERROR_IDS["unsupported-submapper"],
+                    ? MAPPER_ERROR_IDS["unsupported-mapper"]
+                    : MAPPER_ERROR_IDS["unsupported-submapper"],
                 "a failed selection is reported unchanged",
             );
         }
@@ -944,6 +954,93 @@ for_each_vector("cartridge_bus", (vector) => {
         if (op?.kind === CARTRIDGE_BUS_WRITE) {
             assert.equal(returned, 0, "a write returns no byte");
             assert.equal(latch, op.value, "the bus latches every write, mapped or not");
+        }
+    }
+});
+
+for_each_vector("mmc3", (vector) => {
+    assert.equal(vector.operation, 1, "MMC3 vectors have a single operation.");
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
+    const prg_count = vector.input[17] ?? 0;
+    const chr_count = vector.input[18] ?? 0;
+    const op_count = vector.input[19] ?? 0;
+    assert.equal(vector.input.length, MMC3_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + op_count * 3);
+
+    const prg_prepare: NromMemoryPrepare[] = [];
+    const chr_prepare: NromMemoryPrepare[] = [];
+    const operations: NromMemoryOp[] = [];
+
+    for (let index = 0; index < prg_count; index += 1) {
+        const at = MMC3_FIXED_INPUT_COUNT + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `PRG prepare ${index} is a pair.`);
+        prg_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < chr_count; index += 1) {
+        const at = MMC3_FIXED_INPUT_COUNT + prg_count * 2 + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `CHR prepare ${index} is a pair.`);
+        chr_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const at = MMC3_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + index * 3;
+        const kind = vector.input[at];
+        const address = vector.input[at + 1];
+        const value = vector.input[at + 2];
+        assert.ok(kind !== undefined && address !== undefined && value !== undefined, `Operation ${index}.`);
+        assert.ok(
+            MMC3_OPS.some((entry) => entry.id === kind),
+            `Operation kind ${kind} is one the port dispatches.`,
+        );
+        operations.push({ kind, address, value });
+    }
+
+    const actual = project_mmc3_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, MMC3_FIXED_VALUE_COUNT + op_count * MMC3_VALUES_PER_OP);
+
+    const accepted = actual[0] ?? 0;
+    assert.ok(accepted === 0 || accepted === 1, "a board either validates or reports why it does not");
+    assert.equal(accepted === 1 ? 0 : 1, actual[1] === 0 ? 0 : 1, "an accepted board reports no error");
+
+    if (accepted === 0) {
+        assert.equal(op_count, 0, "a rejected board runs no operations");
+        assert.deepEqual(actual.slice(2), [0]);
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = MMC3_FIXED_VALUE_COUNT + index * MMC3_VALUES_PER_OP;
+        const taken = actual[at] ?? 0;
+        const value = actual[at + 1] ?? 0;
+        const driven = actual[at + 2] ?? 0;
+        assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
+        assert.ok(value >= 0 && value <= 0xff, `Operation ${index} reports a byte.`);
+
+        if (op?.kind === MMC3_CPU_READ) {
+            assert.equal(driven, taken === 1 ? 0xff : 0, "a mapped CPU read drives every bit");
+        } else if (op?.kind === MMC3_CPU_WRITE) {
+            if (taken === 1) {
+                assert.ok(op.address >= 0x6000 && op.address < 0x8000, "only PRG RAM takes a write");
+            }
+
+            assert.equal(value, 0, "a write reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_PATTERN_READ) {
+            assert.equal(taken, 1, "an accepted board always answers a pattern read");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_REPORT_MIRRORING) {
+            assert.equal(taken, 1);
+            assert.ok(value >= 1 && value <= 3, `Operation ${index} reports a mirroring id.`);
+            assert.equal(driven, 0);
+        } else {
+            assert.equal(value, 0, "a pattern write reports no byte");
+            assert.equal(driven, 0);
         }
     }
 });

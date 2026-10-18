@@ -47,7 +47,11 @@ import {
     type CpuSequenceSetup,
 } from "./support/cpu_sequence_projection.js";
 import { make_absent_bus_devices } from "./support/recording_cpu_bus.js";
+import { Mmc3Mapper } from "../src/nes/cartridge/mapper_004.js";
 import {
+    MMC3_FIXED_INPUT_COUNT,
+    MMC3_FIXED_VALUE_COUNT,
+    MMC3_VALUES_PER_OP,
     CARTRIDGE_BUS_FIXED_INPUT_COUNT,
     CARTRIDGE_BUS_FIXED_VALUE_COUNT,
     CARTRIDGE_BUS_VALUES_PER_OP,
@@ -1987,7 +1991,7 @@ test("the mirrored board validation refuses what it cannot map", () => {
     const unparsed = new ported.GoboscriptNromMapper();
     unparsed.validate();
     assert.equal(unparsed.ok, 0);
-    assert.equal(unparsed.error_code, ported.NROM_ERROR.UNSUPPORTED_PRG_ROM_SIZE);
+    assert.equal(unparsed.error_code, ported.MAPPER_ERROR.UNSUPPORTED_PRG_ROM_SIZE);
     assert.equal(unparsed.selection.kind, ported.MAPPER_KIND.NROM, "mapper 0 submapper 0 still routes");
     assert.equal(unparsed.mapped_prg_ram_bytes, 0, "a rejected board maps nothing");
 
@@ -1997,14 +2001,14 @@ test("the mirrored board validation refuses what it cannot map", () => {
     prg_precision_loss.chr_rom_bytes = 8192;
     prg_precision_loss.prg_ram_bytes = -1;
     prg_precision_loss.validate();
-    assert.equal(prg_precision_loss.error_code, ported.NROM_ERROR.UNSUPPORTED_PRG_RAM_SIZE);
+    assert.equal(prg_precision_loss.error_code, ported.MAPPER_ERROR.UNSUPPORTED_PRG_RAM_SIZE);
 
     const chr_precision_loss = new ported.GoboscriptNromMapper();
     chr_precision_loss.prg_rom_bytes = 16384;
     chr_precision_loss.chr_rom_bytes = 8192;
     chr_precision_loss.chr_nvram_bytes = -1;
     chr_precision_loss.validate();
-    assert.equal(chr_precision_loss.error_code, ported.NROM_ERROR.UNSUPPORTED_CHR_MEMORY);
+    assert.equal(chr_precision_loss.error_code, ported.MAPPER_ERROR.UNSUPPORTED_CHR_MEMORY);
 
     // The trainer check runs after the PRG RAM limit, so an oversized trainer board reports the
     // size problem first, exactly as the reference orders its checks.
@@ -2014,7 +2018,7 @@ test("the mirrored board validation refuses what it cannot map", () => {
     trainer_and_oversize.has_trainer = 1;
     trainer_and_oversize.prg_ram_bytes = 16384;
     trainer_and_oversize.validate();
-    assert.equal(trainer_and_oversize.error_code, ported.NROM_ERROR.UNSUPPORTED_PRG_RAM_SIZE);
+    assert.equal(trainer_and_oversize.error_code, ported.MAPPER_ERROR.UNSUPPORTED_PRG_RAM_SIZE);
 
     // Resetting clears every reported field, so a second validation cannot inherit a result.
     trainer_and_oversize.reset_results();
@@ -2286,9 +2290,400 @@ test("the mirrored boot path answers the way the reference bus and board do", ()
     rejected.chr_rom_bytes = 8192;
     rejected.validate();
     assert.equal(rejected.ok, 0);
-    assert.equal(rejected.error_code, ported.NROM_ERROR.WRONG_MAPPER_FAMILY);
+    assert.equal(rejected.error_code, ported.MAPPER_ERROR.WRONG_MAPPER_FAMILY);
 
     const undriven = new ported.GoboscriptCpuBus();
     undriven.write(0x0000, 0x5a);
     assert.equal(undriven.read(0x8000), 0x5a, "no board means the window returns the latch");
+});
+
+/** Builds the mirrored MMC3 board for a suite-18 record, with the fields the parsed header reports. */
+function make_mirror_mmc3(vector_inputs: readonly number[]): ported.GoboscriptMmc3Mapper {
+    const header = vector_inputs.slice(1, 1 + CARTRIDGE_HEADER_BYTES);
+    const parsed = project_cartridge_header(vector_inputs[0] ?? 0, header);
+    assert.equal(parsed[0], 1, "a board record carries a header that parses");
+
+    const mapper = new ported.GoboscriptMmc3Mapper();
+    mapper.mapper_id = parsed[3] ?? 0;
+    mapper.submapper = parsed[4] ?? 0;
+    mapper.header_mirroring = parsed[5] ?? 1;
+    mapper.has_trainer = parsed[7] ?? 0;
+    mapper.prg_rom_bytes = parsed[8] ?? 0;
+    mapper.chr_rom_bytes = parsed[9] ?? 0;
+    mapper.prg_ram_bytes = parsed[10] ?? 0;
+    mapper.prg_nvram_bytes = parsed[11] ?? 0;
+    mapper.chr_ram_bytes = parsed[12] ?? 0;
+    mapper.chr_nvram_bytes = parsed[13] ?? 0;
+    mapper.trainer_offset = parsed[14] ?? 0;
+    mapper.prg_rom_offset = parsed[15] ?? 0;
+    mapper.chr_rom_offset = parsed[16] ?? 0;
+    return mapper;
+}
+
+test("the mirrored MMC3 board replays every suite 18 vector", () => {
+    const vectors = get_shared_vector_suite("mmc3").vectors;
+    assert.ok(vectors.length >= 16, "suite 18 covers banking, both modes, protection, and mirroring");
+
+    for (const vector of vectors) {
+        const input = [...vector.input];
+        const mapper = make_mirror_mmc3(input);
+        mapper.validate();
+
+        const prg_count = input[17] ?? 0;
+        const chr_count = input[18] ?? 0;
+        const op_count = input[19] ?? 0;
+        mapper.reset_memory();
+
+        for (let index = 0; index < prg_count; index += 1) {
+            const at = MMC3_FIXED_INPUT_COUNT + index * 2;
+            mapper.prg_rom[input[at] ?? 0] = input[at + 1] ?? 0;
+        }
+
+        for (let index = 0; index < chr_count; index += 1) {
+            const at = MMC3_FIXED_INPUT_COUNT + prg_count * 2 + index * 2;
+            mapper.chr_rom[input[at] ?? 0] = input[at + 1] ?? 0;
+        }
+
+        const operations: (readonly [number, number, number])[] = [];
+
+        for (let index = 0; index < op_count; index += 1) {
+            const at = MMC3_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + index * 3;
+            operations.push([input[at] ?? 0, input[at + 1] ?? 0, input[at + 2] ?? 0]);
+        }
+
+        const reported = mapper.run_memory_operations(operations);
+        assert.deepEqual(reported, [...vector.expected], `mmc3 vector ${vector.id}`);
+        assert.equal(reported.length, MMC3_FIXED_VALUE_COUNT + op_count * MMC3_VALUES_PER_OP);
+    }
+});
+
+test("the mirrored MMC3 registers and windows follow the reference", () => {
+    // A 64 KiB PRG ROM board with 8 KiB of CHR ROM: eight PRG banks and eight CHR banks.
+    const mirror = new ported.GoboscriptMmc3Mapper();
+    mirror.mapper_id = 4;
+    mirror.header_mirroring = 1;
+    mirror.prg_rom_bytes = 65536;
+    mirror.chr_rom_bytes = 8192;
+    mirror.prg_ram_bytes = 8192;
+    mirror.validate();
+    assert.equal(mirror.ok, 1);
+    assert.equal(mirror.prg_bank_count, 8);
+    assert.equal(mirror.chr_bank_count, 8);
+    mirror.reset_memory();
+
+    for (let bank = 0; bank < 8; bank += 1) {
+        mirror.prg_rom[bank * 8192] = 0x10 + bank;
+        mirror.chr_rom[bank * 1024] = 0x80 + bank;
+    }
+
+    // Bank select takes three bits and the two mode bits; bank data masks per register.
+    mirror.write_register(0x8000, 0xff);
+    assert.deepEqual([mirror.bank_select, mirror.prg_mode, mirror.chr_mode], [7, 1, 1]);
+    mirror.write_register(0x8001, 0xff);
+    assert.equal(mirror.bank_registers[7], 0x7f, "register 7 keeps seven bits");
+    mirror.write_register(0x8000, 6);
+    mirror.write_register(0x8001, 0xff);
+    assert.equal(mirror.bank_registers[6], 0x3f, "register 6 keeps six bits");
+    mirror.write_register(0x8000, 0);
+    mirror.write_register(0x8001, 0xff);
+    assert.equal(mirror.bank_registers[0], 0xfe, "a paired CHR register is forced even");
+
+    // PRG mode 0 puts register 6 first and the fixed banks last; mode 1 swaps the outer slots.
+    mirror.reset();
+    mirror.write_register(0x8000, 6);
+    mirror.write_register(0x8001, 1);
+    mirror.write_register(0x8000, 7);
+    mirror.write_register(0x8001, 2);
+    mirror.read_cpu(0x8000);
+    assert.equal(mirror.cpu_value, 0x11, "slot 0 is register 6");
+    mirror.read_cpu(0xa000);
+    assert.equal(mirror.cpu_value, 0x12, "slot 1 is register 7");
+    mirror.read_cpu(0xc000);
+    assert.equal(mirror.cpu_value, 0x16, "slot 2 is the second-to-last bank");
+    mirror.read_cpu(0xe000);
+    assert.equal(mirror.cpu_value, 0x17, "slot 3 is the last bank, where the reset vector lives");
+
+    mirror.write_register(0x8000, 0x40);
+    assert.equal(mirror.prg_mode, 1);
+    mirror.read_cpu(0x8000);
+    assert.equal(mirror.cpu_value, 0x16, "mode 1 puts the second-to-last bank first");
+    mirror.read_cpu(0xc000);
+    assert.equal(mirror.cpu_value, 0x11, "mode 1 puts register 6 third");
+
+    // CHR mode 0 pairs registers 0 and 1 into the first four slots; mode 1 swaps the groups.
+    mirror.reset();
+    mirror.write_register(0x8000, 0);
+    mirror.write_register(0x8001, 2);
+    mirror.write_register(0x8000, 1);
+    mirror.write_register(0x8001, 4);
+    mirror.read_pattern(0x0000);
+    assert.equal(mirror.pattern_value, 0x82, "slot 0 is register 0");
+    mirror.read_pattern(0x0400);
+    assert.equal(mirror.pattern_value, 0x83, "slot 1 is register 0 plus one");
+    mirror.read_pattern(0x0800);
+    assert.equal(mirror.pattern_value, 0x84, "slot 2 is register 1");
+    mirror.read_pattern(0x0c00);
+    assert.equal(mirror.pattern_value, 0x85, "slot 3 is register 1 plus one");
+    mirror.write_register(0x8000, 2);
+    mirror.write_register(0x8001, 6);
+    mirror.read_pattern(0x1000);
+    assert.equal(mirror.pattern_value, 0x86, "slot 4 is register 2");
+
+    mirror.write_register(0x8000, 0x80);
+    assert.equal(mirror.chr_mode, 1);
+    mirror.read_pattern(0x0000);
+    assert.equal(mirror.pattern_value, 0x86, "mode 1 puts register 2 first");
+    mirror.read_pattern(0x1000);
+    assert.equal(mirror.pattern_value, 0x82, "mode 1 puts register 0 fifth");
+
+    // A bank past the last one wraps, which is what keeps a small board addressable.
+    mirror.write_register(0x8000, 0x80);
+    mirror.write_register(0x8000, 2);
+    mirror.write_register(0x8001, 9);
+    mirror.read_pattern(0x1000);
+    assert.equal(mirror.pattern_value, 0x81, "CHR bank 9 wraps to bank 1 of 8");
+
+    // The mirroring register takes the low bit, and the protect register takes two.
+    mirror.reset();
+    assert.equal(mirror.mirroring, 1, "a reset restores the mirroring the header declared");
+    mirror.write_register(0xa000, 0);
+    assert.equal(mirror.mirroring, 2, "a zero low bit selects vertical");
+    mirror.write_register(0xa000, 1);
+    assert.equal(mirror.mirroring, 1, "a one low bit selects horizontal");
+    mirror.four_screen = 1;
+    mirror.write_register(0xa000, 0);
+    assert.equal(mirror.mirroring, 1, "a four-screen board ignores the mirroring register");
+    mirror.four_screen = 0;
+
+    mirror.write_register(0xa001, 0x40);
+    assert.deepEqual([mirror.prg_ram_enabled, mirror.prg_ram_write_protected], [0, 1]);
+    mirror.write_register(0xa001, 0x80);
+    assert.deepEqual([mirror.prg_ram_enabled, mirror.prg_ram_write_protected], [1, 0]);
+    mirror.write_cpu(0x6000, 0x5a);
+    assert.equal(mirror.cpu_write_accepted, 1);
+    mirror.write_register(0xa001, 0xc0);
+    mirror.write_cpu(0x6001, 0xa5);
+    assert.equal(mirror.cpu_write_accepted, 0, "a write-protected board drops the write");
+    mirror.read_cpu(0x6000);
+    assert.equal(mirror.cpu_value, 0x5a, "the earlier write survived");
+    mirror.write_register(0xa001, 0x00);
+    mirror.read_cpu(0x6000);
+    assert.equal(mirror.cpu_mapped, 0, "a disabled window is unmapped");
+
+    // An address below the cartridge windows is unmapped, and a register write is not a RAM write.
+    mirror.write_register(0xa001, 0x80);
+    mirror.read_cpu(0x5fff);
+    assert.deepEqual([mirror.cpu_mapped, mirror.cpu_value, mirror.cpu_driven_mask], [0, 0, 0]);
+    mirror.write_cpu(0x8000, 6);
+    assert.equal(mirror.cpu_write_accepted, 0, "a bank register write does not report a RAM write");
+    assert.equal(mirror.bank_select, 6);
+
+    // An unknown memory operation reports that the board did not take it.
+    assert.deepEqual(mirror.run_memory_operations([[9, 0x8000, 0]]).slice(3), [0, 0, 0]);
+});
+
+test("the mirrored MMC3 payload copy lands the bytes the reference board holds", () => {
+    const header = [0x4e, 0x45, 0x53, 0x1a, 2, 1, 0x46, 0x00, 1, 0, 0, 0, 0, 0, 0, 0];
+    const image_bytes = 16 + 512 + 32768 + 8192;
+    const image = make_cartridge_image(image_bytes, header);
+
+    for (let index = 16; index < image.length; index += 1) {
+        image[index] = (index * 13 + 7) % 251;
+    }
+
+    const parsed = parse_ines_rom(image);
+    assert.ok(parsed.ok, "the synthetic MMC3 image parses");
+    const rom = parsed.value;
+    assert.ok(rom.trainer !== null, "the image carries a trainer");
+    const created = Mmc3Mapper.create(rom);
+    assert.ok(created.ok, "the synthetic image is an acceptable MMC3 board");
+    const reference = created.value;
+
+    const mirror = make_mirror_mmc3([image_bytes, ...header]);
+    mirror.cartridge_bytes = [...image];
+    mirror.validate();
+    assert.equal(mirror.ok, 1);
+    mirror.load_payload();
+
+    assert.equal(mirror.prg_rom.length, 32768, "PRG ROM is copied to its declared size");
+    assert.equal(mirror.chr_rom.length, 8192, "CHR ROM is copied to its declared size");
+
+    for (let address = 0x8000; address <= 0xffff; address += 7) {
+        const expected = reference.read_cpu(address, 0);
+        mirror.read_cpu(address);
+        assert.equal(mirror.cpu_value, expected?.value, `PRG ROM at $${address.toString(16)}`);
+    }
+
+    for (let address = 0x6000; address < 0x8000; address += 5) {
+        const expected = reference.read_cpu(address, 0);
+        mirror.read_cpu(address);
+        assert.equal(mirror.cpu_value, expected?.value ?? 0, `PRG RAM at $${address.toString(16)}`);
+    }
+
+    // The trainer copy is the interesting part: the reference constructor puts those 512 bytes at
+    // PRG RAM offset $1000, which is $7000 on the CPU bus.
+    for (let offset = 0; offset < 512; offset += 1) {
+        const expected = reference.read_cpu(0x7000 + offset, 0);
+        mirror.read_cpu(0x7000 + offset);
+        assert.equal(mirror.cpu_value, expected?.value, `trainer byte ${offset} lands at $7000`);
+    }
+
+    for (let address = 0; address < 0x2000; address += 3) {
+        mirror.read_pattern(address);
+        assert.equal(mirror.pattern_value, reference.read_pattern(address), `pattern byte ${address}`);
+    }
+
+    // Banking applies to the copied payload the same way on both sides.
+    for (const [register_address, value] of [[0x8000, 6], [0x8001, 3], [0x8000, 0], [0x8001, 0x82]] as const) {
+        reference.write_cpu(register_address, value);
+        mirror.write_cpu(register_address, value);
+    }
+
+    for (const address of [0x8000, 0x9abc, 0xa000, 0xc000, 0xe000, 0xfffd]) {
+        const expected = reference.read_cpu(address, 0);
+        mirror.read_cpu(address);
+        assert.equal(mirror.cpu_value, expected?.value, `banked PRG ROM at $${address.toString(16)}`);
+    }
+
+    for (let address = 0; address < 0x2000; address += 512) {
+        mirror.read_pattern(address);
+        assert.equal(mirror.pattern_value, reference.read_pattern(address), `banked pattern at ${address}`);
+    }
+});
+
+test("the mirrored MMC3 PRG bank masks match a board with enough banks to see them", () => {
+    // Registers 6 and 7 keep six and seven bits. At eight or fewer banks the mask is invisible,
+    // because the bank index wraps to the same slot either way, so this board has 128 banks: an
+    // unmasked 255 would select bank 127 and a masked one selects bank 63.
+    const header = [0x4e, 0x45, 0x53, 0x1a, 64, 1, 0x40, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+    const image_bytes = 16 + 64 * 16384 + 8192;
+    const image = make_cartridge_image(image_bytes, header);
+
+    for (let index = 16; index < image.length; index += 1) {
+        image[index] = (index * 3 + 1) % 251;
+    }
+
+    const parsed = parse_ines_rom(image);
+    assert.ok(parsed.ok, "the one-megabyte MMC3 image parses");
+    const created = Mmc3Mapper.create(parsed.value);
+    assert.ok(created.ok, "the one-megabyte image is an acceptable MMC3 board");
+    const reference = created.value;
+
+    const mirror = make_mirror_mmc3([image_bytes, ...header]);
+    mirror.cartridge_bytes = [...image];
+    mirror.validate();
+    assert.equal(mirror.ok, 1);
+    assert.equal(mirror.prg_bank_count, 128);
+    mirror.load_payload();
+
+    for (const [register_address, value] of [[0x8000, 6], [0x8001, 0xff]] as const) {
+        reference.write_cpu(register_address, value);
+        mirror.write_cpu(register_address, value);
+    }
+
+    const expected = reference.read_cpu(0x8000, 0);
+    mirror.read_cpu(0x8000);
+    assert.equal(mirror.cpu_value, expected?.value, "register 6 masked to $3F selects bank 63");
+    assert.equal(mirror.cpu_value, image[16 + 63 * 8192] ?? 0, "bank 63 is where the mask points");
+    assert.notEqual(mirror.cpu_value, image[16 + 127 * 8192] ?? 0, "an unmasked write would select bank 127");
+
+    for (const [register_address, value] of [[0x8000, 7], [0x8001, 0xff]] as const) {
+        reference.write_cpu(register_address, value);
+        mirror.write_cpu(register_address, value);
+    }
+
+    const expected7 = reference.read_cpu(0xa000, 0);
+    mirror.read_cpu(0xa000);
+    assert.equal(mirror.cpu_value, expected7?.value, "register 7 masked to $7F selects bank 127");
+    assert.equal(mirror.cpu_value, image[16 + 127 * 8192] ?? 0, "bank 127 is where that mask points");
+});
+
+test("the mirrored bus drives an attached MMC3 board the way the reference does", () => {
+    const header = [0x4e, 0x45, 0x53, 0x1a, 4, 2, 0x42, 0x00, 1, 0, 0, 0, 0, 0, 0, 0];
+    const image_bytes = 16 + 65536 + 16384;
+    const image = make_cartridge_image(image_bytes, header);
+
+    for (let index = 16; index < image.length; index += 1) {
+        image[index] = (index * 17 + 11) % 251;
+    }
+
+    const parsed = parse_ines_rom(image);
+    assert.ok(parsed.ok, "the synthetic MMC3 image parses");
+    const created = Mmc3Mapper.create(parsed.value);
+    assert.ok(created.ok, "the synthetic image is an acceptable MMC3 board");
+    const reference_mapper = created.value;
+    const devices = make_absent_bus_devices();
+    const reference = new NesCpuBus({ ...devices, cartridge: reference_mapper });
+
+    // The mirror walks the same boot path the loader composes for an MMC3 image: parse, validate,
+    // copy the payload, and attach the board to the bus.
+    const parser = new ported.GoboscriptCartridgeParser();
+    parser.image_bytes = image.length;
+
+    for (let index = 0; index < 16; index += 1) {
+        parser.header[index] = image[index] ?? 0;
+    }
+
+    parser.parse();
+    assert.equal(parser.ok, 1);
+
+    const board = make_mirror_mmc3([image_bytes, ...header]);
+    board.cartridge_bytes = [...image];
+    board.validate();
+    assert.equal(board.ok, 1);
+    board.load_payload();
+
+    const bus = new ported.GoboscriptCpuBus();
+    bus.mmc3_board = board;
+    bus.cartridge_kind = ported.MAPPER_KIND.MMC3;
+
+    const addresses = [
+        0x0000, 0x0800, 0x1fff, 0x2000, 0x4020, 0x5fff, 0x6000, 0x7000, 0x7fff, 0x8000, 0x9abc, 0xa000, 0xbfff,
+        0xc000, 0xe000, 0xfffc, 0xffff,
+    ];
+
+    for (const address of addresses) {
+        assert.equal(bus.read(address), reference.read_cpu(address), `read $${address.toString(16)}`);
+    }
+
+    // Bank the two swappable PRG slots and the CHR banks through the bus, then compare again. The
+    // trainer the constructor copied sits at PRG RAM offset $1000, so $7000 is worth re-reading too.
+    const register_writes: readonly (readonly [number, number])[] = [
+        [0x8000, 6], [0x8001, 5], [0x8000, 7], [0x8001, 2], [0x8000, 0], [0x8001, 0x0a], [0x8000, 2], [0x8001, 3],
+        [0xa000, 1], [0xa001, 0x80],
+    ];
+
+    for (const [address, value] of register_writes) {
+        bus.write(address, value);
+        reference.write_cpu(address, value);
+    }
+
+    for (const address of addresses) {
+        assert.equal(bus.read(address), reference.read_cpu(address), `banked read $${address.toString(16)}`);
+    }
+
+    for (const [address, value] of [[0x6000, 0x5a], [0x7fff, 0xa5], [0x7000, 0x3c]] as const) {
+        bus.write(address, value);
+        reference.write_cpu(address, value);
+    }
+
+    for (const address of addresses) {
+        assert.equal(bus.read(address), reference.read_cpu(address), `after RAM writes, $${address.toString(16)}`);
+    }
+
+    assert.equal(board.mirroring, 1, "the mirroring register write reached the board");
+    assert.equal(reference_mapper.get_nametable_mirroring(), "horizontal");
+
+    // PRG mode 1 swaps the outer slots on both sides.
+    bus.write(0x8000, 0x46);
+    reference.write_cpu(0x8000, 0x46);
+
+    for (const address of [0x8000, 0xa000, 0xc000, 0xe000]) {
+        assert.equal(bus.read(address), reference.read_cpu(address), `PRG mode 1 at $${address.toString(16)}`);
+    }
+
+    // Disabling PRG RAM closes the window on both sides, and the latch survives the dropped write.
+    bus.write(0xa001, 0x00);
+    reference.write_cpu(0xa001, 0x00);
+    assert.equal(bus.read(0x6000), reference.read_cpu(0x6000), "a disabled PRG RAM window returns the latch");
 });

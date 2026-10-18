@@ -373,9 +373,10 @@ validation, payload and trainer copies, CPU and pattern windows, and the boot pa
 board to the ported CPU bus), and step 6 is written but unrun, because the project cannot be compiled here.
 What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the NVRAM snapshots and
 the MMC3 board are the next porting work, and step 7 remains entirely blocked on a toolchain. The in-project
-self test replays suites 1, 3, and 7 through 17 of the shared fixture and counts the CPU state, MMC3, PPU, and
-APU suites as skipped rather than passing. The embedded default image is MMC3, so the loader reports a wrong
-board family and the cartridge window stays undriven until that board is ported.
+self test replays suites 1, 3, and 7 through 18 of the shared fixture and counts the CPU state, mapper, PPU,
+and APU suites as skipped rather than passing. The loader attaches either ported board, so the embedded MMC3
+image now drives the cartridge window; what that board still lacks is its IRQ registers, the PPU A12 filter
+with its ten-dot low window, and the NVRAM snapshots.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets
