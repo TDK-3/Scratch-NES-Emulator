@@ -532,6 +532,19 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
+- Slice F3 (2026-10-18): ported NVRAM snapshots on both boards. `mapper_000.gs` and `mapper_004.gs` each
+  gained four procs (`get_prg_nvram_snapshot`, `load_prg_nvram_snapshot`, `get_chr_nvram_snapshot`,
+  `load_chr_nvram_snapshot`) that copy the declared NVRAM tail out of the mapped window and copy it back
+  only when the buffer holds exactly the declared size, reporting a refusal instead of throwing, leaving
+  the banking registers, the protection bits, and the IRQ state alone. Each board's enum gained six
+  operation kinds (get/load PRG NVRAM, get/load CHR NVRAM, read PRG NVRAM byte, read CHR NVRAM byte) and
+  the self-test handlers gained the same six dispatch cases. The mirror gained matching fields and methods
+  on both boards, and `project_nrom_memory` / `project_mmc3_memory` gained the corresponding six operation
+  projections. Suite 16 (NROM) gained four records (PRG NVRAM tail with offset, no-NVRAM board, CHR NVRAM
+  tail, battery-backed whole-window snapshot); suite 18 (MMC3) gained four records (same shape, restore
+  bypasses write protection and leaves the IRQ line alone, CHR NVRAM snapshot covers physical CHR RAM under
+  any bank, CHR-ROM board with empty CHR NVRAM). The fixture is now nineteen suites and 587 records; the
+  generated list is 18,363 values. All 1,242 tests pass.
 - `npm test` on 2026-10-18: passed all 1,234 tests in about 15 seconds, including 257 grouped single-step
   corpus tests (1,026 vectors), 580 shared port-vector tests (579 records), 77 GoboScript port-algorithm
   tests, 17 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.

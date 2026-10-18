@@ -384,13 +384,19 @@ separate from TypeScript success.
       the memory sizes an accepted board would map, the NROM payload and trainer copies, and the NROM CPU and
       pattern address windows (`mapper_000.gs`), the cartridge window an attached board drives
       (`cpu_bus.gs`), and the boot path that validates a board, copies its payload, and attaches it
-      (`cartridge_loader.gs`), and the MMC3 board's creation checks, banking registers, both bank modes, PRG
-      RAM protection, mirroring control, payload copy, CPU and pattern windows, IRQ registers, and PPU A12
-      observation with its ten-dot low filter (`mapper_004.gs`), which the loader attaches and whose IRQ line
-      it reports, so the embedded MMC3 image drives the bus and can raise a scanline IRQ; PPU, APU, and OAM DMA
-      still behave as absent devices on the bus. Not started: the NVRAM snapshots of both
-      boards, PPU rendering, which is also what would report PPU addresses and clock PPU dots to the ported A12
-      filter, APU channels, DMA stalls, and the frame-loop yield policy.
+      (`cartridge_loader.gs`), and both boards' nonvolatile memory snapshot procs (`mapper_000.gs` and
+      `mapper_004.gs`): `get_prg_nvram_snapshot`, `load_prg_nvram_snapshot`, `get_chr_nvram_snapshot`,
+      `load_chr_nvram_snapshot` copy the declared NVRAM tail out of each mapped window and copy it back
+      only when the buffer holds exactly the declared size, reporting a refusal instead of throwing, leaving
+      the banking registers, the protection bits, and the IRQ state alone, and the MMC3 board's creation
+      checks, banking registers, both bank modes, PRG RAM protection, mirroring control, payload copy, CPU
+      and pattern windows, IRQ registers, and PPU A12 observation with its ten-dot low filter
+      (`mapper_004.gs`), which the loader attaches and whose IRQ line it reports, so the embedded MMC3 image
+      drives the bus and can raise a scanline IRQ; PPU, APU, and OAM DMA still behave as absent devices on
+      the bus. Not started: the save/load wiring that would actually drive the snapshot buffers from outside
+      the board (the procs themselves are ported), PPU rendering, which is also what would report PPU
+      addresses and clock PPU dots to the ported A12 filter, APU channels, DMA stalls, and the frame-loop
+      yield policy.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,

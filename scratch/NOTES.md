@@ -112,9 +112,13 @@ What the ported modules cover:
   PRG RAM at offset $1000 out of the generated cartridge list, and the CPU and pattern windows
   report a mapped flag, a byte, and the driven bits instead of returning a null read: $8000-$FFFF
   is PRG ROM modulo its size, so a 16 KiB board mirrors twice; $6000-$7FFF is PRG RAM modulo the
-  mapped size when the board has any; and a write only lands in RAM. The NVRAM snapshots are not
-  ported yet.
-* mapper_004.gs: the MMC3 board, mirroring Mmc3Mapper for everything but its NVRAM snapshots. It runs the
+  mapped size when the board has any; and a write only lands in RAM. The declared nonvolatile memory
+  is ported too: four procs per board — `nrom_get_prg_nvram_snapshot`, `nrom_load_prg_nvram_snapshot`,
+  `nrom_get_chr_nvram_snapshot`, `nrom_load_chr_nvram_snapshot` — copy the declared NVRAM tail out of
+  each mapped window into a snapshot buffer and copy it back only when the buffer holds exactly the
+  declared size, reporting a refusal in `nrom_nvram_loaded` instead of throwing, leaving the board's
+  other state alone. A board that declares no NVRAM has an empty buffer, and its load is a no-op.
+* mapper_004.gs: the MMC3 board, mirroring Mmc3Mapper including the NVRAM snapshot procs. It runs the
   creation checks in the reference's order (PRG ROM in whole 8 KiB banks of at least 32 KiB, at
   most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG RAM, and one CHR region of at
   least 8 KiB in whole 1 KiB banks that is not CHR ROM beside declared CHR RAM), holds the eight
@@ -135,8 +139,12 @@ What the ported modules cover:
   line when it reaches zero with the counter enabled. An address outside the 14-bit PPU space, or a
   fractional one, is refused: the reference raises a range error there and the port reports the
   refusal in mmc3_ppu_observed, which is the integer test `value == value // 1` plus a range check.
-  Only the NVRAM snapshots are not ported, so a battery-backed board keeps its RAM for the session
-  but offers no way to save or restore it.
+  The declared nonvolatile memory is ported too: the same four-proc shape (`mmc3_get_prg_nvram_snapshot`,
+  `mmc3_load_prg_nvram_snapshot`, `mmc3_get_chr_nvram_snapshot`, `mmc3_load_chr_nvram_snapshot`) copies
+  the NVRAM tail out of the mapped window and copies it back only when the buffer holds exactly the
+  declared size, reporting a refusal in `mmc3_nvram_loaded` instead of throwing, leaving the banking
+  registers, the protection bits, and the IRQ state alone. A board that declares no NVRAM has an empty
+  buffer, and its load is a no-op.
 * cartridge_loader.gs: the boot path. It checks the embedded image's signature, copies and parses
   its header, routes the mapper selection, then validates, copies, and attaches whichever ported
   board that selection names, and it records one summary line so a report can say why the
@@ -150,7 +158,8 @@ What the ported modules cover:
   cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), 15 (NROM
   board validation), 16 (NROM memory windows), 17 (cartridge bus), 18 (MMC3), and 19 (MMC3
   scanline IRQ, replayed by the suite-18 handler because the record layout and the board are the
-  same) are replayed;
+  same; suites 16 and 18 now exercise the NVRAM snapshot procs as well as the CPU and pattern
+  windows) are replayed;
   records for the CPU state, mapper, PPU, and APU suites are counted as skipped rather than
   treated as passing. Its summary reports the ROM header state and the board state the loader recorded.
 
@@ -162,6 +171,7 @@ Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
 Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-and the yield policy a frame loop needs; the NVRAM snapshots of both boards; PPU rendering, which
-is also what would feed the ported A12 observation and its dot clock; APU channels; and any frame
-loop or rendering path.
+the yield policy a frame loop needs, the save/load wiring that would actually drive the snapshot
+buffers from outside the board (the procs themselves are ported), PPU rendering, which is also
+what would feed the ported A12 observation and its dot clock, APU channels, and any frame loop
+or rendering path.

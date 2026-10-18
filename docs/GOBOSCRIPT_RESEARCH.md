@@ -371,14 +371,15 @@ instruction for all 151 official opcodes, the control loop with interrupt accept
 and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection, and the NROM board with its
 validation, payload and trainer copies, CPU and pattern windows, and the boot path that attaches a validated
 board to the ported CPU bus), and step 6 is written but unrun, because the project cannot be compiled here.
-What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the NVRAM snapshots of
-both boards are the next porting work, and step 7 remains entirely blocked on a toolchain. The in-project
+What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the save/load wiring
+that would actually use the ported snapshot buffers is the next porting work, and step 7 remains entirely
+blocked on a toolchain. The in-project
 self test replays suites 1, 3, and 7 through 19 of the shared fixture and counts the CPU state, mapper, PPU,
 and APU suites as skipped rather than passing. The loader attaches either ported board, so the embedded MMC3
 image now drives the cartridge window and can raise a scanline IRQ: the board carries the four IRQ registers
-and the PPU A12 observation with its ten-dot low filter, and the loader reports the line through
-`cartridge_board_irq_line()`. Nothing in the port observes PPU addresses or clocks PPU dots yet, because the
-PPU itself is not ported.
+and the PPU A12 observation with its ten-dot low filter, the loader reports the line through
+`cartridge_board_irq_line()`, and both ported boards expose their nonvolatile memory snapshot procs. Nothing
+in the port observes PPU addresses or clocks PPU dots yet, because the ported PPU itself is not ported.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

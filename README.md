@@ -62,9 +62,9 @@ loading, persistence, and known-limitations statement.
   RAM regions, and a boot path that validates a board, copies its payload, and attaches it to the bus. The
   embedded default image is MMC3, and the loader attaches it: its creation checks, banking registers, both
   bank modes, the PRG RAM protect bits, the mirroring control, the CPU and pattern windows, the four IRQ
-  registers, and the PPU A12 filter with its ten-dot low window are ported, while its NVRAM snapshots are
-  not.
-  Its Stage runs a self test over the 579 generated parity vectors and reports a summary; the CPU state,
+  registers, the PPU A12 filter with its ten-dot low window, and the nonvolatile memory snapshots are
+  ported. The embedded default image is MMC3 and now attaches and can raise a scanline IRQ.
+  Its Stage runs a self test over the 587 generated parity vectors and reports a summary; the CPU state,
   mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
   been compiled, because the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
@@ -112,10 +112,10 @@ sample-rate/channel output, register/frame-sequencer/mixer behavior, PPU registe
 output, pinned MIT SquarePlayer and NoisePlayer controller-to-APU smoke tests, browser keyboard mapping,
 Web Audio filtering and sink scheduling, canvas conversion/scaling and frame scheduling,
 optional instruction-level traces, byte-exact build-time Scratch ROM asset generation with source-overwrite
-protection, a 579-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
+protection, a 587-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
 APU, controller, ALU, cartridge-header, CPU addressing, CPU cycle-sequence, opcode-decode, instruction,
-control-loop, NROM board-validation, NROM memory-window, cartridge-bus, MMC3 board-memory, and MMC3
-scanline-IRQ behavior, and 1,026 selected
+control-loop, NROM board-validation, NROM memory-and-snapshot, cartridge-bus, MMC3 board-memory, MMC3
+scanline-IRQ, and MMC3 NVRAM behavior, and 1,026 selected
 MIT-licensed NES
 2A03 reference vectors
 covering all 256 opcode bytes. The respective fixture details are documented in
