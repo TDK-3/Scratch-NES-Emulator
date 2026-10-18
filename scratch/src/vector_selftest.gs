@@ -3,7 +3,8 @@
 # Walks the generated numeric list in scratch/data/shared_port_vectors.txt, runs every
 # record through the ported GoboScript modules, and compares the results with the values
 # recorded from the TypeScript reference. Records for suites that are not ported yet are
-# counted as skipped instead of being silently treated as passing.
+# counted as skipped instead of being silently treated as passing. Today that is suite 2
+# (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU).
 #
 # List layout (schema version 1, one decimal value per line, 1-indexed Scratch positions):
 #   [1] schema version, [2] record count, then per record:
@@ -17,6 +18,7 @@
 %include src/cpu_alu
 %include src/controller
 %include src/cpu_bus
+%include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
 
@@ -28,7 +30,8 @@ enum port_suite {
     ppu = 5,
     apu = 6,
     controller = 7,
-    alu = 8
+    alu = 8,
+    cartridge = 9
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -93,6 +96,7 @@ proc run_port_self_test {
     port_first_failure = "";
     port_self_test_done = 0;
     port_self_test_summary = "";
+    rom_header_report;
 
     if schema_version != 1 {
         port_self_test_summary = "unsupported shared vector schema " & schema_version;
@@ -103,7 +107,7 @@ proc run_port_self_test {
 
         port_self_test_summary = "port vectors " & port_vectors_passed & "/" & port_vectors_run;
         port_self_test_summary = port_self_test_summary & " passed, " & port_vectors_skipped & " skipped";
-        port_self_test_summary = port_self_test_summary & ", rom header " & rom_header_state();
+        port_self_test_summary = port_self_test_summary & ", rom header " & rom_header_state_text;
     }
 
     if port_vectors_failed > 0 {
@@ -127,13 +131,15 @@ proc run_next_port_vector {
     delete port_actual_values;
 
     if suite_id == port_suite.numeric {
-        run_numeric_vector(operation, input_start);
+        run_numeric_vector operation, input_start;
     } elif suite_id == port_suite.alu {
-        run_alu_vector(operation, input_start);
+        run_alu_vector operation, input_start;
     } elif suite_id == port_suite.bus {
-        run_bus_vector(input_start);
+        run_bus_vector input_start;
     } elif suite_id == port_suite.controller {
-        run_controller_vector(input_start);
+        run_controller_vector input_start;
+    } elif suite_id == port_suite.cartridge {
+        run_cartridge_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -142,7 +148,7 @@ proc run_next_port_vector {
     if skipped == 1 {
         port_vectors_skipped++;
     } else {
-        compare_vector_results(suite_id, case_id, expected_start, expected_count);
+        compare_vector_results suite_id, case_id, expected_start, expected_count;
     }
 }
 
@@ -191,35 +197,35 @@ proc run_alu_vector operation, input_start {
     local status = to_number(shared_port_vectors[$input_start + 2]);
 
     if $operation == alu_op.op_adc {
-        alu_add_with_carry(left, right, status);
+        alu_add_with_carry left, right, status;
     } elif $operation == alu_op.op_sbc {
-        alu_subtract_with_carry(left, right, status);
+        alu_subtract_with_carry left, right, status;
     } elif $operation == alu_op.op_and {
-        alu_and(left, right, status);
+        alu_and left, right, status;
     } elif $operation == alu_op.op_ora {
-        alu_ora(left, right, status);
+        alu_ora left, right, status;
     } elif $operation == alu_op.op_eor {
-        alu_eor(left, right, status);
+        alu_eor left, right, status;
     } elif $operation == alu_op.op_asl {
-        alu_shift_left(left, right);
+        alu_shift_left left, right;
     } elif $operation == alu_op.op_lsr {
-        alu_shift_right(left, right);
+        alu_shift_right left, right;
     } elif $operation == alu_op.op_rol {
-        alu_rotate_left(left, right);
+        alu_rotate_left left, right;
     } elif $operation == alu_op.op_ror {
-        alu_rotate_right(left, right);
+        alu_rotate_right left, right;
     } elif $operation == alu_op.op_cmp {
-        alu_compare(left, right, status);
+        alu_compare left, right, status;
     } elif $operation == alu_op.op_cpx {
-        alu_compare(left, right, status);
+        alu_compare left, right, status;
     } elif $operation == alu_op.op_cpy {
-        alu_compare(left, right, status);
+        alu_compare left, right, status;
     } elif $operation == alu_op.op_bit {
-        alu_bit_test(left, right, status);
+        alu_bit_test left, right, status;
     } elif $operation == alu_op.op_inc {
-        alu_increment(left, right);
+        alu_increment left, right;
     } elif $operation == alu_op.op_dec {
-        alu_decrement(left, right);
+        alu_decrement left, right;
     }
 
     add alu_value to port_actual_values;
@@ -242,8 +248,8 @@ proc run_bus_vector input_start {
     delete port_bus_reads;
     cpu_bus_reset;
     controller_reset;
-    controller_set_button_mask(0, 0);
-    controller_set_button_mask(1, 0);
+    controller_set_button_mask 0, 0;
+    controller_set_button_mask 1, 0;
 
     repeat operation_count {
         kind = to_number(shared_port_vectors[$input_start + offset]);
@@ -252,7 +258,7 @@ proc run_bus_vector input_start {
         offset += 3;
 
         if kind == 1 {
-            cpu_bus_write(address, value);
+            cpu_bus_write address, value;
         } else {
             add cpu_bus_read(address) to port_bus_reads;
         }
@@ -273,15 +279,52 @@ proc run_controller_vector input_start {
     local button_mask = to_number(shared_port_vectors[$input_start + 1]);
     local read_count = to_number(shared_port_vectors[$input_start + 2]);
     controller_reset;
-    controller_set_button_mask(0, 0);
-    controller_set_button_mask(1, 0);
-    controller_set_button_mask(controller_index, button_mask);
-    controller_write_strobe(1);
-    controller_write_strobe(0);
+    controller_set_button_mask 0, 0;
+    controller_set_button_mask 1, 0;
+    controller_set_button_mask controller_index, button_mask;
+    controller_write_strobe 1;
+    controller_write_strobe 0;
 
     repeat read_count {
         add controller_serial_read(controller_index) to port_actual_values;
     }
+}
+
+# Suite 9: parse one 16-byte header and report every parsed field or the error code.
+#
+# The record is 17 inputs (declared image length, then header bytes 0 through 15) and 18
+# expected values: ok, error code, format, mapper, submapper, mirroring, battery, trainer,
+# PRG ROM bytes, CHR ROM bytes, PRG RAM, PRG NVRAM, CHR RAM, CHR NVRAM, trainer offset, PRG
+# offset, CHR offset, and payload end. Failures report zeros after the error code on both
+# sides, so a rejected header stays a deterministic record.
+proc run_cartridge_vector input_start {
+    local index = 0;
+    cartridge_image_bytes = to_number(shared_port_vectors[$input_start]);
+
+    repeat cartridge_limit.header_bytes {
+        cartridge_header[index + 1] = to_number(shared_port_vectors[$input_start + index + 1]);
+        index++;
+    }
+
+    cartridge_parse_header;
+    add cartridge_ok to port_actual_values;
+    add cartridge_error_code to port_actual_values;
+    add cartridge_format to port_actual_values;
+    add cartridge_mapper_id to port_actual_values;
+    add cartridge_submapper to port_actual_values;
+    add cartridge_mirroring to port_actual_values;
+    add cartridge_battery_backed to port_actual_values;
+    add cartridge_has_trainer to port_actual_values;
+    add cartridge_prg_rom_bytes to port_actual_values;
+    add cartridge_chr_rom_bytes to port_actual_values;
+    add cartridge_prg_ram_bytes to port_actual_values;
+    add cartridge_prg_nvram_bytes to port_actual_values;
+    add cartridge_chr_ram_bytes to port_actual_values;
+    add cartridge_chr_nvram_bytes to port_actual_values;
+    add cartridge_trainer_offset to port_actual_values;
+    add cartridge_prg_rom_offset to port_actual_values;
+    add cartridge_chr_rom_offset to port_actual_values;
+    add cartridge_payload_end to port_actual_values;
 }
 
 # Compares the produced values with the recorded expectations and keeps the first failure.

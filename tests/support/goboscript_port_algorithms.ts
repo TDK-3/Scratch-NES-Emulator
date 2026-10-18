@@ -478,3 +478,328 @@ export class GoboscriptCpuBus {
         return merged;
     }
 }
+
+/** Mirror of the `cartridge_limit` enum in scratch/src/cartridge.gs. */
+export const CARTRIDGE_LIMIT = {
+    MAX_IMAGE_BYTES: 33_554_432,
+    HEADER_BYTES: 16,
+    TRAINER_BYTES: 512,
+    PRG_BANK_BYTES: 16_384,
+    CHR_BANK_BYTES: 8_192,
+    LEGACY_PRG_RAM_BANK_BYTES: 8_192,
+    RAM_SHIFT_BASE_BYTES: 64,
+    MAX_SAFE_INTEGER: 9_007_199_254_740_991,
+} as const;
+
+/** Mirror of the `cartridge_error` enum in scratch/src/cartridge.gs. */
+export const CARTRIDGE_ERROR = {
+    NONE: 0,
+    TRUNCATED_HEADER: 1,
+    INVALID_MAGIC: 2,
+    UNSUPPORTED_VERSION: 3,
+    INVALID_ROM_SIZE: 4,
+    IMAGE_TOO_LARGE: 5,
+    TRUNCATED_PAYLOAD: 6,
+} as const;
+
+/**
+ * Mirror of scratch/src/cartridge.gs. The ported proc reads a 16-item header list plus an
+ * image length and writes eighteen `cartridge_*` globals, because a Scratch custom block can
+ * take no list argument and return no tuple; this class keeps the same shape so the arity
+ * parity check in tests/goboscript-source.test.ts stays meaningful.
+ */
+export class GoboscriptCartridgeParser {
+    readonly header: number[] = new Array<number>(CARTRIDGE_LIMIT.HEADER_BYTES).fill(0);
+    image_bytes = 0;
+    ok = 0;
+    error_code = 0;
+    format = 0;
+    mapper_id = 0;
+    submapper = 0;
+    mirroring = 0;
+    battery_backed = 0;
+    has_trainer = 0;
+    prg_rom_bytes = 0;
+    chr_rom_bytes = 0;
+    prg_ram_bytes = 0;
+    prg_nvram_bytes = 0;
+    chr_ram_bytes = 0;
+    chr_nvram_bytes = 0;
+    trainer_offset = 0;
+    prg_rom_offset = 0;
+    chr_rom_offset = 0;
+    payload_end = 0;
+
+    /** Mirror of `header_byte(index)`; the argument is a 0-based header index. */
+    header_byte(index: number): number {
+        // The ported func reads cartridge_header[index + 1] from a 1-indexed Scratch list.
+        return normalize_byte(this.header[index] ?? 0);
+    }
+
+    /** Mirror of `cartridge_has_magic()`. */
+    cartridge_has_magic(): number {
+        if (this.header_byte(0) !== 78) {
+            return 0;
+        }
+
+        if (this.header_byte(1) !== 69) {
+            return 0;
+        }
+
+        if (this.header_byte(2) !== 83) {
+            return 0;
+        }
+
+        if (this.header_byte(3) !== 26) {
+            return 0;
+        }
+
+        return 1;
+    }
+
+    /** Mirror of `cartridge_reset_results`. */
+    reset(): void {
+        this.ok = 0;
+        this.error_code = 0;
+        this.format = 0;
+        this.mapper_id = 0;
+        this.submapper = 0;
+        this.mirroring = 0;
+        this.battery_backed = 0;
+        this.has_trainer = 0;
+        this.prg_rom_bytes = 0;
+        this.chr_rom_bytes = 0;
+        this.prg_ram_bytes = 0;
+        this.prg_nvram_bytes = 0;
+        this.chr_ram_bytes = 0;
+        this.chr_nvram_bytes = 0;
+        this.trainer_offset = 0;
+        this.prg_rom_offset = 0;
+        this.chr_rom_offset = 0;
+        this.payload_end = 0;
+    }
+
+    /** Mirror of `cartridge_fail error_code`. */
+    fail(error_code: number): void {
+        this.reset();
+        this.error_code = error_code;
+    }
+
+    /** Mirror of `cartridge_parse_header`, including the TypeScript reference's check order. */
+    parse(): void {
+        const image_bytes = to_number(this.image_bytes);
+        const flags6 = this.header_byte(6);
+        const flags7 = this.header_byte(7);
+        const version_bits = bitwise_and(flags7, 12);
+        const prg_banks = this.header_byte(4);
+        const chr_banks = this.header_byte(5);
+        const prg_ram_banks = this.header_byte(8);
+        const size_high = this.header_byte(9);
+        const ram_sizes = this.header_byte(10);
+        const chr_ram_sizes = this.header_byte(11);
+        let is_nes2 = 0;
+        let prg_rom_bytes = 0;
+        let chr_rom_bytes = 0;
+        let prg_ram_bytes = 0;
+        let prg_nvram_bytes = 0;
+        let chr_ram_bytes = 0;
+        let chr_nvram_bytes = 0;
+        this.reset();
+
+        if (image_bytes > CARTRIDGE_LIMIT.MAX_IMAGE_BYTES) {
+            this.fail(CARTRIDGE_ERROR.IMAGE_TOO_LARGE);
+            return;
+        }
+
+        if (image_bytes < CARTRIDGE_LIMIT.HEADER_BYTES) {
+            this.fail(CARTRIDGE_ERROR.TRUNCATED_HEADER);
+            return;
+        }
+
+        if (this.cartridge_has_magic() === 0) {
+            this.fail(CARTRIDGE_ERROR.INVALID_MAGIC);
+            return;
+        }
+
+        if (version_bits !== 0 && version_bits !== 8) {
+            this.fail(CARTRIDGE_ERROR.UNSUPPORTED_VERSION);
+            return;
+        }
+
+        if (version_bits === 8) {
+            is_nes2 = 1;
+            this.format = 2;
+        } else {
+            this.format = 1;
+        }
+
+        const low_mapper_nibble = bitwise_and(scratch_floor_divide(flags6, 16), 15);
+        const high_mapper_bits = bitwise_and(flags7, 240);
+        this.mapper_id = bitwise_or(low_mapper_nibble, high_mapper_bits);
+        this.has_trainer = bit_at(flags6, 4);
+        this.battery_backed = bit_at(flags6, 2);
+
+        if (bit_at(flags6, 8) === 1) {
+            this.mirroring = 3;
+        } else if (bit_at(flags6, 1) === 1) {
+            this.mirroring = 2;
+        } else {
+            this.mirroring = 1;
+        }
+
+        if (is_nes2 === 1) {
+            const nes2_mapper_bits = bitwise_and(prg_ram_banks, 15) * 256;
+            this.mapper_id = bitwise_or(this.mapper_id, nes2_mapper_bits);
+            this.submapper = scratch_floor_divide(prg_ram_banks, 16);
+            prg_rom_bytes = decode_nes2_rom_size(
+                prg_banks,
+                bitwise_and(size_high, 15),
+                CARTRIDGE_LIMIT.PRG_BANK_BYTES,
+            );
+            chr_rom_bytes = decode_nes2_rom_size(
+                chr_banks,
+                scratch_floor_divide(size_high, 16),
+                CARTRIDGE_LIMIT.CHR_BANK_BYTES,
+            );
+            prg_ram_bytes = decode_nes2_ram_size(bitwise_and(ram_sizes, 15));
+            prg_nvram_bytes = decode_nes2_ram_size(scratch_floor_divide(ram_sizes, 16));
+            chr_ram_bytes = decode_nes2_ram_size(bitwise_and(chr_ram_sizes, 15));
+            chr_nvram_bytes = decode_nes2_ram_size(scratch_floor_divide(chr_ram_sizes, 16));
+        } else {
+            prg_rom_bytes = prg_banks * CARTRIDGE_LIMIT.PRG_BANK_BYTES;
+            chr_rom_bytes = chr_banks * CARTRIDGE_LIMIT.CHR_BANK_BYTES;
+
+            const legacy_banks = prg_ram_banks === 0 ? 1 : prg_ram_banks;
+            const legacy_prg_ram_bytes = legacy_banks * CARTRIDGE_LIMIT.LEGACY_PRG_RAM_BANK_BYTES;
+
+            if (this.battery_backed === 1) {
+                prg_nvram_bytes = legacy_prg_ram_bytes;
+            } else {
+                prg_ram_bytes = legacy_prg_ram_bytes;
+            }
+
+            if (chr_rom_bytes === 0) {
+                chr_ram_bytes = CARTRIDGE_LIMIT.CHR_BANK_BYTES;
+            }
+        }
+
+        if (prg_rom_bytes <= 0 || chr_rom_bytes < 0) {
+            this.fail(CARTRIDGE_ERROR.INVALID_ROM_SIZE);
+            return;
+        }
+
+        if (is_safe_size(prg_rom_bytes) === 0 || is_safe_size(chr_rom_bytes) === 0) {
+            this.fail(CARTRIDGE_ERROR.INVALID_ROM_SIZE);
+            return;
+        }
+
+        const trainer_offset = CARTRIDGE_LIMIT.HEADER_BYTES;
+        const prg_rom_offset = trainer_offset + this.has_trainer * CARTRIDGE_LIMIT.TRAINER_BYTES;
+        const chr_rom_offset = prg_rom_offset + prg_rom_bytes;
+        const payload_end = chr_rom_offset + chr_rom_bytes;
+
+        if (is_safe_size(payload_end) === 0) {
+            this.fail(CARTRIDGE_ERROR.INVALID_ROM_SIZE);
+            return;
+        }
+
+        if (payload_end > CARTRIDGE_LIMIT.MAX_IMAGE_BYTES) {
+            this.fail(CARTRIDGE_ERROR.IMAGE_TOO_LARGE);
+            return;
+        }
+
+        if (payload_end > image_bytes) {
+            this.fail(CARTRIDGE_ERROR.TRUNCATED_PAYLOAD);
+            return;
+        }
+
+        this.prg_rom_bytes = prg_rom_bytes;
+        this.chr_rom_bytes = chr_rom_bytes;
+        this.prg_ram_bytes = prg_ram_bytes;
+        this.prg_nvram_bytes = prg_nvram_bytes;
+        this.chr_ram_bytes = chr_ram_bytes;
+        this.chr_nvram_bytes = chr_nvram_bytes;
+        this.trainer_offset = trainer_offset;
+        this.prg_rom_offset = prg_rom_offset;
+        this.chr_rom_offset = chr_rom_offset;
+        this.payload_end = payload_end;
+        this.error_code = CARTRIDGE_ERROR.NONE;
+        this.ok = 1;
+    }
+
+    /** The eighteen reported values, in shared vector suite 9 field order. */
+    reported_values(): number[] {
+        return [
+            this.ok,
+            this.error_code,
+            this.format,
+            this.mapper_id,
+            this.submapper,
+            this.mirroring,
+            this.battery_backed,
+            this.has_trainer,
+            this.prg_rom_bytes,
+            this.chr_rom_bytes,
+            this.prg_ram_bytes,
+            this.prg_nvram_bytes,
+            this.chr_ram_bytes,
+            this.chr_nvram_bytes,
+            this.trainer_offset,
+            this.prg_rom_offset,
+            this.chr_rom_offset,
+            this.payload_end,
+        ];
+    }
+}
+
+/** Mirror of `power_of_two(exponent)`. */
+export function power_of_two(exponent: number): number {
+    let result = 1;
+
+    for (let iteration = 0; iteration < exponent; iteration += 1) {
+        result = result * 2;
+    }
+
+    return result;
+}
+
+/** Mirror of `is_safe_size(value)`. */
+export function is_safe_size(value: number): number {
+    const numeric = to_number(value);
+
+    if (numeric > CARTRIDGE_LIMIT.MAX_SAFE_INTEGER) {
+        return 0;
+    }
+
+    if (numeric < 0 - CARTRIDGE_LIMIT.MAX_SAFE_INTEGER) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/** Mirror of `decode_nes2_rom_size(low_byte, high_nibble, bank_bytes)`; -1 means undefined. */
+export function decode_nes2_rom_size(low_byte: number, high_nibble: number, bank_bytes: number): number {
+    if (high_nibble !== 15) {
+        return (high_nibble * 256 + low_byte) * bank_bytes;
+    }
+
+    const exponent = scratch_floor_divide(low_byte, 4);
+    const multiplier = scratch_mod(low_byte, 4) * 2 + 1;
+    const size_bytes = power_of_two(exponent) * multiplier;
+
+    if (is_safe_size(size_bytes) === 0) {
+        return -1;
+    }
+
+    return size_bytes;
+}
+
+/** Mirror of `decode_nes2_ram_size(shift)`. */
+export function decode_nes2_ram_size(shift: number): number {
+    if (shift === 0) {
+        return 0;
+    }
+
+    return CARTRIDGE_LIMIT.RAM_SHIFT_BASE_BYTES * power_of_two(shift);
+}

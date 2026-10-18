@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for eight suites and 274 records. TypeScript regression tests execute each vector
+inputs and expected outputs for nine suites and 299 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (2,808 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (3,808 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -53,6 +53,14 @@ suite and operation IDs present in the fixture.
 | 6 | APU | 1: input is register-write count followed by `(address, value)` pairs. | `$4015` status, pulse 1 DAC, and pulse 1 length counter. |
 | 7 | Controller | 1: inputs are controller index, button bit mask, and number of serial reads. | Serial D0 values, including trailing 1s. |
 | 8 | ALU | 1: ADC; 2: SBC; 3: AND; 4: ORA; 5: EOR; 10: CMP; 11: CPX; 12: CPY; 13: BIT take `(left, right, status)`. 6: ASL; 7: LSR; 8: ROL; 9: ROR; 14: INC; 15: DEC take `(value, status)`. | Result byte and status byte, recorded by executing the matching production instruction on `Cpu2A03`. |
+| 9 | Cartridge header | 1: inputs are the declared image length in bytes followed by all 16 header bytes. | Eighteen values: ok, error code, format, mapper, submapper, mirroring, battery, trainer, PRG ROM bytes, CHR ROM bytes, PRG RAM, PRG NVRAM, CHR RAM, CHR NVRAM, trainer offset, PRG offset, CHR offset, payload end. Recorded by executing `parse_ines_rom` in `src/nes/cartridge/ines.ts`. |
+
+Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
+1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
+6 truncated payload; formats are 1 iNES 1.0 and 2 NES 2.0; mirroring is 1 horizontal, 2 vertical, and
+3 four-screen. A rejected header zeroes every field except the error code, so a failure stays a deterministic
+record on both sides. The suite reaches `image-too-large` with a short image plus a NES 2.0 header that
+declares a huge PRG size, which keeps the recorded images small.
 
 Operation 1 of suite 3 replays against a decoder with no devices attached, while the GoboScript port always has
 live controller ports; suite 3 operation 1 records therefore must not read `$4016`/`$4017`, and
@@ -74,14 +82,18 @@ stand in for that until the toolchain is available:
   Scratch's floored modulo and floor division instead of ECMAScript operators and no bitwise operators at all.
   `tests/goboscript-port-algorithms.test.ts` compares those mirrors exhaustively against the bitwise reference
   in `src/nes/cpu/registers.ts`, `src/nes/cpu/alu.ts`, and the instruction steps of `src/nes/cpu/cpu_2a03.ts`,
-  replays every numeric, ALU, bus, and controller vector through them, and differentially checks the bus and
-  controller mirrors against `NesCpuBus` and `NesControllerPorts`.
+  replays every numeric, ALU, bus, controller, and cartridge vector through them, and differentially checks the
+  bus and controller mirrors against `NesCpuBus` and `NesControllerPorts`. The cartridge mirror is
+  `GoboscriptCartridgeParser`, which is compared against `parse_ines_rom` for every `flags6` byte, every
+  `flags7` byte, every legacy PRG RAM bank count, every NES 2.0 mapper and RAM byte, and all 4,096 encoded
+  NES 2.0 ROM sizes, through the shared projection in `tests/support/cartridge_projection.ts`.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared
   inside a loop body, no name colliding with a GoboScript keyword or a Scratch block shape, sprite sources that
-  reference only Stage-owned state, every identifier resolvable in its translation unit, and mirror
-  name/arity parity for each ported helper.
+  reference only Stage-owned state, every identifier resolvable in its translation unit, mirror name/arity
+  parity for each ported helper, and call shapes: a `proc` must be called as `name arg1, arg2;` without
+  parentheses and a `func` as `name(arg1, arg2)`, each with its declared argument count.
 
 A pass means the ported arithmetic and the source shape are consistent with the reference. It does not mean the
 project compiles, loads in TurboWarp, or meets any performance target.

@@ -7,13 +7,20 @@ import { NesCpuBus } from "../src/nes/cpu/nes_cpu_bus.js";
 import type { CpuStatusFlag } from "../src/nes/cpu/registers.js";
 import * as registers from "../src/nes/cpu/registers.js";
 import { NesControllerPorts } from "../src/nes/input/controller.js";
+import {
+    CARTRIDGE_HEADER_BYTES,
+    make_cartridge_image,
+    project_cartridge_header,
+} from "./support/cartridge_projection.js";
+import { parse_ines_rom } from "../src/nes/cartridge/ines.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { get_shared_vector_suite, vector_input } from "./support/shared_port_vectors.js";
 
 /**
  * Exhaustive comparison of the bit-free GoboScript port algorithms with the bitwise
  * TypeScript reference. tests/support/goboscript_port_algorithms.ts mirrors the arithmetic in
- * scratch/src/numeric.gs, cpu_status.gs, cpu_alu.gs, controller.gs, and cpu_bus.gs, so a
+ * scratch/src/numeric.gs, cpu_status.gs, cpu_alu.gs, controller.gs, cpu_bus.gs, and
+ * cartridge.gs, so a
  * divergence here means either the mirror or the reference is wrong; a pass means the ported
  * arithmetic reproduces production CPU, bus, and controller behavior for every input in the
  * swept ranges. It does not mean the .gs sources compile: the pinned GoboScript toolchain is
@@ -789,6 +796,216 @@ test("the mirror reproduces every shared controller vector", () => {
 
         const reads = Array.from({ length: read_count }, () => ports.serial_read(controller_index));
         assert.deepEqual(reads, [...vector.expected], `controller vector ${vector.id}`);
+    }
+});
+
+const CARTRIDGE_MAGIC: readonly number[] = [0x4e, 0x45, 0x53, 0x1a];
+
+/** Builds one 16-byte header from the iNES fields the sweeps vary. */
+function cartridge_header(
+    prg_banks: number,
+    chr_banks: number,
+    flags6: number,
+    flags7: number,
+    byte8 = 0,
+    byte9 = 0,
+    byte10 = 0,
+    byte11 = 0,
+): number[] {
+    return [...CARTRIDGE_MAGIC, prg_banks, chr_banks, flags6, flags7, byte8, byte9, byte10, byte11, 0, 0, 0, 0, 0, 0];
+}
+
+/** Parses one header with the mirror and the reference and compares all eighteen values. */
+function assert_cartridge_headers_agree(image_bytes: number, header: readonly number[], label: string): number[] {
+    const parser = new ported.GoboscriptCartridgeParser();
+    parser.image_bytes = image_bytes;
+
+    for (let index = 0; index < CARTRIDGE_HEADER_BYTES; index += 1) {
+        parser.header[index] = header[index] ?? 0;
+    }
+
+    parser.parse();
+    const reported = parser.reported_values();
+    assert.deepEqual(reported, project_cartridge_header(image_bytes, header), label);
+    return reported;
+}
+
+test("the mirror reproduces every shared cartridge vector", () => {
+    for (const vector of get_shared_vector_suite("cartridge").vectors) {
+        const parser = new ported.GoboscriptCartridgeParser();
+        parser.image_bytes = vector_input(vector, 0);
+
+        for (let index = 0; index < CARTRIDGE_HEADER_BYTES; index += 1) {
+            parser.header[index] = vector_input(vector, index + 1);
+        }
+
+        parser.parse();
+        assert.deepEqual(parser.reported_values(), [...vector.expected], `cartridge vector ${vector.id}`);
+        assert.deepEqual(
+            parser.reported_values(),
+            project_cartridge_header(parser.image_bytes, parser.header),
+            `cartridge vector ${vector.id} against the reference parse`,
+        );
+    }
+});
+
+test("the mirror cartridge parser matches the reference for every flags6 and flags7 byte", () => {
+    for (let flags6 = 0; flags6 < 256; flags6 += 1) {
+        assert_cartridge_headers_agree(16_912, cartridge_header(1, 0, flags6, 0x00), `flags6 ${flags6}`);
+    }
+
+    for (let flags7 = 0; flags7 < 256; flags7 += 1) {
+        assert_cartridge_headers_agree(41_488, cartridge_header(2, 1, 0x41, flags7), `flags7 ${flags7}`);
+    }
+});
+
+test("the mirror cartridge parser matches the reference for every legacy PRG RAM bank count", () => {
+    for (let banks = 0; banks < 16; banks += 1) {
+        for (const battery_bit of [0x00, 0x02]) {
+            assert_cartridge_headers_agree(
+                41_488,
+                cartridge_header(2, 1, 0x01 | battery_bit, 0x00, banks),
+                `banks ${banks} battery ${battery_bit}`,
+            );
+        }
+    }
+});
+
+test("the mirror cartridge parser matches the reference for every NES 2.0 mapper and RAM byte", () => {
+    for (let byte8 = 0; byte8 < 256; byte8 += 1) {
+        assert_cartridge_headers_agree(41_488, cartridge_header(2, 1, 0xf1, 0xf8, byte8), `mapper byte ${byte8}`);
+    }
+
+    for (let byte10 = 0; byte10 < 256; byte10 += 1) {
+        assert_cartridge_headers_agree(41_488, cartridge_header(2, 1, 0x01, 0x08, 0, 0, byte10), `byte10 ${byte10}`);
+    }
+
+    for (let byte11 = 0; byte11 < 256; byte11 += 1) {
+        assert_cartridge_headers_agree(41_488, cartridge_header(2, 1, 0x01, 0x08, 0, 0, 0, byte11), `byte11 ${byte11}`);
+    }
+});
+
+test("the mirror NES 2.0 ROM size decoder matches the reference for every encoded size", () => {
+    const exact_image_cap_bytes = 64 * 1024;
+    const max_image_bytes = 32 * 1024 * 1024;
+    const large_cases: { readonly low: number; readonly high: number; readonly decoded: number }[] = [];
+
+    for (let high = 0; high < 16; high += 1) {
+        for (let low = 0; low < 256; low += 1) {
+            const decoded = ported.decode_nes2_rom_size(low, high, 16_384);
+            const header = cartridge_header(low, 0, 0x00, 0x08, 0, high);
+
+            if (decoded < 0) {
+                // The reference decoder returns undefined, which the port reports as -1.
+                assert_cartridge_headers_agree(CARTRIDGE_HEADER_BYTES, header, `unsafe low ${low} high ${high}`);
+                continue;
+            }
+
+            if (decoded <= exact_image_cap_bytes) {
+                const reported = assert_cartridge_headers_agree(
+                    CARTRIDGE_HEADER_BYTES + decoded,
+                    header,
+                    `low ${low} high ${high}`,
+                );
+                assert.equal(reported[8], decoded, `decoded PRG size for low ${low} high ${high}`);
+                continue;
+            }
+
+            // Larger sizes are compared through a short image, which both parsers must reject.
+            assert_cartridge_headers_agree(CARTRIDGE_HEADER_BYTES, header, `oversized low ${low} high ${high}`);
+
+            if (CARTRIDGE_HEADER_BYTES + decoded <= max_image_bytes) {
+                large_cases.push({ low, high, decoded });
+            }
+        }
+    }
+
+    // Four large decoded sizes are also compared with an image that exactly fits them, so the
+    // reference confirms the byte counts and not just the rejection path.
+    const unique_sizes = new Map<number, { readonly low: number; readonly high: number; readonly decoded: number }>();
+
+    for (const entry of large_cases) {
+        unique_sizes.set(entry.decoded, entry);
+    }
+
+    const sorted_cases = [...unique_sizes.values()].sort((left, right) => left.decoded - right.decoded);
+    assert.ok(sorted_cases.length >= 4, "the sweep produced several large but parseable sizes");
+
+    for (const fraction of [0, 1 / 3, 2 / 3, 1]) {
+        const entry = sorted_cases[Math.round(fraction * (sorted_cases.length - 1))];
+        assert.ok(entry !== undefined);
+        const reported = assert_cartridge_headers_agree(
+            CARTRIDGE_HEADER_BYTES + entry.decoded,
+            cartridge_header(entry.low, 0, 0x00, 0x08, 0, entry.high),
+            `large decoded size ${entry.decoded}`,
+        );
+        assert.equal(reported[8], entry.decoded, `decoded PRG size ${entry.decoded}`);
+    }
+});
+
+test("the mirror NES 2.0 RAM size decoder matches the reference for every shift nibble", () => {
+    for (let shift = 0; shift < 16; shift += 1) {
+        const decoded = ported.decode_nes2_ram_size(shift);
+        const prg_reported = assert_cartridge_headers_agree(
+            41_488,
+            cartridge_header(2, 1, 0x01, 0x08, 0, 0, shift, 0),
+            `prg ram shift ${shift}`,
+        );
+        const chr_reported = assert_cartridge_headers_agree(
+            41_488,
+            cartridge_header(2, 1, 0x01, 0x08, 0, 0, 0, shift),
+            `chr ram shift ${shift}`,
+        );
+        assert.equal(prg_reported[10], decoded, `prg ram shift ${shift}`);
+        assert.equal(chr_reported[12], decoded, `chr ram shift ${shift}`);
+    }
+});
+
+test("the mirror power_of_two matches repeated doubling up to the largest decoded shift", () => {
+    for (let exponent = 0; exponent <= 63; exponent += 1) {
+        assert.equal(ported.power_of_two(exponent), 2 ** exponent, `power_of_two(${exponent})`);
+    }
+});
+
+test("the mirror is_safe_size matches the reference safe-integer guard", () => {
+    const samples: readonly number[] = [
+        0,
+        1,
+        512,
+        8_192,
+        16_384,
+        33_554_432,
+        2 ** 40,
+        Number.MAX_SAFE_INTEGER - 1,
+        Number.MAX_SAFE_INTEGER,
+        Number.MAX_SAFE_INTEGER + 1,
+        2 ** 53,
+        2 ** 62,
+        2 ** 63,
+        -1,
+        -Number.MAX_SAFE_INTEGER,
+        -(Number.MAX_SAFE_INTEGER + 1),
+    ];
+
+    for (const sample of samples) {
+        assert.equal(ported.is_safe_size(sample), Number.isSafeInteger(sample) ? 1 : 0, `is_safe_size(${sample})`);
+    }
+});
+
+test("the mirror reports the same failure code as the reference for a truncated image", () => {
+    const header = cartridge_header(2, 1, 0x01, 0x00);
+
+    for (let image_bytes = 0; image_bytes <= CARTRIDGE_HEADER_BYTES; image_bytes += 1) {
+        const parser = new ported.GoboscriptCartridgeParser();
+        parser.image_bytes = image_bytes;
+        make_cartridge_image(image_bytes, header).forEach((value, index) => {
+            parser.header[index] = value;
+        });
+        parser.parse();
+
+        const parsed = parse_ines_rom(make_cartridge_image(image_bytes, header));
+        assert.equal(parser.ok, parsed.ok ? 1 : 0, `image_bytes ${image_bytes}`);
+        assert.deepEqual(parser.reported_values(), project_cartridge_header(image_bytes, header));
     }
 });
 

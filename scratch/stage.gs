@@ -15,6 +15,7 @@ costumes "assets/blank.svg";
 %include src/cpu_alu
 %include src/controller
 %include src/cpu_bus
+%include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
 %include src/vector_selftest

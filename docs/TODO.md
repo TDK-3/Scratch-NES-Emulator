@@ -225,24 +225,36 @@ separate from TypeScript success.
 - [x] Create an initial shared, generated vector set for numeric helpers, CPU instruction state/cycles,
       CPU-bus mirroring/open bus, MMC3 PRG banks/filtered IRQs, scheduled PPU vblank/NMI, pulse APU state,
       controller serialization, and per-instruction ALU results. `tests/fixtures/goboscript/shared_port_vectors.json`
-      is canonical: eight suites and 274 records, whose expected ALU bytes were derived by executing the
-      production CPU. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
+      is canonical: nine suites and 299 records, whose expected ALU bytes were derived by executing the
+      production CPU and whose expected cartridge header fields were derived by executing `parse_ines_rom`. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
       GoboScript list. The schema and deliberately bounded coverage are documented in
       `docs/GOBOSCRIPT_PORT_VECTORS.md`.
 - [x] Port byte/word helpers and tested CPU status/ALU logic to GoboScript; compare against TypeScript
       vectors. `scratch/src/numeric.gs`, `cpu_status.gs`, and `cpu_alu.gs` implement bit-free byte/word/status
       helpers, AND/OR/XOR by weight loop, and ADC, SBC, AND, ORA, EOR, ASL, LSR, ROL, ROR, CMP, CPX, CPY,
-      BIT, INC, and DEC; `scratch/src/vector_selftest.gs` replays suites 1, 3, 7, and 8 in the project.
+      BIT, INC, and DEC; at that milestone `scratch/src/vector_selftest.gs` replayed suites 1, 3, 7, and 8.
       Because the compiler is unavailable, comparison happens through
       `tests/support/goboscript_port_algorithms.ts`, an integer-only mirror of every helper that
       `tests/goboscript-port-algorithms.test.ts` sweeps exhaustively against the bitwise reference and replays
       through the fixture; `tests/goboscript-source.test.ts` lints the sources and enforces mirror parity.
       The `.gs` files remain compile-unvalidated, so the in-project self test has never run.
+- [x] Port cartridge header parsing to GoboScript and pin it with vectors. `scratch/src/cartridge.gs` decodes
+      iNES 1.0 and NES 2.0 headers into the `cartridge_*` globals: signature, version bits, mapper and
+      submapper, mirroring, battery, trainer flag, PRG/CHR ROM sizes including the NES 2.0 exponent form, the
+      four RAM/NVRAM sizes, and the trainer/PRG/CHR offsets, reporting the six reference error codes as
+      integers in TypeScript check order. Suite 9 of the shared fixture holds 25 records derived by executing
+      `parse_ines_rom`, `tests/support/cartridge_projection.ts` projects a reference parse onto those eighteen
+      fields for both tests, and the mirror `GoboscriptCartridgeParser` is compared against the reference for
+      every `flags6`/`flags7` byte, every legacy PRG RAM bank count, every NES 2.0 mapper and RAM byte, all
+      4,096 encoded NES 2.0 ROM sizes, every RAM shift nibble, and image lengths 0 through 16. Not ported:
+      payload copying into bank lists, RAM/NVRAM storage, and mapper dispatch. Compile validation stays
+      blocked by the missing toolchain.
 - [ ] Port the CPU, bus, mapper, PPU, APU, and controller incrementally. Keep GoboScript list indices
       1-based and bound every long no-refresh loop. Done so far: both serial controller ports
-      (`scratch/src/controller.gs`) and a documented CPU-bus subset (`scratch/src/cpu_bus.gs`) covering RAM
-      mirroring, the open-bus latch with driven masks, and `$4016`/`$4017`; PPU, APU, OAM DMA, and cartridge
-      windows behave as absent devices. Not started: CPU fetch/decode/addressing/cycles/interrupts, MMC3,
+      (`scratch/src/controller.gs`), a documented CPU-bus subset (`scratch/src/cpu_bus.gs`) covering RAM
+      mirroring, the open-bus latch with driven masks, and `$4016`/`$4017`, and cartridge header parsing
+      (`scratch/src/cartridge.gs`); PPU, APU, OAM DMA, and cartridge windows still behave as absent devices on
+      the bus. Not started: CPU fetch/decode/addressing/cycles/interrupts, cartridge payload copying, MMC3,
       PPU rendering, and APU channels.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
@@ -257,7 +269,7 @@ separate from TypeScript success.
 
 - [x] Run CPU, PPU, APU, DMA, interrupt, mapper, and timing test suites; document skips and known
       failures. On 2026-10-15, `npm test` passed all 332 tests (including strict type-checking) and
-      `npm run build:ts` passed; on 2026-10-18 it passed all 876 tests. Coverage and known external-ROM
+      `npm run build:ts` passed; on 2026-10-18 it passed all 911 tests. Coverage and known external-ROM
       failures/skips are recorded in `docs/TESTING.md`.
 - [ ] Differentially compare CPU traces and framebuffer/audio outputs against trusted reference
       behavior. The first 5,003 external `nestest` trace entries match; TypeScript and a temporary JSNES 2.1.0
@@ -278,14 +290,14 @@ separate from TypeScript success.
       open under P6 and `docs/COMPLETION_CRITERIA.md`.
 - [x] From a clean npm install (`npm ci`), run TypeScript tests/build and regenerate the selected-ROM and
       shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed. Rechecked on
-      2026-10-18 with 876 tests passing and both generators completing (2,808 vector values, 81,936 ROM
+      2026-10-18 with 911 tests passing and both generators completing (3,808 vector values, 81,936 ROM
       bytes).
 - [ ] Install the documented GoboScript compiler, build/open the `.sb3`, and validate it in TurboWarp;
       review source, asset, and ROM rights before distribution. Compiler availability and runtime validation
       remain blocked; see the P0 notes above.
 - [x] Keep `PROGRESS.md` and `COMPLETION_CRITERIA.md` current with test results, measurements, and open
       blockers. The 2026-10-15 clean-install run passed 332 tests, TypeScript build, and both data generators;
-      the 2026-10-18 run passed 876 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
+      the 2026-10-18 run passed 911 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
       is a progress record, not a claim that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria
       are complete.
 

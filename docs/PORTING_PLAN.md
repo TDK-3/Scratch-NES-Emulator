@@ -33,7 +33,11 @@ host adapter and capability/permission validation.
    runtime validation still blocked by step 1.
 3. **Cartridge metadata.** Port supported header parsing, sizes, trainer offsets, mapper selection, and
    error reporting. Keep TypeScript as the source-of-truth parser until the port handles every shared
-   vector. Only the iNES signature check is ported today.
+   vector. `scratch/src/cartridge.gs` now parses both header versions: signature, version bits, mapper and
+   submapper, mirroring, battery, trainer, PRG/CHR sizes including the NES 2.0 exponent form, the four
+   RAM/NVRAM sizes, and the trainer/PRG/CHR offsets, reporting failures as numeric codes in TypeScript
+   check order. It replays all 25 suite-9 vectors. Still not ported: copying the trainer, PRG, and CHR
+   payload into bank lists, RAM/NVRAM backing storage, and mapper selection.
 4. **CPU scaffolding.** Port register reset, stack operations, status flags, addressing modes, official
    instructions, cycle counts, and interrupts in separately testable groups. Status flags
    (`scratch/src/cpu_status.gs`) and the thirteen ALU operations (`scratch/src/cpu_alu.gs`) are written;
@@ -68,12 +72,17 @@ func is compiled separately into each target that includes it.
 | `src/cpu_alu.gs` | ADC, SBC, AND, ORA, EOR, ASL, LSR, ROL, ROR, CMP, CPX, CPY, BIT, INC, DEC | unofficial ALU combinations |
 | `src/controller.gs` | strobe, falling-edge latch, serial reads with trailing 1s, both ports | four-score, Zapper, Power Pad, microphone |
 | `src/cpu_bus.gs` | RAM and mirroring, open-bus latch, driven-mask merge, `$4016`/`$4017` | PPU, APU, `$4014` OAM DMA, cartridge, cycle counting |
-| `src/rom_loader.gs` | iNES signature check, header state text | header parsing, mapper selection, trainers |
-| `src/vector_selftest.gs` | suites 1, 3, 7, 8 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
+| `src/cartridge.gs` | iNES 1.0 and NES 2.0 header decode, mapper/submapper, mirroring, battery, trainer flag, ROM and RAM sizes, payload offsets, six numeric error codes | payload copying, RAM/NVRAM storage, mapper dispatch |
+| `src/rom_loader.gs` | iNES signature check, header load into the parser, header state text | ROM selection at runtime |
+| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
 
 Overflow for ADC/SBC is derived from signed arithmetic rather than bit masks, and every mask or shift is
 floor division and modulo, because GoboScript exposes no bitwise operators and its `%` and `//` are Scratch's
-floored forms. `tests/support/goboscript_port_algorithms.ts` mirrors all of it in integer-only TypeScript and
+floored forms. `scratch/src/cartridge.gs` raises powers of two by doubling in a `repeat` loop instead of the
+float-based `std/math` helper, and reports `Number.isSafeInteger` loss of precision as a `-1` size that the
+caller turns into the invalid-ROM-size code. Procs are called as `name arg1, arg2;` and funcs as
+`name(arg1, arg2)`; `tests/goboscript-source.test.ts` enforces both shapes and their argument counts, because
+a parenthesized multi-argument proc call does not parse and no compiler is available to report it. `tests/support/goboscript_port_algorithms.ts` mirrors all of it in integer-only TypeScript and
 `tests/goboscript-port-algorithms.test.ts` compares the mirror exhaustively with the bitwise reference, so a
 divergence in the ported arithmetic fails in Node even though the `.gs` sources cannot be compiled here.
 
@@ -96,10 +105,10 @@ divergence in the ported arithmetic fails in Node even though the `.gs` sources 
 ## Shared vectors
 
 The parity contract is in [`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md), with canonical cases at
-`tests/fixtures/goboscript/shared_port_vectors.json`: eight suites and 274 records covering byte/word/status
+`tests/fixtures/goboscript/shared_port_vectors.json`: nine suites and 299 records covering byte/word/status
 and bit helpers, instruction results and cycles, CPU-bus mirroring, open bus, and driven-mask controller
 reads, MMC3 PRG banks and filtered IRQ edges, scheduled PPU vblank/NMI, pulse APU status, serial controller
-reads, and per-instruction ALU value/status results. Node tests run those vectors against the production
+reads, per-instruction ALU value/status results, and iNES/NES 2.0 header decode with its error codes. Node tests run those vectors against the production
 TypeScript modules, the TypeScript mirror of the ported algorithms replays them as well, and
 `npm run scratch:vectors` generates the ignored one-value-per-line list loaded by
 `scratch/src/shared_vectors.gs`.

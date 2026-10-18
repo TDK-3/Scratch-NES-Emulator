@@ -276,8 +276,9 @@ be.
 - Use shared test vectors for the TypeScript and GoboScript implementations.
 - While the compiler is unavailable, keep every ported helper mirrored in
   `tests/support/goboscript_port_algorithms.ts` using integer-only arithmetic, compare that mirror
-  exhaustively with the bitwise reference, and lint the `.gs` sources for grammar shape and reserved names.
-  The mirror is a substitute for compilation, not a claim that the project builds.
+  exhaustively with the bitwise reference, and lint the `.gs` sources for grammar shape, reserved names, and
+  proc/func call shapes and argument counts. The mirror is a substitute for compilation, not a claim that the
+  project builds.
 - Use generated decimal ROM list data only as a build-time bridge. Do not change the canonical ROM file
 into a hand-edited text format.
 

@@ -259,6 +259,13 @@ lint in `tests/goboscript-source.test.ts` exists.
   `stage.vars`, `stage.lists`, `stage.enums`, and `stage.structs` as globals), but procs and funcs are not
   global: each target compiles its own copies from the headers it includes. Shared state therefore belongs in
   Stage-included headers only, and a header included by a sprite must not declare `var` or `list`.
+- Call shapes are not interchangeable. A proc call is the statement rule `<name:NAME> <args:Kwargs> ";"`,
+  which becomes `Stmt::ProcCall` unless `Block::from_shape` matches a builtin, while a func call is the
+  expression rule `<name:NAME> "(" <args:Kwargs> ")"`. Since `"(" <Expr> ")"` only groups a single
+  expression, `write_ram(0, 1);` does not parse at all, while `write_ram(1);` parses by accident as one
+  grouped argument, and a func used as a statement becomes an unknown-proc call. Reading that rule out of the
+  grammar found 39 parenthesized proc call sites in this project's `.gs` sources, all now written as
+  `name arg1, arg2;` and guarded by a lint that also checks argument counts.
 - Any proc or func whose name and arity match a builtin is emitted as that builtin
   (`Block::from_shape` / `Repr::from_shape` in `src/blocks.rs`): 130 block and reporter shapes plus 64
   keyword tokens from `src/lexer/token.rs`. The lint forbids all of them as declaration names.
@@ -338,10 +345,11 @@ assets, run `goboscript build`, open or reload the emitted `.sb3`, and test it i
    playable emulator.
 
 Position as of 2026-10-18: steps 1 through 4 are done for the helper layer (numeric, status, ALU, controller,
-and a CPU-bus subset), and step 6 is written but unrun, because the project cannot be compiled here. Step 5
-(CPU state transitions and yield policy) is the next porting work, and step 7 remains entirely blocked on a
-toolchain. The in-project self test replays suites 1, 3, 7, and 8 of the shared fixture and counts the CPU,
-MMC3, PPU, and APU suites as skipped rather than passing.
+a CPU-bus subset, and cartridge header parsing), and step 6 is written but unrun, because the project cannot
+be compiled here. Step 5 (CPU state transitions and yield policy) and the cartridge payload copy are the next
+porting work, and step 7 remains entirely blocked on a toolchain. The in-project self test replays suites 1,
+3, 7, 8, and 9 of the shared fixture and counts the CPU, MMC3, PPU, and APU suites as skipped rather than
+passing.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

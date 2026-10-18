@@ -24,6 +24,7 @@ import { NesControllerPorts } from "../src/nes/input/controller.js";
 import { Ppu2C02 } from "../src/nes/ppu/ppu_2c02.js";
 import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
 import { FakeCpuBus } from "./support/FakeCpuBus.js";
+import { CARTRIDGE_HEADER_BYTES, project_cartridge_header } from "./support/cartridge_projection.js";
 import {
     for_each_vector,
     shared_port_fixture as fixture,
@@ -408,6 +409,17 @@ for_each_vector("controller", (vector) => {
     });
 
     assert.deepEqual(actual, vector.expected);
+});
+
+for_each_vector("cartridge", (vector) => {
+    assert.equal(vector.operation, 1, "Cartridge vector operation 1 parses one header against an image length.");
+    assert.equal(vector.input.length, CARTRIDGE_HEADER_BYTES + 1, "Cartridge vectors supply a complete header.");
+
+    const [image_bytes] = vector.input;
+    assert.ok(image_bytes !== undefined, "The first cartridge input is the ROM image length in bytes.");
+
+    const actual = project_cartridge_header(image_bytes, vector.input.slice(1));
+    assert.deepEqual(actual, [...vector.expected]);
 });
 
 const ALU_PROGRAM_ADDRESS = 0x8000;

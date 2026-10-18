@@ -8,9 +8,14 @@
 # This header is included by the Stage only, because the list it declares is shared state.
 # It stays free of target-specific blocks so it can never be compiled into a sprite by
 # accident; reporting belongs to the self-test summary, not to a `say` in this header.
-list cartridge_bytes "data/test_rom_bytes.txt";
 
-# True when the embedded data still carries the four-byte iNES signature "NES\x1A".
+%include src/cartridge
+
+list cartridge_bytes "data/test_rom_bytes.txt";
+var rom_header_state_text = "";
+
+# True when the embedded data still carries the four-byte iNES signature "NES\x1A". This reads
+# the ROM list directly, so it stays cheap enough to call before any vector replay.
 func test_rom_has_ines_header() {
     return cartridge_bytes[1] == 78
         and cartridge_bytes[2] == 69
@@ -18,11 +23,30 @@ func test_rom_has_ines_header() {
         and cartridge_bytes[4] == 26;
 }
 
-# Short status word for the self-test summary.
-func rom_header_state() {
-    if test_rom_has_ines_header() {
-        return "ok";
-    }
+# Copies the embedded header into the parser's 16-byte input list and records the image size.
+proc cartridge_load_header {
+    local index = 1;
+    cartridge_image_bytes = length cartridge_bytes;
 
-    return "missing";
+    repeat cartridge_limit.header_bytes {
+        cartridge_header[index] = normalize_byte(cartridge_bytes[index]);
+        index++;
+    }
+}
+
+# Parses the embedded header and records one summary line. This runs before the shared vector
+# replay, because those records overwrite the parser's input list and result globals.
+proc rom_header_report {
+    if not test_rom_has_ines_header() {
+        rom_header_state_text = "missing";
+    } else {
+        cartridge_load_header;
+        cartridge_parse_header;
+
+        if cartridge_ok == 1 {
+            rom_header_state_text = "ok mapper " & cartridge_mapper_id & " format " & cartridge_format;
+        } else {
+            rom_header_state_text = "error " & cartridge_error_code;
+        }
+    }
 }

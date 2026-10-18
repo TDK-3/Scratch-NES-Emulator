@@ -220,17 +220,46 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       was mutation-checked against deliberately broken sources.
 - [x] Added `tests/support/shared_port_vectors.ts` so both the reference test and the mirror test load the
       canonical fixture through one loader.
+- [x] Recorded the docs sweep for that milestone: port state, corpus results, test totals, the mirror
+      validation layer, and the GoboScript research findings, with `docs/PROJECT_STRUCTURE.md` regenerated
+      from `git ls-files`.
+- [x] Ported the cartridge header parser to `scratch/src/cartridge.gs`: iNES 1.0 and NES 2.0 signature,
+      version bits, mapper and submapper, mirroring, battery, trainer flag, PRG/CHR ROM sizes including the
+      NES 2.0 exponent/multiplier form, the four RAM/NVRAM sizes, and the trainer/PRG/CHR payload offsets,
+      with the six `RomParseErrorCode` values reported as integers in TypeScript check order. Powers of two
+      are built by doubling in a `repeat` loop and unsafe sizes become `-1`, because GoboScript has no
+      exponent operator and no bitwise operators. `scratch/src/rom_loader.gs` now copies the embedded header
+      into the parser and writes `rom_header_state_text` before the vector replay overwrites the parser
+      state. Payload copying, RAM backing storage, and mapper dispatch are still TypeScript-only.
+- [x] Grew the shared fixture from 274 to 299 records by adding suite 9 (`cartridge`, 25 records) whose
+      eighteen expected values were derived by executing `parse_ines_rom` on synthesized images, never by
+      hand. The suite covers the supplied mapper 4 ROM's real header, NROM sizes, CHR RAM, trainers,
+      four-screen, legacy PRG RAM banks with and without a battery, mapper bits above 255, NES 2.0
+      submappers, exponent sizes, RAM shifts, and every error code including the 32 MiB image limit reached
+      with a 64-byte image.
+- [x] Added `tests/support/cartridge_projection.ts`, the reference-side projection of a header parse onto
+      the flat suite-9 array, shared by `tests/shared-port-vectors.test.ts` and the mirror test so both
+      compare the same eighteen fields. `GoboscriptCartridgeParser` in the mirror is now compared against
+      `parse_ines_rom` for every `flags6` byte, every `flags7` byte, every legacy PRG RAM bank count, every
+      NES 2.0 mapper and RAM byte, all 4,096 encoded NES 2.0 ROM sizes, every RAM shift nibble, and image
+      lengths 0 through 16 (nine new tests, 41 in that file).
+- [x] Fixed a systematic port syntax error and locked it down: every parenthesized multi-argument `proc`
+      call in the `.gs` sources (39 call sites across `cartridge.gs`, `cpu_bus.gs`, and
+      `vector_selftest.gs`) would not parse, because GoboScript calls a proc as `name arg1, arg2;` and only
+      a `func` takes parentheses. `tests/goboscript-source.test.ts` gained a call-shape and argument-count
+      lint (14 tests), mutation-checked for a parenthesized proc call, a func used as a statement, and a
+      wrong argument count on each kind.
 
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 876 tests in about 11.6 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 275 shared port-vector tests (274 records), 32 GoboScript port-algorithm
-  tests, 13 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
+- `npm test` on 2026-10-18: passed all 911 tests in about 12.6 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 300 shared port-vector tests (299 records), 41 GoboScript port-algorithm
+  tests, 14 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 2,808 decimal values for 274 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 3,808 decimal values for 299 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -247,7 +276,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 274 records and 2,808 values).
+  (2026-10-15 figures; the fixture has since grown to 299 records and 3,808 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

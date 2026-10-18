@@ -82,14 +82,15 @@ warnings. TurboWarp persistence and full-console save/load states are not implem
 ## Scratch/TurboWarp ROM deployment
 
 The GoboScript scaffold embeds one selected ROM at build time as a decimal list (`test_rom.nes` by default;
-`--rom` selects another file). The generated project checks the iNES signature but does not yet parse or run
-the game. It has no runtime ROM file picker, controls, rendering, audio, NVRAM persistence, or console
+`--rom` selects another file). The generated project checks the iNES signature and parses the header, but it
+does not yet copy the ROM payload or run the game. It has no runtime ROM file picker, controls, rendering, audio, NVRAM persistence, or console
 save states. A GoboScript compiler and successful `.sb3`/TurboWarp validation are still outstanding.
 
 What the project does contain today: bit-free numeric and status helpers, thirteen ALU operations, both serial
-controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`), and a
-Stage-run self test that replays 274 shared vectors from `scratch/data/shared_port_vectors.txt`, counting the
-CPU, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
+controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`), iNES 1.0
+and NES 2.0 cartridge header parsing (mapper and submapper, mirroring, battery, trainer, ROM and RAM sizes,
+payload offsets, and six numeric error codes), and a Stage-run self test that replays 299 shared vectors from
+`scratch/data/shared_port_vectors.txt`, counting the CPU, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
 Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
 obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared
 exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic

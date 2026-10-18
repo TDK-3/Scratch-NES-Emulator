@@ -64,6 +64,7 @@ const SCRATCH_BLOCK_NAMES: readonly string[] = [
 
 /** Headers whose algorithms must stay mirrored in tests/support/goboscript_port_algorithms.ts. */
 const MIRRORED_HEADERS: readonly string[] = [
+    "src/cartridge.gs",
     "src/controller.gs",
     "src/cpu_alu.gs",
     "src/cpu_bus.gs",
@@ -159,17 +160,52 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read", mirror: "GoboscriptCpuBus.read" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read_io", mirror: "GoboscriptCpuBus.read_io" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_write", mirror: "GoboscriptCpuBus.write" },
+    { source: "src/cartridge.gs", declaration: "header_byte", mirror: "GoboscriptCartridgeParser.header_byte" },
+    { source: "src/cartridge.gs", declaration: "power_of_two", mirror: "power_of_two" },
+    { source: "src/cartridge.gs", declaration: "is_safe_size", mirror: "is_safe_size" },
+    {
+        source: "src/cartridge.gs",
+        declaration: "decode_nes2_rom_size",
+        mirror: "decode_nes2_rom_size",
+    },
+    {
+        source: "src/cartridge.gs",
+        declaration: "decode_nes2_ram_size",
+        mirror: "decode_nes2_ram_size",
+    },
+    {
+        source: "src/cartridge.gs",
+        declaration: "cartridge_has_magic",
+        mirror: "GoboscriptCartridgeParser.cartridge_has_magic",
+    },
+    {
+        source: "src/cartridge.gs",
+        declaration: "cartridge_reset_results",
+        mirror: "GoboscriptCartridgeParser.reset",
+    },
+    { source: "src/cartridge.gs", declaration: "cartridge_fail", mirror: "GoboscriptCartridgeParser.fail" },
+    {
+        source: "src/cartridge.gs",
+        declaration: "cartridge_parse_header",
+        mirror: "GoboscriptCartridgeParser.parse",
+    },
+    {
+        source: "src/rom_loader.gs",
+        declaration: "cartridge_load_header",
+        mirror: null,
+        reason: "copies the generated ROM list into the parser input; ROM data is covered by scratch-rom-assets",
+    },
+    {
+        source: "src/rom_loader.gs",
+        declaration: "rom_header_report",
+        mirror: null,
+        reason: "formats the self-test summary text",
+    },
     {
         source: "src/rom_loader.gs",
         declaration: "test_rom_has_ines_header",
         mirror: null,
         reason: "checks the generated ROM data list, which tests/scratch-rom-assets.test.ts covers",
-    },
-    {
-        source: "src/rom_loader.gs",
-        declaration: "rom_header_state",
-        mirror: null,
-        reason: "formats the self-test summary text",
     },
     {
         source: "src/vector_selftest.gs",
@@ -187,6 +223,7 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/vector_selftest.gs", declaration: "run_alu_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_bus_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_controller_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/vector_selftest.gs", declaration: "run_cartridge_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
 ];
 
@@ -196,6 +233,7 @@ test("the GoboScript project contains the expected sources", () => {
     const paths = sources.map((source) => source.path).sort();
     assert.deepEqual(paths, [
         "main.gs",
+        "src/cartridge.gs",
         "src/controller.gs",
         "src/cpu_alu.gs",
         "src/cpu_bus.gs",
@@ -375,6 +413,64 @@ test("no declared name collides with a GoboScript keyword or a Scratch block sha
     }
 });
 
+test("procs are called without parentheses and funcs with parentheses at the declared arity", () => {
+    // GoboScript calls a proc as `name arg1, arg2;` and a func as `name(arg1, arg2)`. A
+    // parenthesized multi-argument proc call does not parse, and a func used as a statement
+    // compiles to an unknown-proc error, so without a compiler these shapes are worth a lint.
+    const callables = declared_callables();
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        const text = callable_scan_text(source);
+
+        for (const call of parenthesized_call_sites(text)) {
+            const callable = callables.get(call.name);
+
+            if (callable === undefined) {
+                continue;
+            }
+
+            const location = `${source.path}:${line_at(text, call.offset)}`;
+
+            if (callable.kind === "proc") {
+                violations.push(`${location}: proc ${call.name} must be called without parentheses`);
+                continue;
+            }
+
+            if (call.args.length !== callable.arity) {
+                violations.push(
+                    `${location}: func ${call.name} expects ${callable.arity} argument(s), ` +
+                        `called with ${call.args.length}`,
+                );
+            }
+        }
+
+        for (const call of statement_call_sites(text)) {
+            const callable = callables.get(call.name);
+
+            if (callable === undefined) {
+                continue;
+            }
+
+            const location = `${source.path}:${line_at(text, call.offset)}`;
+
+            if (callable.kind === "func") {
+                violations.push(`${location}: func ${call.name} returns a value and cannot be a statement`);
+                continue;
+            }
+
+            if (call.args.length !== callable.arity) {
+                violations.push(
+                    `${location}: proc ${call.name} expects ${callable.arity} argument(s), ` +
+                        `called with ${call.args.length}`,
+                );
+            }
+        }
+    }
+
+    assert.deepEqual(violations, []);
+});
+
 test("sprite sources only reference Stage-owned state or builtins", () => {
     const stage_names = stage_state_names();
 
@@ -489,7 +585,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
     const handled = new Set(
         (dispatcher_body.match(/port_suite\.(\w+)/g) ?? []).map((match) => match.slice("port_suite.".length)),
     );
-    assert.deepEqual([...handled].sort(), ["alu", "bus", "controller", "numeric"]);
+    assert.deepEqual([...handled].sort(), ["alu", "bus", "cartridge", "controller", "numeric"]);
 
     const skipped = shared_port_fixture.suites
         .filter((suite) => !handled.has(suite.name))
@@ -710,6 +806,147 @@ function referenced_identifiers(source: GsSource): string[] {
 }
 
 /** Root .gs files outside src/ are targets: stage.gs is the Stage, the rest are sprites. */
+interface GsCallable {
+    readonly kind: "proc" | "func";
+    readonly arity: number;
+    readonly path: string;
+    readonly line: number;
+}
+
+interface GsCallSite {
+    readonly name: string;
+    readonly args: readonly string[];
+    readonly offset: number;
+}
+
+/** Every proc and func in the project. Names are unique because a call site cannot say which. */
+function declared_callables(): ReadonlyMap<string, GsCallable> {
+    const callables = new Map<string, GsCallable>();
+
+    for (const source of sources) {
+        for (const declaration of source.declarations) {
+            if (declaration.kind !== "proc" && declaration.kind !== "func") {
+                continue;
+            }
+
+            const existing = callables.get(declaration.name);
+            assert.equal(
+                existing,
+                undefined,
+                `${source.path}:${declaration.line}: ${declaration.name} is already declared in ${existing?.path}`,
+            );
+            callables.set(declaration.name, {
+                kind: declaration.kind,
+                arity: declaration.args.length,
+                path: source.path,
+                line: declaration.line,
+            });
+        }
+    }
+
+    return callables;
+}
+
+/** The source with comments, strings, and declaration headers removed, keeping line breaks. */
+function callable_scan_text(source: GsSource): string {
+    return source.lines
+        .map((line) => (/^\s*(nowarp\s+)?(proc|func)\s/.test(line) ? "" : strip_comments_and_strings(line)))
+        .join("\n");
+}
+
+/** Splits an argument list on commas that are not nested in parentheses or brackets. */
+function split_top_level_arguments(raw: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let current = "";
+
+    for (const character of raw) {
+        if (character === "(" || character === "[") {
+            depth += 1;
+        } else if (character === ")" || character === "]") {
+            depth -= 1;
+        }
+
+        if (character === "," && depth === 0) {
+            parts.push(current);
+            current = "";
+            continue;
+        }
+
+        current += character;
+    }
+
+    parts.push(current);
+    return parts.map((part) => part.trim()).filter((part) => part !== "");
+}
+
+/** Every `name(...)` call in the text, matched with balanced parentheses. */
+function parenthesized_call_sites(text: string): GsCallSite[] {
+    const sites: GsCallSite[] = [];
+    const pattern = /(^|[^\w.$])([a-z]\w*)\s*\(/g;
+
+    for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+        const name = match[2] ?? "";
+        const offset = (match.index ?? 0) + (match[0]?.length ?? 0) - 1;
+        let depth = 1;
+        let cursor = offset + 1;
+
+        while (cursor < text.length && depth > 0) {
+            const character = text[cursor];
+
+            if (character === "(") {
+                depth += 1;
+            } else if (character === ")") {
+                depth -= 1;
+            }
+
+            cursor += 1;
+        }
+
+        if (depth === 0) {
+            sites.push({ name, args: split_top_level_arguments(text.slice(offset + 1, cursor - 1)), offset });
+        }
+    }
+
+    return sites;
+}
+
+/**
+ * Every statement-position call. Statements are separated by semicolons and braces, so the
+ * first identifier of each fragment is either a keyword, an assignment target, or a proc call.
+ */
+function statement_call_sites(text: string): GsCallSite[] {
+    const sites: GsCallSite[] = [];
+    let cursor = 0;
+
+    for (const fragment of text.split(/[;{}]/)) {
+        const trimmed = fragment.replace(/^[\s\n]+/, "");
+        const offset = cursor + (fragment.length - trimmed.length);
+        cursor += fragment.length + 1;
+        const head = /^([a-z]\w*)\b([\s\S]*)$/.exec(trimmed);
+
+        if (head === null) {
+            continue;
+        }
+
+        const rest = (head[2] ?? "").trim();
+
+        if (rest.startsWith("(")) {
+            // A parenthesized call is reported by parenthesized_call_sites instead.
+            continue;
+        }
+
+        sites.push({ name: head[1] ?? "", args: split_top_level_arguments(rest), offset });
+    }
+
+    return sites;
+}
+
+/** The 1-based line number of a character offset in the scanned text. */
+function line_at(text: string, offset: number): number {
+    return text.slice(0, offset).split("\n").length;
+}
+
 function is_sprite_root(path: string): boolean {
     return path !== "stage.gs" && !path.startsWith("src/");
 }

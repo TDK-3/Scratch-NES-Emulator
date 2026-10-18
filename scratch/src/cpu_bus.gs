@@ -77,7 +77,7 @@ proc cpu_bus_write address, value {
     }
 
     if numeric_address == 16406 {
-        controller_write_strobe(numeric_value);
+        controller_write_strobe numeric_value;
     }
 
     # PPU, APU, $4014 OAM DMA, and cartridge writes are not ported yet.
