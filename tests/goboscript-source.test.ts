@@ -1,0 +1,854 @@
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+import * as ported from "./support/goboscript_port_algorithms.js";
+import { shared_port_fixture } from "./support/shared_port_vectors.js";
+
+/**
+ * Source-level checks for the GoboScript project in scratch/.
+ *
+ * The pinned GoboScript compiler needs Cargo and rustc, which are unavailable here, so these
+ * sources cannot be compiled. This file enforces the rules that are knowable without the
+ * compiler: the syntax shape the upstream grammar accepts, the constructs that make the
+ * upstream compiler panic, name collisions with Scratch's builtin block shapes, the project's
+ * indentation and ASCII rules, and the contract that keeps the .gs algorithms in step with
+ * their TypeScript mirrors and with the shared vector fixture.
+ */
+
+const SCRATCH_DIRECTORY = fileURLToPath(new URL("../scratch/", import.meta.url));
+const MAX_LINE_COLUMNS = 120;
+const INDENT_WIDTH = 4;
+
+/** Reserved words from the upstream lexer's token table (src/lexer/token.rs, compiler 3.x). */
+const GOBOSCRIPT_KEYWORDS: readonly string[] = [
+    "abs", "acos", "add", "and", "antiln", "antilog", "as", "asin", "at", "atan", "ceil", "cloud", "cos", "costumes",
+    "delete", "elif", "else", "enum", "false", "floor", "forever", "func", "hide", "if", "in", "insert", "length",
+    "list", "ln", "local", "log", "not", "nowarp", "on", "onbackdrop", "onclick", "onclone", "onflag", "onkey",
+    "onloudness", "ontimer", "or", "point_in_direction", "proc", "repeat", "return", "round", "set_size", "set_volume",
+    "set_x", "set_y", "set_rotation_style_all_around", "set_rotation_style_do_not_rotate",
+    "set_rotation_style_left_right", "show", "sin", "sounds", "sqrt", "struct", "tan", "to", "true", "until", "var",
+];
+
+/**
+ * Builtin block and reporter shapes from the upstream `Block::from_shape` and
+ * `Repr::from_shape` tables. A proc or func whose name and arity match one of these is
+ * compiled into the builtin block instead of a custom block.
+ */
+const SCRATCH_BLOCK_NAMES: readonly string[] = [
+    "answer", "ask", "backdrop_name", "backdrop_number", "broadcast", "broadcast_and_wait", "change_brightness_effect",
+    "change_color_effect", "change_fisheye_effect", "change_ghost_effect", "change_mosaic_effect",
+    "change_pan_effect", "change_pen_brightness", "change_pen_hue", "change_pen_saturation", "change_pen_size",
+    "change_pen_transparency", "change_pitch_effect", "change_pixelate_effect", "change_size", "change_tempo",
+    "change_volume", "change_whirl_effect", "change_x", "change_y", "clear_graphic_effects", "clear_sound_effects",
+    "clone", "color_is_touching_color", "contains", "costume_name", "costume_number", "current_date",
+    "current_day_of_week", "current_hour", "current_minute", "current_month", "current_second", "current_year",
+    "days_since_2000", "delete_this_clone", "direction", "distance_to", "distance_to_mouse_pointer", "erase_all",
+    "glide", "glide_to_mouse_pointer", "glide_to_random_position", "go_backward", "go_forward", "goto", "goto_back",
+    "goto_front", "goto_mouse_pointer", "goto_random_position", "hide", "if_on_edge_bounce", "key_pressed", "loudness",
+    "mouse_down", "mouse_x", "mouse_y", "move", "next_backdrop", "next_costume", "online", "pen_down", "pen_up",
+    "play_drum", "play_note", "play_sound_until_done", "point_in_direction", "point_towards",
+    "point_towards_mouse_pointer", "point_towards_random_direction", "previous_backdrop", "random",
+    "random_backdrop", "reset_timer", "rest", "say", "set_brightness_effect", "set_color_effect",
+    "set_drag_mode_draggable", "set_drag_mode_not_draggable", "set_fisheye_effect", "set_ghost_effect",
+    "set_instrument", "set_mosaic_effect", "set_pan_effect", "set_pen_brightness", "set_pen_color", "set_pen_hue",
+    "set_pen_saturation", "set_pen_size", "set_pen_transparency", "set_pitch_effect", "set_pixelate_effect",
+    "set_rotation_style_all_around", "set_rotation_style_do_not_rotate", "set_rotation_style_left_right", "set_size",
+    "set_tempo", "set_volume", "set_whirl_effect", "set_x", "set_y", "show", "size", "stamp", "start_sound",
+    "stop_all", "stop_all_sounds", "stop_other_scripts", "stop_this_script", "switch_backdrop", "switch_costume",
+    "think", "timer", "touching", "touching_color", "touching_edge", "touching_mouse_pointer", "turn_left",
+    "turn_right", "username", "volume", "wait", "x_position", "y_position",
+];
+
+/** Headers whose algorithms must stay mirrored in tests/support/goboscript_port_algorithms.ts. */
+const MIRRORED_HEADERS: readonly string[] = [
+    "src/controller.gs",
+    "src/cpu_alu.gs",
+    "src/cpu_bus.gs",
+    "src/cpu_status.gs",
+    "src/numeric.gs",
+];
+
+interface GsDeclaration {
+    readonly kind: "proc" | "func" | "var" | "list" | "enum";
+    readonly name: string;
+    readonly args: readonly string[];
+    readonly warp: boolean;
+    readonly body: readonly string[];
+    readonly line: number;
+}
+
+interface GsEnum {
+    readonly name: string;
+    readonly variants: ReadonlyMap<string, number>;
+}
+
+interface GsSource {
+    readonly path: string;
+    readonly text: string;
+    readonly lines: readonly string[];
+    readonly declarations: readonly GsDeclaration[];
+    readonly enums: readonly GsEnum[];
+    readonly includes: readonly string[];
+}
+
+/**
+ * The parity contract between the GoboScript sources and their TypeScript mirror. A `mirror`
+ * of null means the declaration is deliberately not mirrored, and `reason` says why.
+ */
+const MIRROR_CONTRACT: readonly {
+    readonly source: string;
+    readonly declaration: string;
+    readonly mirror: string | null;
+    readonly reason?: string;
+}[] = [
+    { source: "src/numeric.gs", declaration: "to_number", mirror: "to_number" },
+    { source: "src/numeric.gs", declaration: "normalize_byte", mirror: "normalize_byte" },
+    { source: "src/numeric.gs", declaration: "normalize_word", mirror: "normalize_word" },
+    { source: "src/numeric.gs", declaration: "to_signed_byte", mirror: "to_signed_byte" },
+    { source: "src/numeric.gs", declaration: "byte_high", mirror: "byte_high" },
+    { source: "src/numeric.gs", declaration: "byte_low", mirror: "byte_low" },
+    { source: "src/numeric.gs", declaration: "join_bytes", mirror: "join_bytes" },
+    { source: "src/numeric.gs", declaration: "bit_at", mirror: "bit_at" },
+    { source: "src/numeric.gs", declaration: "bitwise_and", mirror: "bitwise_and" },
+    { source: "src/numeric.gs", declaration: "bitwise_or", mirror: "bitwise_or" },
+    { source: "src/numeric.gs", declaration: "bitwise_xor", mirror: "bitwise_xor" },
+    { source: "src/cpu_status.gs", declaration: "normalize_status", mirror: "normalize_status" },
+    { source: "src/cpu_status.gs", declaration: "has_status_flag", mirror: "has_status_flag" },
+    { source: "src/cpu_status.gs", declaration: "set_status_flag", mirror: "set_status_flag" },
+    {
+        source: "src/cpu_status.gs",
+        declaration: "update_zero_negative_flags",
+        mirror: "update_zero_negative_flags",
+    },
+    { source: "src/cpu_status.gs", declaration: "pack_status_for_stack", mirror: "pack_status_for_stack" },
+    { source: "src/cpu_status.gs", declaration: "unpack_status_from_stack", mirror: "unpack_status_from_stack" },
+    { source: "src/cpu_alu.gs", declaration: "alu_add_with_carry", mirror: "alu_add_with_carry" },
+    { source: "src/cpu_alu.gs", declaration: "alu_subtract_with_carry", mirror: "alu_subtract_with_carry" },
+    { source: "src/cpu_alu.gs", declaration: "alu_and", mirror: "alu_and" },
+    { source: "src/cpu_alu.gs", declaration: "alu_ora", mirror: "alu_ora" },
+    { source: "src/cpu_alu.gs", declaration: "alu_eor", mirror: "alu_eor" },
+    { source: "src/cpu_alu.gs", declaration: "alu_shift_left", mirror: "alu_shift_left" },
+    { source: "src/cpu_alu.gs", declaration: "alu_shift_right", mirror: "alu_shift_right" },
+    { source: "src/cpu_alu.gs", declaration: "alu_rotate_left", mirror: "alu_rotate_left" },
+    { source: "src/cpu_alu.gs", declaration: "alu_rotate_right", mirror: "alu_rotate_right" },
+    { source: "src/cpu_alu.gs", declaration: "alu_compare", mirror: "alu_compare" },
+    { source: "src/cpu_alu.gs", declaration: "alu_bit_test", mirror: "alu_bit_test" },
+    { source: "src/cpu_alu.gs", declaration: "alu_increment", mirror: "alu_increment" },
+    { source: "src/cpu_alu.gs", declaration: "alu_decrement", mirror: "alu_decrement" },
+    { source: "src/controller.gs", declaration: "controller_reset", mirror: "GoboscriptControllerPorts.reset" },
+    {
+        source: "src/controller.gs",
+        declaration: "controller_set_button_mask",
+        mirror: "GoboscriptControllerPorts.set_button_mask",
+    },
+    {
+        source: "src/controller.gs",
+        declaration: "controller_serial_read",
+        mirror: "GoboscriptControllerPorts.serial_read",
+    },
+    {
+        source: "src/controller.gs",
+        declaration: "controller_write_strobe",
+        mirror: "GoboscriptControllerPorts.write_strobe",
+    },
+    { source: "src/cpu_bus.gs", declaration: "cpu_bus_reset", mirror: "GoboscriptCpuBus.reset" },
+    { source: "src/cpu_bus.gs", declaration: "cpu_apply_driven_value", mirror: "GoboscriptCpuBus.apply_driven_value" },
+    { source: "src/cpu_bus.gs", declaration: "cpu_bus_read", mirror: "GoboscriptCpuBus.read" },
+    { source: "src/cpu_bus.gs", declaration: "cpu_bus_read_io", mirror: "GoboscriptCpuBus.read_io" },
+    { source: "src/cpu_bus.gs", declaration: "cpu_bus_write", mirror: "GoboscriptCpuBus.write" },
+    {
+        source: "src/rom_loader.gs",
+        declaration: "test_rom_has_ines_header",
+        mirror: null,
+        reason: "checks the generated ROM data list, which tests/scratch-rom-assets.test.ts covers",
+    },
+    {
+        source: "src/rom_loader.gs",
+        declaration: "rom_header_state",
+        mirror: null,
+        reason: "formats the self-test summary text",
+    },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_port_self_test",
+        mirror: null,
+        reason: "self-test driver; the fixture replay tests cover the algorithms it dispatches to",
+    },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_next_port_vector",
+        mirror: null,
+        reason: "record walker; its enum ids are checked against the fixture below",
+    },
+    { source: "src/vector_selftest.gs", declaration: "run_numeric_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/vector_selftest.gs", declaration: "run_alu_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/vector_selftest.gs", declaration: "run_bus_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/vector_selftest.gs", declaration: "run_controller_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
+];
+
+const sources = load_sources();
+
+test("the GoboScript project contains the expected sources", () => {
+    const paths = sources.map((source) => source.path).sort();
+    assert.deepEqual(paths, [
+        "main.gs",
+        "src/controller.gs",
+        "src/cpu_alu.gs",
+        "src/cpu_bus.gs",
+        "src/cpu_status.gs",
+        "src/numeric.gs",
+        "src/rom_loader.gs",
+        "src/shared_vectors.gs",
+        "src/vector_selftest.gs",
+        "stage.gs",
+    ]);
+});
+
+test("every GoboScript source is ASCII with no tabs, trailing whitespace, or CRLF", () => {
+    for (const source of sources) {
+        const bytes = readFileSync(join(SCRATCH_DIRECTORY, source.path));
+
+        for (const [index, byte] of bytes.entries()) {
+            assert.ok(byte < 128, `${source.path}: byte ${index} is not ASCII`);
+        }
+
+        assert.ok(!source.text.includes("\r"), `${source.path}: contains a carriage return`);
+        assert.ok(!source.text.includes("\t"), `${source.path}: contains a tab`);
+
+        for (const [index, line] of source.lines.entries()) {
+            assert.equal(line, line.trimEnd(), `${source.path}:${index + 1}: trailing whitespace`);
+        }
+    }
+});
+
+test("every GoboScript source uses four-space indentation within the column limit", () => {
+    for (const source of sources) {
+        for (const [index, line] of source.lines.entries()) {
+            const location = `${source.path}:${index + 1}`;
+            assert.ok(line.length <= MAX_LINE_COLUMNS, `${location}: ${line.length} columns`);
+
+            if (line.trim() === "") {
+                assert.equal(line, "", `${location}: blank line contains whitespace`);
+                continue;
+            }
+
+            const indent = line.length - line.trimStart().length;
+
+            if (line.startsWith("%")) {
+                assert.equal(indent, 0, `${location}: preprocessor directives start at column one`);
+                continue;
+            }
+
+            // Continuation lines of a wrapped expression may add half an indent level.
+            const is_continuation = /^(and|or|&)\b/.test(line.trimStart());
+            const allowed = is_continuation
+                ? indent % INDENT_WIDTH === 0 || indent % INDENT_WIDTH === INDENT_WIDTH / 2
+                : indent % INDENT_WIDTH === 0;
+            assert.ok(allowed, `${location}: indent of ${indent} is not a multiple of ${INDENT_WIDTH}`);
+        }
+
+        assert.ok(source.text.endsWith("\n"), `${source.path}: missing final newline`);
+        assert.ok(!source.text.endsWith("\n\n"), `${source.path}: blank line at end of file`);
+    }
+});
+
+test("every %include directive resolves to a project source", () => {
+    for (const source of sources) {
+        for (const [index, line] of source.lines.entries()) {
+            if (!line.startsWith("%")) {
+                assert.ok(!line.includes("%include"), `${source.path}:${index + 1}: directive is not at column one`);
+                continue;
+            }
+
+            const match = /^%include (\S+)$/.exec(line);
+            assert.ok(match, `${source.path}:${index + 1}: unsupported or malformed directive "${line}"`);
+
+            const included = match?.[1];
+            assert.ok(included !== undefined);
+            assert.ok(
+                !included.startsWith('"') && !included.endsWith(";"),
+                `${source.path}:${index + 1}: include paths are unquoted and take no semicolon`,
+            );
+            assert.ok(
+                sources.some((candidate) => candidate.path === `${included}.gs`),
+                `${source.path}:${index + 1}: %include ${included} does not resolve`,
+            );
+        }
+    }
+});
+
+test("only the Stage declares shared state", () => {
+    // A sprite resolves Stage variable, list, and enum names, so including a state-declaring
+    // header in a sprite would create sprite-local duplicates instead of shared state. Headers
+    // may include each other freely: they are only ever compiled into the Stage here.
+    for (const source of sources.filter((candidate) => is_sprite_root(candidate.path))) {
+        for (const included of collect_includes(source)) {
+            if (included === "stage.gs") {
+                continue;
+            }
+
+            const header = get_source(included);
+            const state = header.declarations.filter(
+                (declaration) => declaration.kind === "var" || declaration.kind === "list",
+            );
+            assert.deepEqual(
+                state.map((declaration) => `${included}:${declaration.name}`),
+                [],
+                `${source.path} includes ${included}, which declares shared state`,
+            );
+        }
+    }
+});
+
+test("no proc returns and every func ends with a return", () => {
+    for (const source of sources) {
+        for (const declaration of source.declarations) {
+            if (declaration.kind !== "proc" && declaration.kind !== "func") {
+                continue;
+            }
+
+            const location = `${source.path}:${declaration.line}`;
+            const statements = split_statements(declaration.body);
+
+            if (declaration.kind === "proc") {
+                // `return` inside a proc makes the upstream compiler panic in codegen.
+                for (const statement of statements) {
+                    assert.ok(!/^return\b/.test(statement), `${location}: proc ${declaration.name} returns`);
+                }
+                continue;
+            }
+
+            const last = statements.at(-1) ?? "";
+            assert.match(last, /^return\b/, `${location}: func ${declaration.name} does not end with a return`);
+        }
+    }
+});
+
+test("no local is declared inside a loop body", () => {
+    // `local` compiles to a `procname:x` variable; declaring one inside a loop body shadows
+    // the previous iteration's value and is undefined behavior in recursive or non-warp procs.
+    for (const source of sources) {
+        for (const declaration of source.declarations) {
+            const loop_ranges = find_loop_bodies(declaration.body);
+
+            for (const [start, end] of loop_ranges) {
+                for (const line of declaration.body.slice(start, end + 1)) {
+                    assert.ok(
+                        !/^\s*local\b/.test(line),
+                        `${source.path}:${declaration.line}: ${declaration.name} declares a local inside a loop`,
+                    );
+                }
+            }
+        }
+    }
+});
+
+test("no declared name collides with a GoboScript keyword or a Scratch block shape", () => {
+    const reserved = new Set([...GOBOSCRIPT_KEYWORDS, ...SCRATCH_BLOCK_NAMES]);
+
+    for (const source of sources) {
+        for (const declaration of source.declarations) {
+            assert.ok(
+                !reserved.has(declaration.name),
+                `${source.path}:${declaration.line}: "${declaration.name}" is a reserved block or keyword name`,
+            );
+
+            for (const arg of declaration.args) {
+                assert.ok(!reserved.has(arg), `${source.path}:${declaration.line}: argument "${arg}" is reserved`);
+            }
+        }
+
+        for (const enumeration of source.enums) {
+            assert.ok(
+                !reserved.has(enumeration.name),
+                `${source.path}: enum "${enumeration.name}" is a reserved block or keyword name`,
+            );
+
+            for (const variant of enumeration.variants.keys()) {
+                assert.ok(!reserved.has(variant), `${source.path}: enum variant "${variant}" is reserved`);
+            }
+        }
+    }
+});
+
+test("sprite sources only reference Stage-owned state or builtins", () => {
+    const stage_names = stage_state_names();
+
+    for (const source of sources.filter((candidate) => is_sprite_root(candidate.path))) {
+        const local_names = collect_declared_names(source, [source.path, ...collect_includes(source)]);
+
+        for (const identifier of referenced_identifiers(source)) {
+            assert.ok(
+                BUILTIN_NAMES.has(identifier) || stage_names.has(identifier) || local_names.has(identifier),
+                `${source.path}: "${identifier}" is neither a builtin nor Stage-owned state`,
+            );
+        }
+    }
+});
+
+test("every source references only names its translation unit can resolve", () => {
+    // Without a compiler this is the closest available check for a misspelled variable, list,
+    // enum, proc, or func name. Locals and arguments count as declared in their own file, and
+    // a sprite may also read the Stage's variables, lists, and enums.
+    const stage_names = stage_state_names();
+
+    for (const source of sources) {
+        const declared = collect_declared_names(source, [source.path, ...collect_includes(source)]);
+        const resolvable = is_sprite_root(source.path) ? new Set([...declared, ...stage_names]) : declared;
+
+        for (const identifier of referenced_identifiers(source)) {
+            assert.ok(
+                BUILTIN_NAMES.has(identifier) || resolvable.has(identifier),
+                `${source.path}: "${identifier}" is not declared in this translation unit`,
+            );
+        }
+    }
+});
+
+test("every mirrored header declaration has a TypeScript mirror of the same arity", () => {
+    for (const header_path of MIRRORED_HEADERS) {
+        const source = get_source(header_path);
+        const declared = source.declarations.filter(
+            (declaration) => declaration.kind === "proc" || declaration.kind === "func",
+        );
+
+        for (const declaration of declared) {
+            const entry = MIRROR_CONTRACT.find(
+                (candidate) => candidate.source === header_path && candidate.declaration === declaration.name,
+            );
+            assert.ok(entry, `${header_path}: ${declaration.name} is missing from the mirror contract`);
+            assert.ok(entry.mirror, `${header_path}: ${declaration.name} must be mirrored`);
+
+            const arity = mirror_arity(entry.mirror ?? "");
+            assert.equal(
+                arity,
+                declaration.args.length,
+                `${header_path}: ${declaration.name} takes ${declaration.args.length} arguments, mirror takes ${arity}`,
+            );
+        }
+    }
+
+    // Declarations outside the mirrored headers must still be listed, so adding a helper to a
+    // header cannot silently skip the mirror.
+    for (const source of sources) {
+        for (const declaration of source.declarations) {
+            if (declaration.kind !== "proc" && declaration.kind !== "func") {
+                continue;
+            }
+
+            const entry = MIRROR_CONTRACT.find(
+                (candidate) => candidate.source === source.path && candidate.declaration === declaration.name,
+            );
+            assert.ok(entry, `${source.path}: ${declaration.name} is missing from the mirror contract`);
+
+            if (entry.mirror === null) {
+                assert.ok(entry.reason, `${source.path}: ${declaration.name} needs a reason for not being mirrored`);
+            }
+        }
+    }
+
+    // Every contract entry must point at a real declaration and a real mirror.
+    for (const entry of MIRROR_CONTRACT) {
+        const source = get_source(entry.source);
+        const declaration = source.declarations.find((candidate) => candidate.name === entry.declaration);
+        assert.ok(declaration, `${entry.source}: contract names undeclared ${entry.declaration}`);
+
+        if (entry.mirror !== null) {
+            const arity = mirror_arity(entry.mirror);
+            assert.equal(
+                arity,
+                declaration?.args.length,
+                `${entry.mirror} takes ${arity} arguments, ${entry.declaration} takes ${declaration?.args.length}`,
+            );
+        }
+    }
+});
+
+test("the self-test suite ids match the shared vector fixture", () => {
+    const self_test = get_source("src/vector_selftest.gs");
+    const suites = get_enum(self_test, "port_suite");
+
+    for (const suite of shared_port_fixture.suites) {
+        assert.equal(
+            suites.get(suite.name),
+            suite.id,
+            `port_suite.${suite.name} must equal fixture suite id ${suite.id}`,
+        );
+    }
+
+    assert.equal(suites.size, shared_port_fixture.suites.length, "port_suite has an entry the fixture lacks");
+
+    // The dispatcher must name exactly the suites the port implements today.
+    const dispatcher = self_test.declarations.find((declaration) => declaration.name === "run_next_port_vector");
+    assert.ok(dispatcher, "run_next_port_vector is missing");
+    const dispatcher_body = dispatcher?.body.join("\n") ?? "";
+    const handled = new Set(
+        (dispatcher_body.match(/port_suite\.(\w+)/g) ?? []).map((match) => match.slice("port_suite.".length)),
+    );
+    assert.deepEqual([...handled].sort(), ["alu", "bus", "controller", "numeric"]);
+
+    const skipped = shared_port_fixture.suites
+        .filter((suite) => !handled.has(suite.name))
+        .map((suite) => suite.name)
+        .sort();
+    assert.deepEqual(skipped, ["apu", "cpu", "mapper", "ppu"], "unported suites must stay skipped, not passing");
+});
+
+test("the self-test operation ids match the shared vector fixture operations", () => {
+    const self_test = get_source("src/vector_selftest.gs");
+
+    const numeric_operations = fixture_operations("numeric");
+    const numeric_enum = get_enum(self_test, "numeric_op");
+    assert.deepEqual(
+        [...numeric_enum.values()].sort((first, second) => first - second),
+        contiguous_ids(numeric_enum.size),
+        "numeric_op ids must be contiguous from one",
+    );
+    assert.deepEqual(
+        [...numeric_operations].sort((first, second) => first - second),
+        [...numeric_enum.values()].sort((first, second) => first - second),
+    );
+
+    const alu_operations = fixture_operations("alu");
+    const alu_enum = get_enum(self_test, "alu_op");
+    assert.deepEqual(
+        [...alu_enum.values()].sort((first, second) => first - second),
+        contiguous_ids(alu_enum.size),
+        "alu_op ids must be contiguous from one",
+    );
+    assert.deepEqual(
+        [...alu_operations].sort((first, second) => first - second),
+        [...alu_enum.values()].sort((first, second) => first - second),
+    );
+
+    assert.deepEqual(
+        [...fixture_operations("bus")].sort(),
+        [1, 2],
+        "bus operations are 1 (no devices attached) and 2 (live controllers)",
+    );
+    assert.deepEqual([...fixture_operations("controller")], [1], "controller operation 1 is the only defined shape");
+});
+
+function fixture_operations(suite_name: string): number[] {
+    const suite = shared_port_fixture.suites.find((candidate) => candidate.name === suite_name);
+    assert.ok(suite, `Missing shared vector suite ${suite_name}.`);
+    return [...new Set(suite.vectors.map((vector) => vector.operation))];
+}
+
+function contiguous_ids(count: number): number[] {
+    return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+function load_sources(): GsSource[] {
+    const entries = readdirSync(SCRATCH_DIRECTORY, { recursive: true, withFileTypes: true });
+    const paths = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".gs"))
+        .map((entry) => relative(SCRATCH_DIRECTORY, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
+        .sort();
+
+    return paths.map((path) => parse_source(path, readFileSync(join(SCRATCH_DIRECTORY, path), "utf8")));
+}
+
+function parse_source(path: string, text: string): GsSource {
+    const lines = text.split("\n");
+
+    if (lines.at(-1) === "") {
+        lines.pop();
+    }
+
+    const declarations: GsDeclaration[] = [];
+    const enums: GsEnum[] = [];
+    const includes: string[] = [];
+
+    for (const [index, line] of lines.entries()) {
+        const include = /^%include (\S+)$/.exec(line);
+
+        if (include?.[1] !== undefined) {
+            includes.push(`${include[1]}.gs`);
+            continue;
+        }
+
+        const variable = /^var (\w+)(?: =.*)?;$/.exec(line);
+
+        if (variable?.[1] !== undefined) {
+            declarations.push({ kind: "var", name: variable[1], args: [], warp: false, body: [], line: index + 1 });
+            continue;
+        }
+
+        const list = /^list (\w+)(?: .*?)?;$/.exec(line);
+
+        if (list?.[1] !== undefined) {
+            declarations.push({ kind: "list", name: list[1], args: [], warp: false, body: [], line: index + 1 });
+            continue;
+        }
+
+        const enumeration = /^enum (\w+) \{$/.exec(line);
+
+        if (enumeration?.[1] !== undefined) {
+            const variants = new Map<string, number>();
+            let cursor = index + 1;
+
+            while (cursor < lines.length && lines[cursor] !== "}") {
+                const variant = /^\s+(\w+) = (-?\d+),?$/.exec(lines[cursor] ?? "");
+
+                if (variant?.[1] !== undefined && variant[2] !== undefined) {
+                    variants.set(variant[1], Number(variant[2]));
+                }
+
+                cursor += 1;
+            }
+
+            assert.equal(lines[cursor], "}", `${path}:${index + 1}: unterminated enum ${enumeration[1]}`);
+            enums.push({ name: enumeration[1], variants });
+            continue;
+        }
+
+        const procedure = /^(nowarp )?proc (\w+)(.*?) \{$/.exec(line);
+
+        if (procedure?.[2] !== undefined) {
+            const body = read_body(lines, index);
+            declarations.push({
+                kind: "proc",
+                name: procedure[2],
+                args: parse_args(procedure[3] ?? ""),
+                warp: procedure[1] === undefined,
+                body,
+                line: index + 1,
+            });
+            continue;
+        }
+
+        const function_declaration = /^func (\w+)\((.*?)\) \{$/.exec(line);
+
+        if (function_declaration?.[1] !== undefined) {
+            declarations.push({
+                kind: "func",
+                name: function_declaration[1],
+                args: parse_args(function_declaration[2] ?? ""),
+                warp: false,
+                body: read_body(lines, index),
+                line: index + 1,
+            });
+        }
+    }
+
+    return { path, text, lines, declarations, enums, includes };
+}
+
+const BUILTIN_NAMES = new Set([...GOBOSCRIPT_KEYWORDS, ...SCRATCH_BLOCK_NAMES]);
+
+/** The variables, lists, and enums the Stage owns and every sprite may resolve. */
+function stage_state_names(): Set<string> {
+    const stage = get_source("stage.gs");
+    return collect_declared_names(stage, ["stage.gs", ...collect_includes(stage)], true);
+}
+
+/**
+ * Every name a translation unit can resolve: its own declarations plus included headers.
+ * With `state_only` the result is limited to variables, lists, and enums, which is what a
+ * sprite may resolve from the Stage; procs and funcs are compiled per target and never cross.
+ */
+function collect_declared_names(source: GsSource, paths: readonly string[], state_only = false): Set<string> {
+    const names = new Set<string>();
+
+    for (const path of new Set(paths)) {
+        const unit = path === source.path ? source : get_source(path);
+
+        for (const declaration of unit.declarations) {
+            if (state_only && declaration.kind !== "var" && declaration.kind !== "list") {
+                continue;
+            }
+
+            names.add(declaration.name);
+
+            for (const arg of declaration.args) {
+                names.add(arg);
+            }
+
+            for (const line of declaration.body) {
+                const local = /^\s*local (\w+)\b/.exec(line);
+
+                if (local?.[1] !== undefined) {
+                    names.add(local[1]);
+                }
+            }
+        }
+
+        for (const enumeration of unit.enums) {
+            names.add(enumeration.name);
+
+            for (const variant of enumeration.variants.keys()) {
+                names.add(variant);
+            }
+        }
+    }
+
+    return names;
+}
+
+/** Bare identifiers in a source, ignoring comments, string literals, and directives. */
+function referenced_identifiers(source: GsSource): string[] {
+    const identifiers: string[] = [];
+
+    for (const line of source.lines) {
+        if (line.startsWith("%")) {
+            continue;
+        }
+
+        const stripped = strip_comments_and_strings(line);
+
+        for (const match of stripped.matchAll(/\b[a-z_][a-z0-9_]*\b/g)) {
+            identifiers.push(match[0].replace(/^\$/, ""));
+        }
+    }
+
+    return identifiers;
+}
+
+/** Root .gs files outside src/ are targets: stage.gs is the Stage, the rest are sprites. */
+function is_sprite_root(path: string): boolean {
+    return path !== "stage.gs" && !path.startsWith("src/");
+}
+
+/**
+ * Joins wrapped lines into statements. A statement ends at a semicolon or at a brace, so a
+ * func body ending in a block reports that block's closing brace as its last statement.
+ */
+function split_statements(body: readonly string[]): string[] {
+    const statements: string[] = [];
+    let current: string[] = [];
+
+    for (const raw of body) {
+        const line = raw.trim();
+
+        if (line === "" || line.startsWith("#")) {
+            continue;
+        }
+
+        current.push(line);
+
+        if (line.endsWith(";") || line.endsWith("{") || line.endsWith("}")) {
+            statements.push(current.join(" "));
+            current = [];
+        }
+    }
+
+    if (current.length > 0) {
+        statements.push(current.join(" "));
+    }
+
+    return statements;
+}
+
+function parse_args(raw: string): string[] {
+    return raw
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part !== "")
+        .map((part) => part.split(/\s+/).at(-1) ?? part);
+}
+
+/** Returns the body lines between the declaration's opening brace and its matching close. */
+function read_body(lines: string[], start: number): string[] {
+    let depth = 0;
+    const body: string[] = [];
+
+    for (let index = start; index < lines.length; index += 1) {
+        const stripped = strip_comments_and_strings(lines[index] ?? "");
+        depth += count_character(stripped, "{") - count_character(stripped, "}");
+
+        if (index > start && depth <= 0) {
+            return body;
+        }
+
+        if (index > start) {
+            body.push(lines[index] ?? "");
+        }
+    }
+
+    assert.fail(`Unterminated block starting at line ${start + 1}.`);
+}
+
+function strip_comments_and_strings(line: string): string {
+    const without_comment = line.split("#")[0] ?? "";
+    return without_comment.replaceAll(/"[^"]*"/g, '""');
+}
+
+function count_character(text: string, character: string): number {
+    return text.split(character).length - 1;
+}
+
+/** Returns the inclusive line ranges of loop bodies inside a declaration body. */
+function find_loop_bodies(body: readonly string[]): [number, number][] {
+    const ranges: [number, number][] = [];
+
+    for (const [index, line] of body.entries()) {
+        const trimmed = line.trim();
+
+        if (!/^(repeat|until|forever)\b/.test(trimmed) || !trimmed.endsWith("{")) {
+            continue;
+        }
+
+        let depth = 0;
+
+        for (let cursor = index; cursor < body.length; cursor += 1) {
+            const stripped = strip_comments_and_strings(body[cursor] ?? "");
+            depth += count_character(stripped, "{") - count_character(stripped, "}");
+
+            if (depth <= 0) {
+                ranges.push([index, cursor]);
+                break;
+            }
+        }
+    }
+
+    return ranges;
+}
+
+function get_source(path: string): GsSource {
+    const source = sources.find((candidate) => candidate.path === path);
+    assert.ok(source, `Missing GoboScript source ${path}.`);
+    return source;
+}
+
+function get_enum(source: GsSource, name: string): ReadonlyMap<string, number> {
+    const enumeration = source.enums.find((candidate) => candidate.name === name);
+    assert.ok(enumeration, `${source.path}: missing enum ${name}`);
+    return enumeration.variants;
+}
+
+function collect_includes(source: GsSource, seen = new Set<string>()): string[] {
+    const collected: string[] = [];
+
+    for (const included of source.includes) {
+        if (seen.has(included)) {
+            continue;
+        }
+
+        seen.add(included);
+        collected.push(included, ...collect_includes(get_source(included), seen));
+    }
+
+    return collected;
+}
+
+function mirror_arity(path: string): number {
+    const parts = path.split(".");
+    const exported = (ported as unknown as Record<string, unknown>)[parts[0] ?? ""];
+    assert.ok(exported !== undefined, `Mirror ${path} is not exported.`);
+
+    if (parts.length === 1) {
+        assert.equal(typeof exported, "function", `Mirror ${path} is not callable.`);
+        return (exported as (...args: unknown[]) => unknown).length;
+    }
+
+    const prototype = (exported as { prototype?: Record<string, unknown> }).prototype;
+    assert.ok(prototype, `Mirror ${path} has no prototype.`);
+    const member = prototype?.[parts[1] ?? ""];
+    assert.equal(typeof member, "function", `Mirror ${path} is not a method.`);
+    return (member as (...args: unknown[]) => unknown).length;
+}

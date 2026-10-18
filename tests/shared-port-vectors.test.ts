@@ -24,43 +24,16 @@ import { NesControllerPorts } from "../src/nes/input/controller.js";
 import { Ppu2C02 } from "../src/nes/ppu/ppu_2c02.js";
 import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
 import { FakeCpuBus } from "./support/FakeCpuBus.js";
-
-interface SharedVector {
-    readonly id: number;
-    readonly operation: number;
-    readonly input: readonly number[];
-    readonly expected: readonly number[];
-}
-
-interface SharedVectorSuite {
-    readonly id: number;
-    readonly name: string;
-    readonly vectors: readonly SharedVector[];
-}
-
-interface SharedVectorFixture {
-    readonly schema_version: number;
-    readonly suites: readonly SharedVectorSuite[];
-}
+import {
+    for_each_vector,
+    shared_port_fixture as fixture,
+    shared_port_fixture_text as fixture_text,
+} from "./support/shared_port_vectors.js";
 
 const FIXTURE_PATH = new URL("./fixtures/goboscript/shared_port_vectors.json", import.meta.url);
 const GENERATOR_PATH = fileURLToPath(
     new URL("../scripts/generate_goboscript_shared_port_vectors.mjs", import.meta.url),
 );
-const fixture_text = readFileSync(FIXTURE_PATH, "utf8");
-const fixture = JSON.parse(fixture_text) as SharedVectorFixture;
-
-function get_suite(name: string): SharedVectorSuite {
-    const suite = fixture.suites.find((candidate) => candidate.name === name);
-    assert.ok(suite, `Missing shared vector suite ${name}.`);
-    return suite;
-}
-
-function for_each_vector(suite_name: string, run: (vector: SharedVector) => void): void {
-    for (const vector of get_suite(suite_name).vectors) {
-        test(`shared ${suite_name} vector ${vector.id}`, () => run(vector));
-    }
-}
 
 test("generates the canonical shared vectors as a numeric GoboScript list", () => {
     const temporary_directory = mkdtempSync(join(tmpdir(), "goboscript-vectors-"));
@@ -155,6 +128,32 @@ for_each_vector("numeric", (vector) => {
         case 6:
             actual = update_zero_negative_flags(value ?? 0, second_value ?? 0);
             break;
+        // Operations 7 through 13 pin the arithmetic bit helpers that scratch/src/numeric.gs
+        // needs because GoboScript has no bitwise operators. The reference here is the native
+        // expression; tests/goboscript-port-algorithms.test.ts proves the ported algorithms
+        // reproduce it exhaustively.
+        case 7:
+            assert.ok(is_power_of_two(second_value ?? 0), "bit_at expects a power-of-two weight.");
+            actual = Number((normalize_word(value ?? 0) & normalize_word(second_value ?? 0)) !== 0);
+            break;
+        case 8:
+            actual = normalize_word(value ?? 0) & normalize_word(second_value ?? 0);
+            break;
+        case 9:
+            actual = normalize_word(value ?? 0) | normalize_word(second_value ?? 0);
+            break;
+        case 10:
+            actual = normalize_word(value ?? 0) ^ normalize_word(second_value ?? 0);
+            break;
+        case 11:
+            actual = normalize_word(value ?? 0) >>> 8;
+            break;
+        case 12:
+            actual = normalize_word(value ?? 0) & 0xff;
+            break;
+        case 13:
+            actual = (normalize_byte(value ?? 0) << 8) | normalize_byte(second_value ?? 0);
+            break;
         default:
             assert.fail(`Unsupported numeric vector operation ${vector.operation}.`);
     }
@@ -198,12 +197,31 @@ for_each_vector("cpu", (vector) => {
 });
 
 for_each_vector("bus", (vector) => {
-    assert.equal(vector.operation, 1, "Bus vector operation 1 replays CPU read/write triples.");
     const [operation_count, ...operations] = vector.input;
     assert.ok(operation_count !== undefined);
     assert.equal(operations.length, operation_count * 3);
 
-    const bus = new NesCpuBus(make_empty_bus_devices());
+    let devices: NesCpuBusDevices;
+
+    if (vector.operation === 1) {
+        devices = make_empty_bus_devices();
+
+        // Operation 1 replays with no devices attached. The GoboScript port always has live
+        // controller ports, so these records must not read $4016/$4017.
+        for (let operation_index = 0; operation_index < operation_count; operation_index += 1) {
+            const kind = operations[operation_index * 3];
+            const address = operations[operation_index * 3 + 1];
+            assert.ok(
+                !(kind === 0 && (address === 0x4016 || address === 0x4017)),
+                "Bus vector operation 1 must not read the controller ports.",
+            );
+        }
+    } else {
+        assert.equal(vector.operation, 2, "Bus vector operation 2 replays with live controller ports.");
+        devices = make_controller_bus_devices();
+    }
+
+    const bus = new NesCpuBus(devices);
     const read_values: number[] = [];
 
     for (let operation_index = 0; operation_index < operation_count; operation_index += 1) {
@@ -223,6 +241,72 @@ for_each_vector("bus", (vector) => {
     }
 
     assert.deepEqual([read_values.length, ...read_values], vector.expected);
+});
+
+for_each_vector("alu", (vector) => {
+    const [first_input, second_input, third_input] = vector.input;
+    assert.ok(first_input !== undefined, "ALU vectors always supply at least one operand.");
+
+    let actual: number[];
+
+    switch (vector.operation) {
+        case 1:
+            actual = run_accumulator_operand_instruction(0x69, first_input, second_input, third_input);
+            break;
+        case 2:
+            actual = run_accumulator_operand_instruction(0xe9, first_input, second_input, third_input);
+            break;
+        case 3:
+            actual = run_accumulator_operand_instruction(0x29, first_input, second_input, third_input);
+            break;
+        case 4:
+            actual = run_accumulator_operand_instruction(0x09, first_input, second_input, third_input);
+            break;
+        case 5:
+            actual = run_accumulator_operand_instruction(0x49, first_input, second_input, third_input);
+            break;
+        case 6:
+            actual = run_accumulator_only_instruction(0x0a, first_input, second_input);
+            break;
+        case 7:
+            actual = run_accumulator_only_instruction(0x4a, first_input, second_input);
+            break;
+        case 8:
+            actual = run_accumulator_only_instruction(0x2a, first_input, second_input);
+            break;
+        case 9:
+            actual = run_accumulator_only_instruction(0x6a, first_input, second_input);
+            break;
+        case 10:
+            actual = run_register_compare_instruction(0xc9, "a", first_input, second_input, third_input);
+            break;
+        case 11:
+            actual = run_register_compare_instruction(0xe0, "x", first_input, second_input, third_input);
+            break;
+        case 12:
+            actual = run_register_compare_instruction(0xc0, "y", first_input, second_input, third_input);
+            break;
+        case 13: {
+            assert.ok(second_input !== undefined && third_input !== undefined);
+            const cpu = run_cpu_program(
+                [0x24, ALU_ZERO_PAGE_ADDRESS],
+                { a: first_input, x: 0, y: 0, status: third_input },
+                [second_input],
+            );
+            actual = [cpu.a, cpu.status];
+            break;
+        }
+        case 14:
+            actual = run_zero_page_read_modify_write(0xe6, first_input, second_input);
+            break;
+        case 15:
+            actual = run_zero_page_read_modify_write(0xc6, first_input, second_input);
+            break;
+        default:
+            assert.fail(`Unsupported ALU vector operation ${vector.operation}.`);
+    }
+
+    assert.deepEqual(actual, [...vector.expected]);
 });
 
 for_each_vector("mapper", (vector) => {
@@ -325,6 +409,114 @@ for_each_vector("controller", (vector) => {
 
     assert.deepEqual(actual, vector.expected);
 });
+
+const ALU_PROGRAM_ADDRESS = 0x8000;
+const ALU_ZERO_PAGE_ADDRESS = 0x10;
+
+interface AluRegisters {
+    readonly a: number;
+    readonly x: number;
+    readonly y: number;
+    readonly status: number;
+}
+
+/** Runs one instruction on the production CPU and returns it together with its bus. */
+function run_cpu_program(
+    program: readonly number[],
+    registers: AluRegisters,
+    zero_page: readonly number[] = [],
+): Cpu2A03 {
+    const bus = new FakeCpuBus();
+    bus.load(ALU_PROGRAM_ADDRESS, Uint8Array.from(program));
+
+    for (let index = 0; index < zero_page.length; index += 1) {
+        bus.write_cpu(ALU_ZERO_PAGE_ADDRESS + index, zero_page[index] ?? 0);
+    }
+
+    const cpu = new Cpu2A03(bus);
+    cpu.program_counter = ALU_PROGRAM_ADDRESS;
+    cpu.a = registers.a;
+    cpu.x = registers.x;
+    cpu.y = registers.y;
+    cpu.stack_pointer = 0xfd;
+    cpu.status = registers.status;
+    cpu.step();
+    return cpu;
+}
+
+function assert_alu_status(status: number | undefined): number {
+    assert.ok(status !== undefined, "ALU vectors that change flags supply an input status byte.");
+    return status;
+}
+
+/** Immediate ALU instructions of the form "$opcode operand" that update the accumulator. */
+function run_accumulator_operand_instruction(
+    opcode: number,
+    accumulator: number,
+    operand: number | undefined,
+    status: number | undefined,
+): number[] {
+    assert.ok(operand !== undefined, "This ALU vector supplies an immediate operand.");
+    const cpu = run_cpu_program(
+        [opcode, operand],
+        { a: accumulator, x: 0, y: 0, status: assert_alu_status(status) },
+    );
+    return [cpu.a, cpu.status];
+}
+
+/** Accumulator-mode shift and rotate instructions of the form "$opcode". */
+function run_accumulator_only_instruction(opcode: number, accumulator: number, status: number | undefined): number[] {
+    const cpu = run_cpu_program([opcode], {
+        a: accumulator,
+        x: 0,
+        y: 0,
+        status: assert_alu_status(status),
+    });
+    return [cpu.a, cpu.status];
+}
+
+/** CMP, CPX, and CPY: the compared register must come back unchanged. */
+function run_register_compare_instruction(
+    opcode: number,
+    register: "a" | "x" | "y",
+    register_value: number,
+    operand: number | undefined,
+    status: number | undefined,
+): number[] {
+    assert.ok(operand !== undefined, "This ALU vector supplies an immediate operand.");
+    const cpu = run_cpu_program(
+        [opcode, operand],
+        {
+            a: register === "a" ? register_value : 0,
+            x: register === "x" ? register_value : 0,
+            y: register === "y" ? register_value : 0,
+            status: assert_alu_status(status),
+        },
+    );
+    return [cpu[register], cpu.status];
+}
+
+/** INC/DEC $10: the expected value is the zero-page byte after the instruction. */
+function run_zero_page_read_modify_write(opcode: number, operand: number, status: number | undefined): number[] {
+    const bus = new FakeCpuBus();
+    bus.load(ALU_PROGRAM_ADDRESS, Uint8Array.from([opcode, ALU_ZERO_PAGE_ADDRESS]));
+    bus.write_cpu(ALU_ZERO_PAGE_ADDRESS, operand);
+
+    const cpu = new Cpu2A03(bus);
+    cpu.program_counter = ALU_PROGRAM_ADDRESS;
+    cpu.stack_pointer = 0xfd;
+    cpu.status = assert_alu_status(status);
+    cpu.step();
+    return [bus.peek(ALU_ZERO_PAGE_ADDRESS), cpu.status];
+}
+
+function is_power_of_two(value: number): boolean {
+    return value > 0 && (value & (value - 1)) === 0;
+}
+
+function make_controller_bus_devices(): NesCpuBusDevices {
+    return { ...make_empty_bus_devices(), controllers: new NesControllerPorts() };
+}
 
 function make_empty_bus_devices(): NesCpuBusDevices {
     return {
