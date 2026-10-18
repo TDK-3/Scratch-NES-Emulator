@@ -32,6 +32,12 @@ import {
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
 import {
+    CPU_SEQUENCE_FIXED_INPUT_COUNT,
+    CPU_SEQUENCE_FIXED_VALUE_COUNT,
+    project_cpu_sequence,
+    type CpuSequenceSetup,
+} from "./support/cpu_sequence_projection.js";
+import {
     for_each_vector,
     shared_port_fixture as fixture,
     shared_port_fixture_text as fixture_text,
@@ -468,6 +474,52 @@ for_each_vector("cpu_addressing", (vector) => {
 
     // The ported decoder always has live controller ports, so no record may touch $4000-$401F.
     for (let offset = CPU_ADDRESSING_FIXED_VALUE_COUNT; offset < actual.length; offset += 3) {
+        const address = actual[offset + 1] ?? 0;
+        assert.ok(address < 0x4000 || address > 0x401f, `Access at $${address.toString(16)} is controller space.`);
+    }
+});
+
+for_each_vector("cpu_sequence", (vector) => {
+    const operation_id = vector.operation;
+    const [program_counter, accumulator, x, y, stack_pointer, status, taken, setup_count] = vector.input;
+    assert.ok(
+        program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            taken !== undefined &&
+            setup_count !== undefined,
+        "Sequence vectors supply all six registers, the taken flag, and a setup count.",
+    );
+    assert.equal(vector.input.length, CPU_SEQUENCE_FIXED_INPUT_COUNT + setup_count * 2);
+
+    const setup: CpuSequenceSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2];
+        const value = vector.input[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    const actual = project_cpu_sequence(
+        operation_id,
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        taken,
+        setup,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual[0], (actual.length - CPU_SEQUENCE_FIXED_VALUE_COUNT) / 3, "one cycle per bus access");
+
+    // The ported decoder always has live controller ports, so no record may touch $4000-$401F.
+    for (let offset = CPU_SEQUENCE_FIXED_VALUE_COUNT; offset < actual.length; offset += 3) {
         const address = actual[offset + 1] ?? 0;
         assert.ok(address < 0x4000 || address > 0x401f, `Access at $${address.toString(16)} is controller space.`);
     }

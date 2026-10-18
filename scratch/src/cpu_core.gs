@@ -99,7 +99,7 @@ proc cpu_write_cycle address, value {
 # Spends one cycle on a read whose byte the instruction does not use. The reference discards
 # the value; the port leaves it in `cpu_cycle_value`.
 proc cpu_dummy_read_cycle address {
-    cpu_read_cycle address;
+    cpu_read_cycle $address;
 }
 
 # Reads the byte at the program counter, advances the counter, and leaves the byte in

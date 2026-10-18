@@ -1,8 +1,7 @@
 import type { CpuAddressingMode, CpuOperandAccess } from "../../src/nes/cpu/addressing_modes.js";
 import { Cpu2A03 } from "../../src/nes/cpu/cpu_2a03.js";
-import type { CpuBus } from "../../src/nes/cpu/cpu_bus.js";
-import type { NesCpuBusDevices } from "../../src/nes/cpu/nes_cpu_bus.js";
 import { NesCpuBus } from "../../src/nes/cpu/nes_cpu_bus.js";
+import { flatten_access_trace, make_absent_bus_devices, RecordingCpuBus } from "./recording_cpu_bus.js";
 
 /**
  * Reference-side projection of one addressing-mode resolution onto the flat array shared
@@ -86,54 +85,6 @@ export function cpu_operand_access_name(access_id: number): CpuOperandAccess {
     return entry.name;
 }
 
-/** One recorded transaction, so the projection can pin bus order as well as the operand. */
-class RecordingCpuBus implements CpuBus {
-    readonly accesses: { readonly kind: "read" | "write"; readonly address: number; readonly value: number }[] = [];
-
-    constructor(private readonly inner: CpuBus) {}
-
-    read_cpu(address: number): number {
-        const value = this.inner.read_cpu(address);
-        this.accesses.push({ kind: "read", address, value });
-        return value;
-    }
-
-    write_cpu(address: number, value: number): void {
-        this.inner.write_cpu(address, value);
-        this.accesses.push({ kind: "write", address, value });
-    }
-
-    /** Writes setup bytes without recording them, matching a vector's pre-instruction state. */
-    prepare(address: number, value: number): void {
-        this.inner.write_cpu(address, value);
-    }
-
-    clear(): void {
-        this.accesses.length = 0;
-    }
-}
-
-function make_absent_bus_devices(): NesCpuBusDevices {
-    return {
-        ppu: {
-            read_cpu_register: () => null,
-            write_cpu_register: () => {},
-        },
-        apu: {
-            read_status: () => null,
-            write_register: () => {},
-        },
-        controllers: {
-            read_controller: () => null,
-            write_strobe: () => {},
-        },
-        cartridge: {
-            read_cpu: () => null,
-            write_cpu: () => {},
-        },
-    };
-}
-
 /**
  * Resolves one addressing mode on the production CPU behind a fresh decoder with no devices
  * attached, and returns the flat suite-10 values: kind, mode, access, base address, address,
@@ -205,15 +156,7 @@ export function project_cpu_addressing(
             break;
     }
 
-    const trace: number[] = [];
-
-    for (const access of bus.accesses) {
-        trace.push(
-            access.kind === "read" ? CPU_ACCESS_KIND_IDS.read : CPU_ACCESS_KIND_IDS.write,
-            access.address,
-            access.value,
-        );
-    }
+    const trace = flatten_access_trace(bus.accesses);
 
     return [
         kind,

@@ -118,9 +118,9 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 957 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
-test, 339 cross-domain parity cases, 47 GoboScript port-algorithm comparisons against an integer-only mirror of
-the ported helpers, 15 GoboScript source-lint checks, two
+suite has 973 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+test, 351 cross-domain parity cases, 50 GoboScript port-algorithm comparisons against an integer-only mirror of
+the ported helpers, 16 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
 six focused controller tests, and
@@ -191,10 +191,11 @@ port vectors. It now also ports the helper layer: `scratch/src/numeric.gs` (bit-
 absent-device behavior for PPU/APU/OAM DMA/cartridge), and `cartridge.gs` (iNES 1.0 and NES 2.0 header decode
 with mapper/submapper, mirroring, battery, trainer, ROM and RAM sizes, payload offsets, and six numeric error
 codes), `cpu_core.gs` (register state, one logged bus transaction per cycle, fetch byte/word, and the four
-stack operations), and `cpu_addressing.gs` (all thirteen addressing modes with dummy reads, page-cross
-detection, and the JMP indirect pointer wrap). `stage.gs` includes every header, so the Stage owns all
+stack operations), `cpu_addressing.gs` (all thirteen addressing modes with dummy reads, page-cross
+detection, and the JMP indirect pointer wrap), and `cpu_sequence.gs` (the reset, BRK, JSR, RTI, RTS, IRQ, NMI,
+and relative-branch cycle sequences, with opcode fetch left to the caller). `stage.gs` includes every header, so the Stage owns all
 shared state, and its green-flag handler runs `src/vector_selftest.gs`, which executes suites 1, 3, 7, 8, 9,
-and 10 of the fixture, counts suites 2, 4, 5, and 6 as skipped, and broadcasts a summary that `main.gs`
+10, and 11 of the fixture, counts suites 2, 4, 5, and 6 as skipped, and broadcasts a summary that `main.gs`
 reports. CPU opcode fetch/decode/dispatch and interrupts, cartridge payload copying and mapper dispatch, PPU,
 APU, rendering, sound, save states, and game execution remain unimplemented there, and none of the `.gs`
 sources has been compiled. The TypeScript NROM/MMC3 mapper and

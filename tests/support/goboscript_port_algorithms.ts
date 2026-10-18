@@ -846,6 +846,34 @@ export const CPU_OPERAND_ERROR_CODE = { NONE: 0, UNSUPPORTED_ACCESS: 1, UNKNOWN_
 /** Mirror of the `cpu_access_kind` enum in scratch/src/cpu_core.gs. */
 export const CPU_ACCESS_KIND = { READ: 0, WRITE: 1 } as const;
 
+/** Mirror of the `cpu_sequence_op` enum in scratch/src/cpu_sequence.gs. */
+export const CPU_SEQUENCE_OP = {
+    RESET: 1,
+    BRK: 2,
+    JSR: 3,
+    RTI: 4,
+    RTS: 5,
+    IRQ: 6,
+    NMI: 7,
+    RELATIVE_BRANCH: 8,
+} as const;
+
+/** Mirror of the `cpu_interrupt_source` enum in scratch/src/cpu_sequence.gs. */
+export const CPU_INTERRUPT_SOURCE = { NMI: 1, IRQ: 2 } as const;
+
+/** Mirror of the `cpu_sequence_error_code` enum in scratch/src/cpu_sequence.gs. */
+export const CPU_SEQUENCE_ERROR_CODE = { NONE: 0, NOT_RELATIVE_OPERAND: 1 } as const;
+
+/** Mirror of the `cpu_vector_address` enum in scratch/src/cpu_core.gs. */
+const CPU_VECTOR_ADDRESS = {
+    NMI_LOW: 0xfffa,
+    NMI_HIGH: 0xfffb,
+    RESET_LOW: 0xfffc,
+    RESET_HIGH: 0xfffd,
+    IRQ_BRK_LOW: 0xfffe,
+    IRQ_BRK_HIGH: 0xffff,
+} as const;
+
 /**
  * Mirror of scratch/src/cpu_core.gs and scratch/src/cpu_addressing.gs: register state, one
  * logged bus transaction per cycle, program-counter fetches, stack operations, and the
@@ -876,6 +904,7 @@ export class GoboscriptCpuCore {
     resolved_value = 0;
     resolved_page_crossed = 0;
     resolved_error = 0;
+    sequence_error = 0;
 
     /** Mirror of `cpu_reset_cycle_accounting`. */
     reset_cycle_accounting(): void {
@@ -1159,6 +1188,108 @@ export class GoboscriptCpuCore {
     }
 
     /** The resolved operand plus the access trace, in shared vector suite 10 field order. */
+    /** Mirror of `cpu_reset_sequence_error`. */
+    reset_sequence_error(): void {
+        this.sequence_error = CPU_SEQUENCE_ERROR_CODE.NONE;
+    }
+
+    /** Mirror of `cpu_execute_reset_cycles`. */
+    execute_reset_cycles(): void {
+        this.read_cycle(this.program_counter);
+        this.read_cycle(this.program_counter);
+
+        for (let index = 0; index < 3; index += 1) {
+            this.read_cycle(256 + this.stack_pointer);
+            this.stack_pointer = normalize_byte(this.stack_pointer - 1);
+        }
+
+        this.read_cycle(CPU_VECTOR_ADDRESS.RESET_LOW);
+        const vector_low = this.cycle_value;
+        this.read_cycle(CPU_VECTOR_ADDRESS.RESET_HIGH);
+        this.program_counter = join_bytes(this.cycle_value, vector_low);
+        this.status = set_status_flag(this.status, CPU_FLAG.INTERRUPT_DISABLE, 1);
+    }
+
+    /** Mirror of `cpu_execute_brk_cycles`. */
+    execute_brk_cycles(): void {
+        this.fetch_byte();
+        this.push_word(this.program_counter);
+        this.push_status(1);
+        this.status = set_status_flag(this.status, CPU_FLAG.INTERRUPT_DISABLE, 1);
+        this.read_cycle(CPU_VECTOR_ADDRESS.IRQ_BRK_LOW);
+        const vector_low = this.cycle_value;
+        this.read_cycle(CPU_VECTOR_ADDRESS.IRQ_BRK_HIGH);
+        this.program_counter = join_bytes(this.cycle_value, vector_low);
+    }
+
+    /** Mirror of `cpu_execute_jsr_cycles`. */
+    execute_jsr_cycles(): void {
+        this.fetch_byte();
+        const target_low = this.fetched_byte;
+        this.read_cycle(256 + this.stack_pointer);
+        this.push_word(this.program_counter);
+        this.fetch_byte();
+        this.program_counter = join_bytes(this.fetched_byte, target_low);
+    }
+
+    /** Mirror of `cpu_execute_rti_cycles`. */
+    execute_rti_cycles(): void {
+        this.read_cycle(this.program_counter);
+        this.read_cycle(256 + this.stack_pointer);
+        this.pop_byte();
+        this.restore_status_from_stack(this.popped_byte);
+        this.pop_word();
+        this.program_counter = this.popped_word;
+    }
+
+    /** Mirror of `cpu_execute_rts_cycles`. */
+    execute_rts_cycles(): void {
+        this.read_cycle(this.program_counter);
+        this.read_cycle(256 + this.stack_pointer);
+        this.pop_word();
+        const return_address = this.popped_word;
+        this.read_cycle(return_address);
+        this.program_counter = normalize_word(return_address + 1);
+    }
+
+    /** Mirror of `cpu_execute_hardware_interrupt_cycles source`. */
+    execute_hardware_interrupt_cycles(source: number): void {
+        let vector_low_address: number = CPU_VECTOR_ADDRESS.IRQ_BRK_LOW;
+        let vector_high_address: number = CPU_VECTOR_ADDRESS.IRQ_BRK_HIGH;
+
+        if (source === CPU_INTERRUPT_SOURCE.NMI) {
+            vector_low_address = CPU_VECTOR_ADDRESS.NMI_LOW;
+            vector_high_address = CPU_VECTOR_ADDRESS.NMI_HIGH;
+        }
+
+        this.read_cycle(this.program_counter);
+        this.read_cycle(this.program_counter);
+        this.push_word(this.program_counter);
+        this.push_status(0);
+        this.status = set_status_flag(this.status, CPU_FLAG.INTERRUPT_DISABLE, 1);
+        this.read_cycle(vector_low_address);
+        const vector_low = this.cycle_value;
+        this.read_cycle(vector_high_address);
+        this.program_counter = join_bytes(this.cycle_value, vector_low);
+    }
+
+    /** Mirror of `cpu_apply_relative_branch_cycles taken`. */
+    apply_relative_branch_cycles(taken: number): void {
+        this.sequence_error = CPU_SEQUENCE_ERROR_CODE.NONE;
+
+        if (this.resolved_kind !== CPU_OPERAND_KIND.RELATIVE) {
+            this.sequence_error = CPU_SEQUENCE_ERROR_CODE.NOT_RELATIVE_OPERAND;
+        } else if (taken === 1) {
+            this.read_cycle(this.resolved_base_address);
+
+            if (this.resolved_page_crossed === 1) {
+                this.read_cycle(this.indexed_dummy_address(this.resolved_base_address, this.resolved_address));
+            }
+
+            this.program_counter = this.resolved_address;
+        }
+    }
+
     reported_values(): number[] {
         return [
             this.resolved_kind,

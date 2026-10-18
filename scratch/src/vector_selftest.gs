@@ -20,6 +20,7 @@
 %include src/cpu_bus
 %include src/cpu_core
 %include src/cpu_addressing
+%include src/cpu_sequence
 %include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
@@ -34,7 +35,8 @@ enum port_suite {
     controller = 7,
     alu = 8,
     cartridge = 9,
-    cpu_addressing = 10
+    cpu_addressing = 10,
+    cpu_sequence = 11
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -145,6 +147,8 @@ proc run_next_port_vector {
         run_cartridge_vector input_start;
     } elif suite_id == port_suite.cpu_addressing {
         run_cpu_addressing_vector operation, input_start;
+    } elif suite_id == port_suite.cpu_sequence {
+        run_cpu_sequence_vector operation, input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -366,7 +370,7 @@ proc run_cpu_addressing_vector operation, input_start {
     }
 
     cpu_reset_cycle_accounting;
-    cpu_resolve_operand operation, access;
+    cpu_resolve_operand $operation, access;
     add cpu_resolved_kind to port_actual_values;
     add cpu_resolved_mode to port_actual_values;
     add cpu_resolved_access to port_actual_values;
@@ -378,6 +382,81 @@ proc run_cpu_addressing_vector operation, input_start {
     add cpu_cycles to port_actual_values;
     add cpu_program_counter to port_actual_values;
     add cpu_stack_pointer to port_actual_values;
+    log_count = length cpu_access_log;
+
+    repeat log_count {
+        add to_number(cpu_access_log[log_index]) to port_actual_values;
+        log_index++;
+    }
+}
+
+# Suite 11: one CPU cycle sequence, where the operation id names the sequence. Inputs are PC,
+# A, X, Y, SP, status, the relative-branch taken flag, a setup count, and then that many
+# (address, value) pairs written before the sequence runs. Expected values are the cycle
+# count, the final program counter, stack pointer, status, A, X, and Y, the sequence error
+# code, and then one (kind, address, value) triple per bus access. BRK, JSR, RTI, RTS, and the
+# relative branch fetch their opcode byte first, because the reference reaches them through
+# execute_instruction_cycles; reset and the two hardware interrupts fetch no opcode.
+proc run_cpu_sequence_vector operation, input_start {
+    local taken = to_number(shared_port_vectors[$input_start + 6]);
+    local setup_count = to_number(shared_port_vectors[$input_start + 7]);
+    local setup_index = 0;
+    local setup_address = 0;
+    local setup_value = 0;
+    local log_index = 1;
+    local log_count = 0;
+    cpu_reset_registers;
+    cpu_bus_clear_ram;
+    cpu_bus_reset;
+    cpu_program_counter = to_number(shared_port_vectors[$input_start]);
+    cpu_a = to_number(shared_port_vectors[$input_start + 1]);
+    cpu_x = to_number(shared_port_vectors[$input_start + 2]);
+    cpu_y = to_number(shared_port_vectors[$input_start + 3]);
+    cpu_stack_pointer = to_number(shared_port_vectors[$input_start + 4]);
+    cpu_status = to_number(shared_port_vectors[$input_start + 5]);
+
+    repeat setup_count {
+        setup_address = to_number(shared_port_vectors[$input_start + 8 + (setup_index * 2)]);
+        setup_value = to_number(shared_port_vectors[$input_start + 9 + (setup_index * 2)]);
+        cpu_bus_write setup_address, setup_value;
+        setup_index++;
+    }
+
+    cpu_reset_cycle_accounting;
+    cpu_reset_sequence_error;
+
+    if $operation == cpu_sequence_op.reset {
+        cpu_execute_reset_cycles;
+    } elif $operation == cpu_sequence_op.brk {
+        cpu_fetch_byte;
+        cpu_execute_brk_cycles;
+    } elif $operation == cpu_sequence_op.jsr {
+        cpu_fetch_byte;
+        cpu_execute_jsr_cycles;
+    } elif $operation == cpu_sequence_op.rti {
+        cpu_fetch_byte;
+        cpu_execute_rti_cycles;
+    } elif $operation == cpu_sequence_op.rts {
+        cpu_fetch_byte;
+        cpu_execute_rts_cycles;
+    } elif $operation == cpu_sequence_op.irq {
+        cpu_execute_hardware_interrupt_cycles cpu_interrupt_source.irq;
+    } elif $operation == cpu_sequence_op.nmi {
+        cpu_execute_hardware_interrupt_cycles cpu_interrupt_source.nmi;
+    } elif $operation == cpu_sequence_op.relative_branch {
+        cpu_fetch_byte;
+        cpu_resolve_operand cpu_addressing_mode.relative, cpu_operand_access.read;
+        cpu_apply_relative_branch_cycles taken;
+    }
+
+    add cpu_cycles to port_actual_values;
+    add cpu_program_counter to port_actual_values;
+    add cpu_stack_pointer to port_actual_values;
+    add cpu_status to port_actual_values;
+    add cpu_a to port_actual_values;
+    add cpu_x to port_actual_values;
+    add cpu_y to port_actual_values;
+    add cpu_sequence_error to port_actual_values;
     log_count = length cpu_access_log;
 
     repeat log_count {

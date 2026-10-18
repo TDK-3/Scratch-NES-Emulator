@@ -16,16 +16,16 @@ npm run scratch:vectors
 - `npm run build:ts` emits JavaScript into ignored `dist/`.
 - `npm run scratch:assets` regenerates the decimal byte list from `test_rom.nes`; pass
   `-- --rom /path/to/rom.nes` to select a different build-time ROM without altering that fixture.
-- `npm run scratch:vectors` generates the numeric GoboScript list (5,170 decimal values for the current
-  338-record fixture) from the shared JSON vector fixture. `tests/shared-port-vectors.test.ts` executes all
+- `npm run scratch:vectors` generates the numeric GoboScript list (5,669 decimal values for the current
+  350-record fixture) from the shared JSON vector fixture. `tests/shared-port-vectors.test.ts` executes all
   current vectors against the TypeScript reference modules, and `scratch/src/vector_selftest.gs` replays the
   same records inside the GoboScript project.
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 957 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases to
-source fixtures, 339 cross-domain shared-vector checks (338 records plus the generator regression), 257 pinned
-MIT single-step corpus checks covering all 256 opcode bytes, 47 GoboScript port-algorithm comparisons, 14
+The 973 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases to
+source fixtures, 351 cross-domain shared-vector checks (350 records plus the generator regression), 257 pinned
+MIT single-step corpus checks covering all 256 opcode bytes, 50 GoboScript port-algorithm comparisons, 16
 GoboScript source-lint checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console
@@ -425,9 +425,10 @@ current console frame smoke timing is about 46 ms, so the shell is not a 60 fps 
 ## P4 licensed APU/controller ROM and runtime validation
 
 On 2026-10-15, `npm test` passed all 332 tests (including type-checking), and `npm run build:ts` passed.
-On 2026-10-18, `npm test` passed all 957 tests in about 12 seconds, including the 1,026-vector CPU corpus
+On 2026-10-18, `npm test` passed all 973 tests in about 11 seconds, including the 1,026-vector CPU corpus
 subset, the two new PPU OAMADDR/OAMDATA quirk tests, the 25 shared cartridge-header vectors, the 39 shared
-CPU addressing vectors, and the 61 GoboScript port-algorithm and source-lint tests.
+CPU addressing vectors, the 12 shared CPU sequence vectors, and the 66 GoboScript port-algorithm and
+source-lint tests.
 The suite includes two pinned MIT APU-player smoke tests, covering pulse and noise channels through headless
 controller-to-sample paths. The SquarePlayer case now injects ArrowUp/ArrowDown through the browser keyboard
 adapter into the console; this does not exercise DOM events. These tests do not validate host playback or hardware
@@ -589,15 +590,16 @@ documented. Favor exhaustive byte-input checks for numeric primitives and bounda
 
 Current parity coverage, in three layers:
 
-1. `tests/shared-port-vectors.test.ts` executes all 338 fixture records against the production TypeScript
-   modules (339 tests including the generator regression).
-2. `tests/goboscript-port-algorithms.test.ts` runs 47 comparisons against
+1. `tests/shared-port-vectors.test.ts` executes all 350 fixture records against the production TypeScript
+   modules (351 tests including the generator regression).
+2. `tests/goboscript-port-algorithms.test.ts` runs 50 comparisons against
    `tests/support/goboscript_port_algorithms.ts`, an integer-only TypeScript mirror of every ported GoboScript
    helper. It sweeps all 256 by 256 operand pairs for ADC/SBC/AND/ORA/EOR/CMP/BIT/INC/DEC and all 256 by 256
    status combinations for the shift and rotate steps, sweeps every status byte against every flag for the
    status helpers, replays the numeric, ALU, bus, controller, cartridge, and CPU addressing vectors through
    the mirror, and differentially compares the mirrored bus and controller ports with `NesCpuBus` and
-   `NesControllerPorts`. The CPU mirror reproduces every addressing mode against
+   `NesControllerPorts`. The CPU mirror reproduces every cycle sequence against `Cpu2A03.reset()` and `step()`
+   for reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative branches, and reproduces every addressing mode against
    `Cpu2A03.resolve_addressing_mode()` including access order and cycle counts, reports the error code the
    port uses where the reference throws for an illegal mode and access pair, and compares its fetch and stack
    transactions with the traces of real PHA, PLA, JSR, RTS, BRK, RTI, and immediate-operand instructions. For

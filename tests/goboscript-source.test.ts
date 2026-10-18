@@ -70,6 +70,7 @@ const MIRRORED_HEADERS: readonly string[] = [
     "src/cpu_alu.gs",
     "src/cpu_bus.gs",
     "src/cpu_core.gs",
+    "src/cpu_sequence.gs",
     "src/cpu_status.gs",
     "src/numeric.gs",
 ];
@@ -201,6 +202,46 @@ const MIRROR_CONTRACT: readonly {
         declaration: "cpu_resolve_operand",
         mirror: "GoboscriptCpuCore.resolve_operand",
     },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_reset_sequence_error",
+        mirror: "GoboscriptCpuCore.reset_sequence_error",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_execute_reset_cycles",
+        mirror: "GoboscriptCpuCore.execute_reset_cycles",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_execute_brk_cycles",
+        mirror: "GoboscriptCpuCore.execute_brk_cycles",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_execute_jsr_cycles",
+        mirror: "GoboscriptCpuCore.execute_jsr_cycles",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_execute_rti_cycles",
+        mirror: "GoboscriptCpuCore.execute_rti_cycles",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_execute_rts_cycles",
+        mirror: "GoboscriptCpuCore.execute_rts_cycles",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_execute_hardware_interrupt_cycles",
+        mirror: "GoboscriptCpuCore.execute_hardware_interrupt_cycles",
+    },
+    {
+        source: "src/cpu_sequence.gs",
+        declaration: "cpu_apply_relative_branch_cycles",
+        mirror: "GoboscriptCpuCore.apply_relative_branch_cycles",
+    },
     { source: "src/cartridge.gs", declaration: "header_byte", mirror: "GoboscriptCartridgeParser.header_byte" },
     { source: "src/cartridge.gs", declaration: "power_of_two", mirror: "power_of_two" },
     { source: "src/cartridge.gs", declaration: "is_safe_size", mirror: "is_safe_size" },
@@ -271,6 +312,12 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "dispatcher",
     },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_cpu_sequence_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
 ];
 
@@ -286,6 +333,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_alu.gs",
         "src/cpu_bus.gs",
         "src/cpu_core.gs",
+        "src/cpu_sequence.gs",
         "src/cpu_status.gs",
         "src/numeric.gs",
         "src/rom_loader.gs",
@@ -545,6 +593,48 @@ const CYCLE_SPENDING_CALLABLES: readonly string[] = [
     "cpu_bus_write",
 ];
 
+test("arguments are read through a dollar sign inside their own body", () => {
+    // GoboScript resolves a bare name to a variable, list, enum, proc, or func; only `$name`
+    // reads a procedure argument. A bare argument name therefore becomes an unrelated name
+    // lookup instead of a compile error, and the name-resolution check above cannot tell the
+    // two apart, so the shape needs its own lint. A local of the same name is a deliberate
+    // shadow and is allowed.
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        for (const declaration of source.declarations) {
+            if ((declaration.kind !== "proc" && declaration.kind !== "func") || declaration.args.length === 0) {
+                continue;
+            }
+
+            const locals = new Set(
+                declaration.body
+                    .flatMap((line) => [...strip_comments_and_strings(line).matchAll(/\blocal\s+(\w+)\b/g)])
+                    .map((match) => match[1] ?? ""),
+            );
+
+            declaration.body.forEach((raw_line, offset) => {
+                const line = strip_comments_and_strings(raw_line);
+
+                for (const arg of declaration.args) {
+                    if (locals.has(arg)) {
+                        continue;
+                    }
+
+                    if (new RegExp(`(^|[^\\w.$])${arg}([^\\w]|$)`).test(line)) {
+                        violations.push(
+                            `${source.path}:${declaration.line + 1 + offset}: ` +
+                                `argument ${arg} must be read as $${arg}`,
+                        );
+                    }
+                }
+            });
+        }
+    }
+
+    assert.deepEqual(violations, []);
+});
+
 test("cycle-spending helpers are never nested inside another call", () => {
     const violations: string[] = [];
 
@@ -686,7 +776,10 @@ test("the self-test suite ids match the shared vector fixture", () => {
     const handled = new Set(
         (dispatcher_body.match(/port_suite\.(\w+)/g) ?? []).map((match) => match.slice("port_suite.".length)),
     );
-    assert.deepEqual([...handled].sort(), ["alu", "bus", "cartridge", "controller", "cpu_addressing", "numeric"]);
+    assert.deepEqual(
+        [...handled].sort(),
+        ["alu", "bus", "cartridge", "controller", "cpu_addressing", "cpu_sequence", "numeric"],
+    );
 
     const skipped = shared_port_fixture.suites
         .filter((suite) => !handled.has(suite.name))
@@ -741,6 +834,18 @@ test("the self-test operation ids match the shared vector fixture operations", (
     assert.deepEqual(
         [...addressing_operations].sort((first, second) => first - second),
         [...addressing_enum.values()].sort((first, second) => first - second),
+    );
+
+    // Suite 11 operations are the ported cycle sequences.
+    const sequence_enum = get_enum(get_source("src/cpu_sequence.gs"), "cpu_sequence_op");
+    assert.deepEqual(
+        [...sequence_enum.values()].sort((first, second) => first - second),
+        contiguous_ids(sequence_enum.size),
+        "cpu_sequence_op ids must be contiguous from one",
+    );
+    assert.deepEqual(
+        [...fixture_operations("cpu_sequence")].sort((first, second) => first - second),
+        [...sequence_enum.values()].sort((first, second) => first - second),
     );
 });
 

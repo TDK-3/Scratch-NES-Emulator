@@ -22,6 +22,12 @@ import {
     project_cpu_addressing,
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
+import {
+    CPU_SEQUENCE_FIXED_INPUT_COUNT,
+    CPU_SEQUENCE_OPS,
+    project_cpu_sequence,
+    type CpuSequenceSetup,
+} from "./support/cpu_sequence_projection.js";
 import { parse_ines_rom } from "../src/nes/cartridge/ines.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { get_shared_vector_suite, vector_input } from "./support/shared_port_vectors.js";
@@ -1359,3 +1365,183 @@ function make_controller_bus_devices(controllers: NesControllerPorts): NesCpuBus
         },
     };
 }
+/**
+ * Loads the register state and memory setup of one suite-11 record, then clears the cycle
+ * accounting, exactly as `run_cpu_sequence_vector` in scratch/src/vector_selftest.gs does.
+ */
+function make_mirror_cpu_sequence(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
+    const core = new ported.GoboscriptCpuCore();
+    core.reset_registers();
+    core.bus.clear_ram();
+    core.bus.reset();
+    core.program_counter = vector_inputs[0] ?? 0;
+    core.a = vector_inputs[1] ?? 0;
+    core.x = vector_inputs[2] ?? 0;
+    core.y = vector_inputs[3] ?? 0;
+    core.stack_pointer = vector_inputs[4] ?? 0;
+    core.status = vector_inputs[5] ?? 0;
+
+    const setup_count = vector_inputs[7] ?? 0;
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector_inputs[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2] ?? 0;
+        const value = vector_inputs[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2 + 1] ?? 0;
+        core.bus.write(address, value);
+    }
+
+    core.reset_cycle_accounting();
+    core.reset_sequence_error();
+    return core;
+}
+
+/**
+ * Runs one suite-11 record on the mirror. Instruction sequences fetch their opcode byte first,
+ * because the reference reaches BRK, JSR, RTI, and RTS through execute_instruction_cycles;
+ * reset and the two hardware interrupts fetch no opcode.
+ */
+function run_mirror_cpu_sequence(operation_id: number, vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
+    const core = make_mirror_cpu_sequence(vector_inputs);
+    const taken = vector_inputs[6] ?? 0;
+
+    switch (operation_id) {
+        case ported.CPU_SEQUENCE_OP.RESET:
+            core.execute_reset_cycles();
+            break;
+        case ported.CPU_SEQUENCE_OP.BRK:
+            core.fetch_byte();
+            core.execute_brk_cycles();
+            break;
+        case ported.CPU_SEQUENCE_OP.JSR:
+            core.fetch_byte();
+            core.execute_jsr_cycles();
+            break;
+        case ported.CPU_SEQUENCE_OP.RTI:
+            core.fetch_byte();
+            core.execute_rti_cycles();
+            break;
+        case ported.CPU_SEQUENCE_OP.RTS:
+            core.fetch_byte();
+            core.execute_rts_cycles();
+            break;
+        case ported.CPU_SEQUENCE_OP.IRQ:
+            core.execute_hardware_interrupt_cycles(ported.CPU_INTERRUPT_SOURCE.IRQ);
+            break;
+        case ported.CPU_SEQUENCE_OP.NMI:
+            core.execute_hardware_interrupt_cycles(ported.CPU_INTERRUPT_SOURCE.NMI);
+            break;
+        case ported.CPU_SEQUENCE_OP.RELATIVE_BRANCH:
+            core.fetch_byte();
+            core.resolve_operand(ported.CPU_ADDRESSING_MODE.RELATIVE, ported.CPU_OPERAND_ACCESS.READ);
+            core.apply_relative_branch_cycles(taken);
+            break;
+        default:
+            throw new RangeError(`Unknown CPU sequence id ${operation_id}.`);
+    }
+
+    return core;
+}
+
+/** The values `run_cpu_sequence_vector` appends, in the order suite 11 records them. */
+function mirror_sequence_values(core: ported.GoboscriptCpuCore): number[] {
+    return [
+        core.cycles,
+        core.program_counter,
+        core.stack_pointer,
+        core.status,
+        core.a,
+        core.x,
+        core.y,
+        core.sequence_error,
+        ...core.access_log,
+    ];
+}
+
+/** Collects the memory setup pairs of one suite-11 record. */
+function mirror_sequence_setup(vector_inputs: readonly number[]): CpuSequenceSetup[] {
+    const setup: CpuSequenceSetup[] = [];
+    const setup_count = vector_inputs[7] ?? 0;
+
+    for (let index = 0; index < setup_count; index += 1) {
+        setup.push({
+            address: vector_inputs[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2] ?? 0,
+            value: vector_inputs[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2 + 1] ?? 0,
+        });
+    }
+
+    return setup;
+}
+
+test("the mirror reproduces every shared cpu_sequence vector", () => {
+    for (const vector of get_shared_vector_suite("cpu_sequence").vectors) {
+        const core = run_mirror_cpu_sequence(vector.operation, vector.input);
+        assert.deepEqual(mirror_sequence_values(core), [...vector.expected], `cpu_sequence vector ${vector.id}`);
+        assert.equal(
+            core.cycles,
+            core.access_log.length / 3,
+            `cpu_sequence vector ${vector.id} spends one cycle per bus access`,
+        );
+
+        assert.deepEqual(
+            mirror_sequence_values(core),
+            project_cpu_sequence(
+                vector.operation,
+                vector_input(vector, 0),
+                vector_input(vector, 1),
+                vector_input(vector, 2),
+                vector_input(vector, 3),
+                vector_input(vector, 4),
+                vector_input(vector, 5),
+                vector_input(vector, 6),
+                mirror_sequence_setup(vector.input),
+            ),
+            `cpu_sequence vector ${vector.id} against the reference sequence`,
+        );
+    }
+});
+
+test("the shared cpu_sequence vectors cover every ported sequence id", () => {
+    const covered = new Set(get_shared_vector_suite("cpu_sequence").vectors.map((vector) => vector.operation));
+    assert.deepEqual(
+        [...covered].sort((first, second) => first - second),
+        CPU_SEQUENCE_OPS.map((entry) => entry.id),
+    );
+});
+
+test("the mirror reports an error when a branch is applied to a non-relative operand", () => {
+    // The reference guards this with a TypeError inside the private
+    // apply_relative_branch_cycles(), which no public entry point can reach with the wrong
+    // operand kind, so the port reports a code instead of throwing and spends no cycles.
+    const core = make_mirror_cpu_sequence([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 1, 2, 0x0200, 0xa5, 0x0201, 0x30]);
+    core.resolve_operand(ported.CPU_ADDRESSING_MODE.ZERO_PAGE, ported.CPU_OPERAND_ACCESS.READ);
+    const cycles_before = core.cycles;
+    const program_counter_before = core.program_counter;
+
+    core.apply_relative_branch_cycles(1);
+
+    assert.equal(core.sequence_error, ported.CPU_SEQUENCE_ERROR_CODE.NOT_RELATIVE_OPERAND);
+    assert.equal(core.cycles, cycles_before, "a rejected branch spends nothing");
+    assert.equal(core.program_counter, program_counter_before, "a rejected branch does not move the counter");
+    assert.deepEqual(core.access_log.slice(cycles_before * 3), [], "a rejected branch touches no bus");
+
+    // The same call with a relative operand succeeds and reports no error.
+    const branched = make_mirror_cpu_sequence([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 1, 2, 0x0200, 0x90, 0x0201, 0x05]);
+    branched.fetch_byte();
+    branched.resolve_operand(ported.CPU_ADDRESSING_MODE.RELATIVE, ported.CPU_OPERAND_ACCESS.READ);
+    branched.apply_relative_branch_cycles(1);
+
+    assert.equal(branched.sequence_error, ported.CPU_SEQUENCE_ERROR_CODE.NONE);
+    assert.equal(branched.program_counter, 0x0207);
+
+    // A branch that is not taken leaves the counter where the operand resolution put it.
+    const not_taken = make_mirror_cpu_sequence([
+        0x0200, 0x11, 0x22, 0x33, 0xfd, 0x25, 0, 2, 0x0200, 0x90, 0x0201, 0x05,
+    ]);
+    not_taken.fetch_byte();
+    not_taken.resolve_operand(ported.CPU_ADDRESSING_MODE.RELATIVE, ported.CPU_OPERAND_ACCESS.READ);
+    const cycles_after_operand = not_taken.cycles;
+    not_taken.apply_relative_branch_cycles(0);
+
+    assert.equal(not_taken.sequence_error, ported.CPU_SEQUENCE_ERROR_CODE.NONE);
+    assert.equal(not_taken.cycles, cycles_after_operand, "a branch that is not taken spends nothing");
+    assert.equal(not_taken.program_counter, 0x0202);
+});

@@ -266,6 +266,12 @@ lint in `tests/goboscript-source.test.ts` exists.
   grouped argument, and a func used as a statement becomes an unknown-proc call. Reading that rule out of the
   grammar found 39 parenthesized proc call sites in this project's `.gs` sources, all now written as
   `name arg1, arg2;` and guarded by a lint that also checks argument counts.
+- A bare argument name is not the argument: only `$name` compiles to the `argument_reporter_string_number`
+  block for that parameter, while a bare `name` resolves like any other identifier, to a variable, list, enum,
+  proc, or func. Writing `cpu_resolve_operand operation, access;` inside a proc whose parameter is `operation`
+  therefore reads an unrelated name instead of failing to compile. Two such call sites existed in this project
+  and a source lint now rejects any bare occurrence of a parameter name inside its own body unless a `local`
+  deliberately shadows it.
 - An expression-position func call is lowered, not inlined: `src/visitor/pass1.rs` pushes a `Stmt::FuncCall`
   into the enclosing statement's hoisted prefix and replaces the expression with a fresh callsite variable
   (`@1`, `@2`, ...), so the call runs before the statement that reads its result. Arguments are visited before
@@ -359,10 +365,11 @@ assets, run `goboscript build`, open or reload the emitted `.sb3`, and test it i
    playable emulator.
 
 Position as of 2026-10-18: steps 1 through 4 are done for the helper layer (numeric, status, ALU, controller,
-a CPU-bus subset, cartridge header parsing, and the CPU register/fetch/stack/addressing scaffolding), and step
-6 is written but unrun, because the project cannot be compiled here. Step 5 (opcode dispatch, instruction cycle
-sequences, interrupts, and yield policy) and the cartridge payload copy are the next porting work, and step 7
-remains entirely blocked on a toolchain. The in-project self test replays suites 1, 3, 7, 8, 9, and 10 of the
+a CPU-bus subset, cartridge header parsing, the CPU register/fetch/stack/addressing scaffolding, and the reset,
+BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences), and step 6 is written but unrun, because
+the project cannot be compiled here. Step 5 (opcode dispatch, the remaining instruction cycle sequences,
+interrupt acceptance policy, and yield policy) and the cartridge payload copy are the next porting work, and
+step 7 remains entirely blocked on a toolchain. The in-project self test replays suites 1, 3, 7, 8, 9, and 10 of the
 shared fixture and counts the CPU instruction, MMC3, PPU, and APU suites as skipped rather than passing.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and

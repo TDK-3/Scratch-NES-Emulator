@@ -17,6 +17,7 @@ costumes "assets/blank.svg";
 %include src/cpu_bus
 %include src/cpu_core
 %include src/cpu_addressing
+%include src/cpu_sequence
 %include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors

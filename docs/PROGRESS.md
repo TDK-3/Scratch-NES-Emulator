@@ -262,6 +262,40 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported the CPU cycle sequences that do not need opcode decoding to `scratch/src/cpu_sequence.gs`:
+      reset, BRK, JSR, RTI, RTS, the NMI and IRQ/BRK hardware interrupts, and a relative branch, each spending
+      one logged cycle per bus access. Opcode fetch stays with the caller, matching the reference, which
+      reaches BRK, JSR, RTI, and RTS through `execute_instruction_cycles`. Interrupt acceptance policy (the NMI
+      latch, the IRQ line, and the interrupt-disable mask between sequences) is deliberately not ported; the
+      caller picks the sequence, and a branch applied to a non-relative operand records a sequence error code
+      where the reference throws from a private method.
+- [x] Grew the shared fixture from 338 to 350 records with suite 11 (`cpu_sequence`, 12 records) derived by
+      executing `Cpu2A03.reset()` and `step()` behind a fresh decoder with no devices. The records cover the
+      reset stack-pointer decrement and its wrap through page one, BRK with and without the break flag already
+      set, the JSR push of the high operand address, RTI restoring a popped status that had break set, the RTS
+      read of the return address, IRQ accepted with interrupt disable clear, NMI accepted with it set, and a
+      branch taken inside one page, taken across a page, and not taken. Their vector reads of `$FFFA`-`$FFFF`
+      return open bus on both sides, which also pins the latch that the pushes drive. Extracted the shared bus
+      recorder into `tests/support/recording_cpu_bus.ts`, added
+      `tests/support/cpu_sequence_projection.ts`, and added three mirror tests (50 in
+      `tests/goboscript-port-algorithms.test.ts`) that replay every suite-11 record, check that the fixture
+      covers all eight sequence ids, and exercise the branch error path.
+- [x] Added two source-lint rules read out of the compiler's lowering, each mutation-checked: an argument may
+      only be read as `$name`, because a bare name resolves to an unrelated variable, list, enum, proc, or func
+      (this found two real call sites, in `cpu_core.gs` and `vector_selftest.gs`), and no cycle-spending helper
+      may be nested inside another call's arguments, because `src/visitor/pass1.rs` hoists an
+      expression-position func call in front of the enclosing statement (this found
+      `to_signed_byte(cpu_fetch_byte())` in `cpu_addressing.gs`). The lint now has 16 tests.
+- [x] Read the func lowering out of the compiler snapshot and reshaped the CPU helpers to match it.
+      `src/visitor/pass1.rs` turns an expression-position func call into a hoisted `Stmt::FuncCall` plus a
+      callsite variable, so a bus access nested inside another call would be ordered by that lowering rather
+      than by the source; `Codegen::func` also emits a warp custom block (`Mutation::prototype(..., warp =
+      true, ...)`) whose `return` is a `data_setvariableto`, not a Scratch reporter. `cpu_read_cycle`,
+      `cpu_fetch_byte`, `cpu_fetch_word`, `cpu_pop_byte`, and `cpu_pop_word` are therefore procs that leave
+      their results in `cpu_cycle_value`, `cpu_fetched_byte`, `cpu_fetched_word`, `cpu_popped_byte`, and
+      `cpu_popped_word`, the mirror and its tests were converted with them, and a source-lint test rejects any
+      cycle-spending helper nested inside another call's arguments. Findings are recorded in
+      `docs/GOBOSCRIPT_RESEARCH.md`.
 - [x] Fixed a systematic port syntax error and locked it down: every parenthesized multi-argument `proc`
       call in the `.gs` sources (39 call sites across `cartridge.gs`, `cpu_bus.gs`, and
       `vector_selftest.gs`) would not parse, because GoboScript calls a proc as `name arg1, arg2;` and only
@@ -272,13 +306,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 957 tests in about 12 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 339 shared port-vector tests (338 records), 47 GoboScript port-algorithm
-  tests, 15 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
+- `npm test` on 2026-10-18: passed all 973 tests in about 11 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 351 shared port-vector tests (350 records), 50 GoboScript port-algorithm
+  tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 5,170 decimal values for 338 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 5,669 decimal values for 350 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -295,7 +329,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 338 records and 5,170 values).
+  (2026-10-15 figures; the fixture has since grown to 350 records and 5,669 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

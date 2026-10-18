@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for ten suites and 338 records. TypeScript regression tests execute each vector
+inputs and expected outputs for eleven suites and 350 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (5,170 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (5,669 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -55,6 +55,7 @@ suite and operation IDs present in the fixture.
 | 8 | ALU | 1: ADC; 2: SBC; 3: AND; 4: ORA; 5: EOR; 10: CMP; 11: CPX; 12: CPY; 13: BIT take `(left, right, status)`. 6: ASL; 7: LSR; 8: ROL; 9: ROR; 14: INC; 15: DEC take `(value, status)`. | Result byte and status byte, recorded by executing the matching production instruction on `Cpu2A03`. |
 | 9 | Cartridge header | 1: inputs are the declared image length in bytes followed by all 16 header bytes. | Eighteen values: ok, error code, format, mapper, submapper, mirroring, battery, trainer, PRG ROM bytes, CHR ROM bytes, PRG RAM, PRG NVRAM, CHR RAM, CHR NVRAM, trainer offset, PRG offset, CHR offset, payload end. Recorded by executing `parse_ines_rom` in `src/nes/cartridge/ines.ts`. |
 | 10 | CPU addressing | Operation id is the addressing mode (1-13). Inputs: access kind, PC, A, X, Y, SP, status, setup count, then `(address, value)` pairs. | Resolved operand kind, mode, access, base address, address, value, page crossed, error code, cycles, final PC, final SP, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder with no devices. |
+| 11 | CPU cycle sequence | Operation id is the sequence (1 reset, 2 BRK, 3 JSR, 4 RTI, 5 RTS, 6 IRQ, 7 NMI, 8 relative branch). Inputs: PC, A, X, Y, SP, status, taken flag, setup count, then `(address, value)` pairs. | Cycles, final PC, SP, status, A, X, Y, sequence error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.reset()` or `step()` behind a fresh decoder with no devices. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
 1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
@@ -73,6 +74,17 @@ one `(kind, address, value)` triple per bus access, so dummy reads, their addres
 pinned with the operand. Records were derived by executing `Cpu2A03.resolve_addressing_mode()` behind a fresh
 `NesCpuBus` with no devices attached, and none of them may touch `$4000-$401F`, which the reference test
 asserts, because the ported decoder always has live controller ports.
+
+Suite 11 records whole cycle sequences rather than single operand resolutions. Sequences 2 through 5 and 8 are
+instruction sequences, so their setup bytes hold the opcode at the program counter and the recorded trace
+includes the opcode fetch that `execute_instruction_cycles` performs before the ported sequence starts; reset
+and the two hardware interrupts fetch no opcode. Sequence 8 records a BCC, so the taken input has to agree with
+the carry flag in the status input, which the projection enforces. The records cover the reset stack-pointer
+decrement and its wrap through page one, the BRK status byte with and without the break flag already set, the
+JSR push of the high operand address, the RTI restore of a popped status that had break set, the RTS read of
+the return address, IRQ acceptance with interrupt disable clear, NMI acceptance with it set, and a branch that
+is taken inside one page, taken across a page, and not taken. Their vector reads of `$FFFA`-`$FFFF` return open
+bus, because no cartridge is attached on either side, which also pins the open-bus latch that the pushes drive.
 
 Operation 1 of suite 3 replays against a decoder with no devices attached, while the GoboScript port always has
 live controller ports; suite 3 operation 1 records therefore must not read `$4016`/`$4017`, and
@@ -94,13 +106,17 @@ stand in for that until the toolchain is available:
   Scratch's floored modulo and floor division instead of ECMAScript operators and no bitwise operators at all.
   `tests/goboscript-port-algorithms.test.ts` compares those mirrors exhaustively against the bitwise reference
   in `src/nes/cpu/registers.ts`, `src/nes/cpu/alu.ts`, and the instruction steps of `src/nes/cpu/cpu_2a03.ts`,
-  replays every numeric, ALU, bus, controller, and cartridge vector through them, and differentially checks the
-  bus, controller, cartridge, and CPU addressing mirrors against `NesCpuBus` and `NesControllerPorts`. The
+  replays every numeric, ALU, bus, controller, cartridge, addressing, and sequence vector through them, and
+  differentially checks the bus, controller, cartridge, and CPU mirrors against `NesCpuBus`,
+  `NesControllerPorts`, and `Cpu2A03`. The
   CPU mirror is `GoboscriptCpuCore`, which reproduces the register state, one logged bus transaction per
-  cycle, program-counter fetches, the four stack operations, and all thirteen addressing modes; it is
+  cycle, program-counter fetches, the four stack operations, all thirteen addressing modes, and the reset,
+  BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch sequences; it is
   compared against `Cpu2A03.resolve_addressing_mode()` through
-  `tests/support/cpu_addressing_projection.ts`, and its stack transactions are compared against the bus
-  traces of real PHA, PLA, JSR, RTS, BRK, and RTI instructions. The cartridge mirror is
+  `tests/support/cpu_addressing_projection.ts`, against `Cpu2A03.reset()` and `step()` through
+  `tests/support/cpu_sequence_projection.ts`, and its stack transactions are compared against the bus
+  traces of real PHA, PLA, JSR, RTS, BRK, and RTI instructions. Both CPU projections share the bus recorder
+  and absent-device factory in `tests/support/recording_cpu_bus.ts`. The cartridge mirror is
   `GoboscriptCartridgeParser`, which is compared against `parse_ines_rom` for every `flags6` byte, every
   `flags7` byte, every legacy PRG RAM bank count, every NES 2.0 mapper and RAM byte, and all 4,096 encoded
   NES 2.0 ROM sizes, through the shared projection in `tests/support/cartridge_projection.ts`.
@@ -110,7 +126,10 @@ stand in for that until the toolchain is available:
   inside a loop body, no name colliding with a GoboScript keyword or a Scratch block shape, sprite sources that
   reference only Stage-owned state, every identifier resolvable in its translation unit, mirror name/arity
   parity for each ported helper, and call shapes: a `proc` must be called as `name arg1, arg2;` without
-  parentheses and a `func` as `name(arg1, arg2)`, each with its declared argument count.
+  parentheses and a `func` as `name(arg1, arg2)`, each with its declared argument count. Two more shape rules
+  come from how the compiler lowers calls: an argument may only be read as `$name`, because a bare name becomes
+  an unrelated variable lookup, and no cycle-spending helper may be nested inside another call's arguments,
+  because an expression-position `func` call is hoisted in front of the enclosing statement.
 
 A pass means the ported arithmetic and the source shape are consistent with the reference. It does not mean the
 project compiles, loads in TurboWarp, or meets any performance target.

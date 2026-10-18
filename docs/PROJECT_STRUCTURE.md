@@ -126,8 +126,10 @@
             NromTestBus.ts
             cartridge_projection.ts  reference projection of a header parse onto suite 9
             cpu_addressing_projection.ts  reference projection of one addressing-mode resolution
+            cpu_sequence_projection.ts  reference projection of one CPU cycle sequence
             goboscript_port_algorithms.ts  integer-only mirror of the ported helpers
             nestest_runner.ts
+            recording_cpu_bus.ts  bus recorder and absent-device factory shared by the CPU projections
             shared_port_vectors.ts  fixture loader shared by both vector tests
     scripts/
         generate_goboscript_rom_data.mjs
@@ -149,6 +151,7 @@
             cpu_alu.gs  ADC, SBC, logic, shift, compare, BIT, INC, DEC
             cpu_bus.gs  RAM mirroring, open bus, controller window
             cpu_core.gs  registers, one logged bus transaction per cycle, fetch and stack operations
+            cpu_sequence.gs  reset, BRK, JSR, RTI, RTS, interrupt, and branch cycle sequences
             cpu_status.gs  status normalization and flag updates
             numeric.gs  bit-free byte, word, and bitwise helpers
             rom_loader.gs  generated ROM list, header load, and signature check
@@ -235,6 +238,9 @@ toolchain needs Cargo and rustc, which are unavailable here.
   reads, the extra cycle when an indexed access crosses a page or writes, and the JMP indirect pointer wrap
   inside one page. An illegal mode and access pair records an error code instead of stopping the project,
   where the TypeScript reference throws.
+- `src/cpu_sequence.gs` holds the cycle sequences that do not need opcode decoding: reset, BRK, JSR, RTI,
+  RTS, the NMI and IRQ/BRK hardware interrupts, and a relative branch. Opcode fetch stays with the caller,
+  because the reference reaches the four instruction sequences through `execute_instruction_cycles`.
 - `src/cartridge.gs` parses both header versions into the `cartridge_*` result globals: signature, version,
   mapper and submapper, mirroring, battery, trainer, PRG/CHR ROM sizes including the NES 2.0 exponent form,
   the four RAM/NVRAM sizes, and the trainer/PRG/CHR offsets. Failures set one numeric error code and leave
@@ -242,8 +248,8 @@ toolchain needs Cargo and rustc, which are unavailable here.
 - `src/rom_loader.gs` loads the generated ROM list, checks the iNES signature, copies the embedded header into
   the parser, and writes the summary text the self test reports.
 - `src/shared_vectors.gs` loads the generated port-vector list.
-- `src/vector_selftest.gs` walks that list, executes suites 1, 3, 7, 8, 9, and 10, counts suites 2, 4, 5, and
-  6 as skipped, and writes the summary variables the sprite reports.
+- `src/vector_selftest.gs` walks that list, executes suites 1, 3, 7, 8, 9, 10, and 11, counts suites 2, 4, 5,
+  and 6 as skipped, and writes the summary variables the sprite reports.
 - `assets/` holds costume and other compiler-packaged assets.
 - `data/test_rom_bytes.txt` is generated from the default fixture or an explicitly selected build-time ROM
   before a build.
@@ -254,8 +260,9 @@ toolchain needs Cargo and rustc, which are unavailable here.
 
 Keep helper `.gs` files in subdirectories. A new `.gs` file in the project root becomes a new sprite unless
 it is the special `stage.gs` file. `tests/goboscript-source.test.ts` enforces the layout rules above, the
-upstream grammar shape, proc and func call shapes and argument counts, the rule that a cycle-spending helper is
-never nested inside another call's arguments, and name/arity parity with
+upstream grammar shape, proc and func call shapes and argument counts, the rules that a cycle-spending helper is
+never nested inside another call's arguments and that an argument is only read through `$`, and name/arity
+parity with
 `tests/support/goboscript_port_algorithms.ts`.
 
 ## Build products and ownership
