@@ -51,9 +51,10 @@ loading, persistence, and known-limitations statement.
 - The GoboScript project statically embeds one selected ROM as a decimal list (default: `test_rom.nes`),
   checks its iNES signature, and ports the helper layer: bit-free numeric and status helpers, thirteen ALU
   operations, both serial controller ports, a CPU-bus subset with RAM mirroring and the open-bus latch, and
-  iNES/NES 2.0 cartridge header parsing with numeric error codes.
-  Its Stage runs a self test over the 299 generated parity vectors and reports a summary; the CPU core,
-  mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
+  iNES/NES 2.0 cartridge header parsing with numeric error codes, plus CPU register state, logged bus
+  cycles, stack operations, and all thirteen addressing modes.
+  Its Stage runs a self test over the 338 generated parity vectors and reports a summary; the CPU
+  instruction, mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
   been compiled, because the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
   source lint for grammar shape and reserved names.
@@ -100,8 +101,8 @@ sample-rate/channel output, register/frame-sequencer/mixer behavior, PPU registe
 output, pinned MIT SquarePlayer and NoisePlayer controller-to-APU smoke tests, browser keyboard mapping,
 Web Audio filtering and sink scheduling, canvas conversion/scaling and frame scheduling,
 optional instruction-level traces, byte-exact build-time Scratch ROM asset generation with source-overwrite
-protection, a 299-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
-APU, controller, ALU, and cartridge-header behavior, and 1,026 selected MIT-licensed NES 2A03 reference vectors covering all 256
+protection, a 338-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
+APU, controller, ALU, cartridge-header, and CPU addressing behavior, and 1,026 selected MIT-licensed NES 2A03 reference vectors covering all 256
 opcode bytes. The respective fixture details are documented in
 [`docs/GOBOSCRIPT_PORT_VECTORS.md`](docs/GOBOSCRIPT_PORT_VECTORS.md) and
 [`tests/fixtures/nes6502/README.md`](tests/fixtures/nes6502/README.md).

@@ -26,6 +26,12 @@ import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
 import { FakeCpuBus } from "./support/FakeCpuBus.js";
 import { CARTRIDGE_HEADER_BYTES, project_cartridge_header } from "./support/cartridge_projection.js";
 import {
+    CPU_ADDRESSING_FIXED_INPUT_COUNT,
+    CPU_ADDRESSING_FIXED_VALUE_COUNT,
+    project_cpu_addressing,
+    type CpuAddressingSetup,
+} from "./support/cpu_addressing_projection.js";
+import {
     for_each_vector,
     shared_port_fixture as fixture,
     shared_port_fixture_text as fixture_text,
@@ -420,6 +426,51 @@ for_each_vector("cartridge", (vector) => {
 
     const actual = project_cartridge_header(image_bytes, vector.input.slice(1));
     assert.deepEqual(actual, [...vector.expected]);
+});
+
+for_each_vector("cpu_addressing", (vector) => {
+    const mode_id = vector.operation;
+    const [access_id, program_counter, accumulator, x, y, stack_pointer, status, setup_count] = vector.input;
+    assert.ok(
+        access_id !== undefined &&
+            program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            setup_count !== undefined,
+        "Addressing vectors supply the access, all six registers, and a setup count.",
+    );
+    assert.equal(vector.input.length, CPU_ADDRESSING_FIXED_INPUT_COUNT + setup_count * 2);
+
+    const setup: CpuAddressingSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2];
+        const value = vector.input[CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    const actual = project_cpu_addressing(
+        mode_id,
+        access_id,
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        setup,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+
+    // The ported decoder always has live controller ports, so no record may touch $4000-$401F.
+    for (let offset = CPU_ADDRESSING_FIXED_VALUE_COUNT; offset < actual.length; offset += 3) {
+        const address = actual[offset + 1] ?? 0;
+        assert.ok(address < 0x4000 || address > 0x401f, `Access at $${address.toString(16)} is controller space.`);
+    }
 });
 
 const ALU_PROGRAM_ADDRESS = 0x8000;

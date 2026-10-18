@@ -66,8 +66,10 @@ const SCRATCH_BLOCK_NAMES: readonly string[] = [
 const MIRRORED_HEADERS: readonly string[] = [
     "src/cartridge.gs",
     "src/controller.gs",
+    "src/cpu_addressing.gs",
     "src/cpu_alu.gs",
     "src/cpu_bus.gs",
+    "src/cpu_core.gs",
     "src/cpu_status.gs",
     "src/numeric.gs",
 ];
@@ -160,6 +162,45 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read", mirror: "GoboscriptCpuBus.read" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read_io", mirror: "GoboscriptCpuBus.read_io" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_write", mirror: "GoboscriptCpuBus.write" },
+    { source: "src/cpu_bus.gs", declaration: "cpu_bus_clear_ram", mirror: "GoboscriptCpuBus.clear_ram" },
+    {
+        source: "src/cpu_core.gs",
+        declaration: "cpu_reset_cycle_accounting",
+        mirror: "GoboscriptCpuCore.reset_cycle_accounting",
+    },
+    { source: "src/cpu_core.gs", declaration: "cpu_reset_registers", mirror: "GoboscriptCpuCore.reset_registers" },
+    { source: "src/cpu_core.gs", declaration: "cpu_read_cycle", mirror: "GoboscriptCpuCore.read_cycle" },
+    { source: "src/cpu_core.gs", declaration: "cpu_write_cycle", mirror: "GoboscriptCpuCore.write_cycle" },
+    { source: "src/cpu_core.gs", declaration: "cpu_dummy_read_cycle", mirror: "GoboscriptCpuCore.dummy_read_cycle" },
+    { source: "src/cpu_core.gs", declaration: "cpu_fetch_byte", mirror: "GoboscriptCpuCore.fetch_byte" },
+    { source: "src/cpu_core.gs", declaration: "cpu_fetch_word", mirror: "GoboscriptCpuCore.fetch_word" },
+    { source: "src/cpu_core.gs", declaration: "cpu_push_byte", mirror: "GoboscriptCpuCore.push_byte" },
+    { source: "src/cpu_core.gs", declaration: "cpu_pop_byte", mirror: "GoboscriptCpuCore.pop_byte" },
+    { source: "src/cpu_core.gs", declaration: "cpu_push_word", mirror: "GoboscriptCpuCore.push_word" },
+    { source: "src/cpu_core.gs", declaration: "cpu_pop_word", mirror: "GoboscriptCpuCore.pop_word" },
+    { source: "src/cpu_core.gs", declaration: "cpu_push_status", mirror: "GoboscriptCpuCore.push_status" },
+    {
+        source: "src/cpu_core.gs",
+        declaration: "cpu_restore_status_from_stack",
+        mirror: "GoboscriptCpuCore.restore_status_from_stack",
+    },
+    { source: "src/cpu_addressing.gs", declaration: "cpu_page_crossed", mirror: "GoboscriptCpuCore.page_crossed" },
+    {
+        source: "src/cpu_addressing.gs",
+        declaration: "cpu_indexed_dummy_address",
+        mirror: "GoboscriptCpuCore.indexed_dummy_address",
+    },
+    { source: "src/cpu_addressing.gs", declaration: "cpu_reset_operand", mirror: "GoboscriptCpuCore.reset_operand" },
+    {
+        source: "src/cpu_addressing.gs",
+        declaration: "cpu_set_memory_operand",
+        mirror: "GoboscriptCpuCore.set_memory_operand",
+    },
+    {
+        source: "src/cpu_addressing.gs",
+        declaration: "cpu_resolve_operand",
+        mirror: "GoboscriptCpuCore.resolve_operand",
+    },
     { source: "src/cartridge.gs", declaration: "header_byte", mirror: "GoboscriptCartridgeParser.header_byte" },
     { source: "src/cartridge.gs", declaration: "power_of_two", mirror: "power_of_two" },
     { source: "src/cartridge.gs", declaration: "is_safe_size", mirror: "is_safe_size" },
@@ -224,6 +265,12 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/vector_selftest.gs", declaration: "run_bus_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_controller_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_cartridge_vector", mirror: null, reason: "dispatcher" },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_cpu_addressing_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
 ];
 
@@ -235,8 +282,10 @@ test("the GoboScript project contains the expected sources", () => {
         "main.gs",
         "src/cartridge.gs",
         "src/controller.gs",
+        "src/cpu_addressing.gs",
         "src/cpu_alu.gs",
         "src/cpu_bus.gs",
+        "src/cpu_core.gs",
         "src/cpu_status.gs",
         "src/numeric.gs",
         "src/rom_loader.gs",
@@ -415,8 +464,9 @@ test("no declared name collides with a GoboScript keyword or a Scratch block sha
 
 test("procs are called without parentheses and funcs with parentheses at the declared arity", () => {
     // GoboScript calls a proc as `name arg1, arg2;` and a func as `name(arg1, arg2)`. A
-    // parenthesized multi-argument proc call does not parse, and a func used as a statement
-    // compiles to an unknown-proc error, so without a compiler these shapes are worth a lint.
+    // parenthesized multi-argument proc call does not parse, and a func called with the comma
+    // form is indistinguishable from a proc call, so without a compiler these shapes are worth
+    // a lint.
     const callables = declared_callables();
     const violations: string[] = [];
 
@@ -464,6 +514,57 @@ test("procs are called without parentheses and funcs with parentheses at the dec
                     `${location}: proc ${call.name} expects ${callable.arity} argument(s), ` +
                         `called with ${call.args.length}`,
                 );
+            }
+        }
+    }
+
+    assert.deepEqual(violations, []);
+});
+
+/**
+ * Callables that spend cycles or change bus, register, or stack state. GoboScript hoists an
+ * expression-position func call into a statement placed before the enclosing statement
+ * (`src/visitor/pass1.rs` lowers it to a call plus a callsite variable), so nesting one of
+ * these inside another call's arguments would run it earlier than the source reads and
+ * silently reorder the access trace. Each must be the head of its own statement.
+ */
+const CYCLE_SPENDING_CALLABLES: readonly string[] = [
+    "cpu_read_cycle",
+    "cpu_write_cycle",
+    "cpu_dummy_read_cycle",
+    "cpu_fetch_byte",
+    "cpu_fetch_word",
+    "cpu_push_byte",
+    "cpu_pop_byte",
+    "cpu_push_word",
+    "cpu_pop_word",
+    "cpu_push_status",
+    "cpu_restore_status_from_stack",
+    "cpu_resolve_operand",
+    "cpu_bus_read",
+    "cpu_bus_write",
+];
+
+test("cycle-spending helpers are never nested inside another call", () => {
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        const text = callable_scan_text(source);
+        const callables = declared_callables();
+
+        for (const call of [...parenthesized_call_sites(text), ...statement_call_sites(text)]) {
+            if (callables.get(call.name) === undefined) {
+                continue;
+            }
+
+            for (const arg of call.args) {
+                for (const helper of CYCLE_SPENDING_CALLABLES) {
+                    if (new RegExp(`(^|[^\\w])${helper}([^\\w]|$)`).test(arg)) {
+                        violations.push(
+                            `${source.path}:${line_at(text, call.offset)}: ${helper} nested inside ${call.name}`,
+                        );
+                    }
+                }
             }
         }
     }
@@ -585,7 +686,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
     const handled = new Set(
         (dispatcher_body.match(/port_suite\.(\w+)/g) ?? []).map((match) => match.slice("port_suite.".length)),
     );
-    assert.deepEqual([...handled].sort(), ["alu", "bus", "cartridge", "controller", "numeric"]);
+    assert.deepEqual([...handled].sort(), ["alu", "bus", "cartridge", "controller", "cpu_addressing", "numeric"]);
 
     const skipped = shared_port_fixture.suites
         .filter((suite) => !handled.has(suite.name))
@@ -627,6 +728,20 @@ test("the self-test operation ids match the shared vector fixture operations", (
         "bus operations are 1 (no devices attached) and 2 (live controllers)",
     );
     assert.deepEqual([...fixture_operations("controller")], [1], "controller operation 1 is the only defined shape");
+    assert.deepEqual([...fixture_operations("cartridge")], [1], "cartridge operation 1 is the only defined shape");
+
+    // Suite 10 operations are the addressing modes, so the ported mode enum is the id list.
+    const addressing_operations = fixture_operations("cpu_addressing");
+    const addressing_enum = get_enum(get_source("src/cpu_addressing.gs"), "cpu_addressing_mode");
+    assert.deepEqual(
+        [...addressing_enum.values()].sort((first, second) => first - second),
+        contiguous_ids(addressing_enum.size),
+        "cpu_addressing_mode ids must be contiguous from one",
+    );
+    assert.deepEqual(
+        [...addressing_operations].sort((first, second) => first - second),
+        [...addressing_enum.values()].sort((first, second) => first - second),
+    );
 });
 
 function fixture_operations(suite_name: string): number[] {

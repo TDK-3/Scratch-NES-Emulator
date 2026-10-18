@@ -419,6 +419,11 @@ export class GoboscriptCpuBus {
         this.open_bus = 0;
     }
 
+    /** Mirror of `cpu_bus_clear_ram`. */
+    clear_ram(): void {
+        this.ram.fill(0);
+    }
+
     get_open_bus(): number {
         return this.open_bus;
     }
@@ -802,4 +807,372 @@ export function decode_nes2_ram_size(shift: number): number {
     }
 
     return CARTRIDGE_LIMIT.RAM_SHIFT_BASE_BYTES * power_of_two(shift);
+}
+
+/** Mirror of the `cpu_addressing_mode` enum in scratch/src/cpu_addressing.gs. */
+export const CPU_ADDRESSING_MODE = {
+    IMPLIED: 1,
+    ACCUMULATOR: 2,
+    IMMEDIATE: 3,
+    RELATIVE: 4,
+    ZERO_PAGE: 5,
+    ZERO_PAGE_X: 6,
+    ZERO_PAGE_Y: 7,
+    ABSOLUTE: 8,
+    ABSOLUTE_X: 9,
+    ABSOLUTE_Y: 10,
+    INDIRECT: 11,
+    INDEXED_INDIRECT: 12,
+    INDIRECT_INDEXED: 13,
+} as const;
+
+/** Mirror of the `cpu_operand_access` enum in scratch/src/cpu_addressing.gs. */
+export const CPU_OPERAND_ACCESS = { READ: 1, WRITE: 2, READ_MODIFY_WRITE: 3 } as const;
+
+/** Mirror of the `cpu_operand_kind` enum in scratch/src/cpu_addressing.gs. */
+export const CPU_OPERAND_KIND = {
+    NONE: 0,
+    IMPLIED: 1,
+    ACCUMULATOR: 2,
+    IMMEDIATE: 3,
+    RELATIVE: 4,
+    MEMORY: 5,
+    JUMP_TARGET: 6,
+} as const;
+
+/** Mirror of the `cpu_operand_error_code` enum in scratch/src/cpu_addressing.gs. */
+export const CPU_OPERAND_ERROR_CODE = { NONE: 0, UNSUPPORTED_ACCESS: 1, UNKNOWN_MODE: 2 } as const;
+
+/** Mirror of the `cpu_access_kind` enum in scratch/src/cpu_core.gs. */
+export const CPU_ACCESS_KIND = { READ: 0, WRITE: 1 } as const;
+
+/**
+ * Mirror of scratch/src/cpu_core.gs and scratch/src/cpu_addressing.gs: register state, one
+ * logged bus transaction per cycle, program-counter fetches, stack operations, and the
+ * thirteen addressing modes. The reference suspends each instruction with a generator; this
+ * mirror performs the same accesses in the same order and counts one cycle per access without
+ * suspending, which is the execution model the port documents.
+ */
+export class GoboscriptCpuCore {
+    readonly bus = new GoboscriptCpuBus();
+    readonly access_log: number[] = [];
+    program_counter = 0;
+    a = 0;
+    x = 0;
+    y = 0;
+    stack_pointer = 0;
+    status: number = CPU_FLAG.UNUSED;
+    cycles = 0;
+    cycle_value = 0;
+    fetched_byte = 0;
+    fetched_word = 0;
+    popped_byte = 0;
+    popped_word = 0;
+    resolved_kind = 0;
+    resolved_mode = 0;
+    resolved_access = 0;
+    resolved_base_address = 0;
+    resolved_address = 0;
+    resolved_value = 0;
+    resolved_page_crossed = 0;
+    resolved_error = 0;
+
+    /** Mirror of `cpu_reset_cycle_accounting`. */
+    reset_cycle_accounting(): void {
+        this.cycles = 0;
+        this.access_log.length = 0;
+    }
+
+    /** Mirror of `cpu_reset_registers`. */
+    reset_registers(): void {
+        this.a = 0;
+        this.x = 0;
+        this.y = 0;
+        this.stack_pointer = 0;
+        this.program_counter = 0;
+        this.status = CPU_FLAG.UNUSED;
+        this.reset_cycle_accounting();
+    }
+
+    /** Mirror of `cpu_read_cycle address`. */
+    read_cycle(address: number): void {
+        const numeric_address = normalize_word(address);
+        this.cycle_value = this.bus.read(numeric_address);
+        this.access_log.push(CPU_ACCESS_KIND.READ, numeric_address, this.cycle_value);
+        this.cycles += 1;
+    }
+
+    /** Mirror of `cpu_write_cycle address, value`. */
+    write_cycle(address: number, value: number): void {
+        const numeric_address = normalize_word(address);
+        const numeric_value = normalize_byte(value);
+        this.bus.write(numeric_address, numeric_value);
+        this.access_log.push(CPU_ACCESS_KIND.WRITE, numeric_address, numeric_value);
+        this.cycles += 1;
+    }
+
+    /** Mirror of `cpu_dummy_read_cycle address`. */
+    dummy_read_cycle(address: number): void {
+        this.read_cycle(address);
+    }
+
+    /** Mirror of `cpu_fetch_byte`. */
+    fetch_byte(): void {
+        const address = normalize_word(this.program_counter);
+        this.read_cycle(address);
+        this.fetched_byte = this.cycle_value;
+        this.program_counter = normalize_word(address + 1);
+    }
+
+    /** Mirror of `cpu_fetch_word`. */
+    fetch_word(): void {
+        this.fetch_byte();
+        const low_byte = this.fetched_byte;
+        this.fetch_byte();
+        this.fetched_word = join_bytes(this.fetched_byte, low_byte);
+    }
+
+    /** Mirror of `cpu_push_byte value`. */
+    push_byte(value: number): void {
+        this.write_cycle(256 + this.stack_pointer, value);
+        this.stack_pointer = normalize_byte(this.stack_pointer - 1);
+    }
+
+    /** Mirror of `cpu_pop_byte`. */
+    pop_byte(): void {
+        const next_stack_pointer = normalize_byte(this.stack_pointer + 1);
+        this.read_cycle(256 + next_stack_pointer);
+        this.stack_pointer = next_stack_pointer;
+        this.popped_byte = this.cycle_value;
+    }
+
+    /** Mirror of `cpu_push_word value`. */
+    push_word(value: number): void {
+        const word = normalize_word(value);
+        this.push_byte(byte_high(word));
+        this.push_byte(byte_low(word));
+    }
+
+    /** Mirror of `cpu_pop_word`. */
+    pop_word(): void {
+        this.pop_byte();
+        const low_byte = this.popped_byte;
+        this.pop_byte();
+        this.popped_word = join_bytes(this.popped_byte, low_byte);
+    }
+
+    /** Mirror of `cpu_push_status break_enabled`. */
+    push_status(break_enabled: number): void {
+        this.status = normalize_status(this.status);
+        this.push_byte(pack_status_for_stack(this.status, break_enabled));
+    }
+
+    /** Mirror of `cpu_restore_status_from_stack value`. */
+    restore_status_from_stack(value: number): void {
+        this.status = unpack_status_from_stack(normalize_byte(value));
+    }
+
+    /** Mirror of `cpu_page_crossed(base_address, address)`. */
+    page_crossed(base_address: number, address: number): number {
+        if (byte_high(base_address) === byte_high(address)) {
+            return 0;
+        }
+
+        return 1;
+    }
+
+    /** Mirror of `cpu_indexed_dummy_address(base_address, address)`. */
+    indexed_dummy_address(base_address: number, address: number): number {
+        return join_bytes(byte_high(base_address), byte_low(address));
+    }
+
+    /** Mirror of `cpu_reset_operand`. */
+    reset_operand(): void {
+        this.resolved_kind = CPU_OPERAND_KIND.NONE;
+        this.resolved_mode = 0;
+        this.resolved_access = 0;
+        this.resolved_base_address = 0;
+        this.resolved_address = 0;
+        this.resolved_value = 0;
+        this.resolved_page_crossed = 0;
+        this.resolved_error = CPU_OPERAND_ERROR_CODE.NONE;
+    }
+
+    /** Mirror of `cpu_set_memory_operand base_address, address, page_crossed`. */
+    set_memory_operand(base_address: number, address: number, page_crossed: number): void {
+        this.resolved_kind = CPU_OPERAND_KIND.MEMORY;
+        this.resolved_base_address = normalize_word(base_address);
+        this.resolved_address = normalize_word(address);
+        this.resolved_page_crossed = to_number(page_crossed);
+    }
+
+    /** Mirror of `cpu_resolve_operand mode, access`. */
+    resolve_operand(mode: number, access: number): void {
+        const numeric_mode = to_number(mode);
+        const numeric_access = to_number(access);
+        this.reset_operand();
+        this.resolved_mode = numeric_mode;
+        this.resolved_access = numeric_access;
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.IMPLIED) {
+            if (numeric_access !== CPU_OPERAND_ACCESS.READ) {
+                this.resolved_error = CPU_OPERAND_ERROR_CODE.UNSUPPORTED_ACCESS;
+            } else {
+                this.resolved_kind = CPU_OPERAND_KIND.IMPLIED;
+            }
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.ACCUMULATOR) {
+            if (numeric_access === CPU_OPERAND_ACCESS.WRITE) {
+                this.resolved_error = CPU_OPERAND_ERROR_CODE.UNSUPPORTED_ACCESS;
+            } else {
+                this.resolved_kind = CPU_OPERAND_KIND.ACCUMULATOR;
+            }
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.IMMEDIATE) {
+            if (numeric_access !== CPU_OPERAND_ACCESS.READ) {
+                this.resolved_error = CPU_OPERAND_ERROR_CODE.UNSUPPORTED_ACCESS;
+            } else {
+                this.resolved_kind = CPU_OPERAND_KIND.IMMEDIATE;
+                this.fetch_byte();
+                this.resolved_value = this.fetched_byte;
+            }
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.RELATIVE) {
+            if (numeric_access !== CPU_OPERAND_ACCESS.READ) {
+                this.resolved_error = CPU_OPERAND_ERROR_CODE.UNSUPPORTED_ACCESS;
+                return;
+            }
+
+            this.fetch_byte();
+            const offset = to_signed_byte(this.fetched_byte);
+            const origin_address = this.program_counter;
+            const target_address = normalize_word(origin_address + offset);
+            this.resolved_kind = CPU_OPERAND_KIND.RELATIVE;
+            this.resolved_value = offset;
+            this.resolved_base_address = origin_address;
+            this.resolved_address = target_address;
+            this.resolved_page_crossed = this.page_crossed(origin_address, target_address);
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.ZERO_PAGE) {
+            this.fetch_byte();
+            const base_address = this.fetched_byte;
+            this.set_memory_operand(base_address, base_address, 0);
+            return;
+        }
+
+        if (
+            numeric_mode === CPU_ADDRESSING_MODE.ZERO_PAGE_X ||
+            numeric_mode === CPU_ADDRESSING_MODE.ZERO_PAGE_Y
+        ) {
+            this.fetch_byte();
+            const base_address = this.fetched_byte;
+            const index_register =
+                numeric_mode === CPU_ADDRESSING_MODE.ZERO_PAGE_X ? normalize_byte(this.x) : normalize_byte(this.y);
+            this.dummy_read_cycle(base_address);
+            this.set_memory_operand(base_address, normalize_byte(base_address + index_register), 0);
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.ABSOLUTE) {
+            this.fetch_word();
+            const address = this.fetched_word;
+            this.set_memory_operand(address, address, 0);
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.ABSOLUTE_X || numeric_mode === CPU_ADDRESSING_MODE.ABSOLUTE_Y) {
+            this.fetch_word();
+            const base_address = this.fetched_word;
+            const index_register =
+                numeric_mode === CPU_ADDRESSING_MODE.ABSOLUTE_X ? normalize_byte(this.x) : normalize_byte(this.y);
+            const address = normalize_word(base_address + index_register);
+            const crossed = this.page_crossed(base_address, address);
+
+            if (numeric_access !== CPU_OPERAND_ACCESS.READ || crossed === 1) {
+                this.dummy_read_cycle(this.indexed_dummy_address(base_address, address));
+            }
+
+            this.set_memory_operand(base_address, address, crossed);
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.INDIRECT) {
+            if (numeric_access !== CPU_OPERAND_ACCESS.READ) {
+                this.resolved_error = CPU_OPERAND_ERROR_CODE.UNSUPPORTED_ACCESS;
+                return;
+            }
+
+            this.fetch_word();
+            const pointer_address = this.fetched_word;
+            const pointer_high_address = join_bytes(byte_high(pointer_address), normalize_byte(pointer_address + 1));
+            this.read_cycle(pointer_address);
+            const target_low = this.cycle_value;
+            this.read_cycle(pointer_high_address);
+            const target_high = this.cycle_value;
+            this.resolved_kind = CPU_OPERAND_KIND.JUMP_TARGET;
+            this.resolved_base_address = pointer_address;
+            this.resolved_address = join_bytes(target_high, target_low);
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.INDEXED_INDIRECT) {
+            this.fetch_byte();
+            const base_address = this.fetched_byte;
+            this.dummy_read_cycle(base_address);
+            const pointer_address = normalize_byte(base_address + normalize_byte(this.x));
+            this.read_cycle(pointer_address);
+            const target_low = this.cycle_value;
+            this.read_cycle(normalize_byte(pointer_address + 1));
+            const target_high = this.cycle_value;
+            this.set_memory_operand(base_address, join_bytes(target_high, target_low), 0);
+            return;
+        }
+
+        if (numeric_mode === CPU_ADDRESSING_MODE.INDIRECT_INDEXED) {
+            this.fetch_byte();
+            const pointer_address = this.fetched_byte;
+            this.read_cycle(pointer_address);
+            const target_low = this.cycle_value;
+            this.read_cycle(normalize_byte(pointer_address + 1));
+            const target_high = this.cycle_value;
+            const base_address = join_bytes(target_high, target_low);
+            const address = normalize_word(base_address + normalize_byte(this.y));
+            const crossed = this.page_crossed(base_address, address);
+
+            if (numeric_access !== CPU_OPERAND_ACCESS.READ || crossed === 1) {
+                this.dummy_read_cycle(this.indexed_dummy_address(base_address, address));
+            }
+
+            this.set_memory_operand(base_address, address, crossed);
+            return;
+        }
+
+        this.resolved_error = CPU_OPERAND_ERROR_CODE.UNKNOWN_MODE;
+    }
+
+    /** The resolved operand plus the access trace, in shared vector suite 10 field order. */
+    reported_values(): number[] {
+        return [
+            this.resolved_kind,
+            this.resolved_mode,
+            this.resolved_access,
+            this.resolved_base_address,
+            this.resolved_address,
+            this.resolved_value,
+            this.resolved_page_crossed,
+            this.resolved_error,
+            this.cycles,
+            this.program_counter,
+            this.stack_pointer,
+            ...this.access_log,
+        ];
+    }
 }

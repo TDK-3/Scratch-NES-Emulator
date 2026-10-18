@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { add_with_carry, subtract_with_carry } from "../src/nes/cpu/alu.js";
+import { Cpu2A03 } from "../src/nes/cpu/cpu_2a03.js";
+import { FakeCpuBus } from "./support/FakeCpuBus.js";
 import type { NesCpuBusDevices } from "../src/nes/cpu/nes_cpu_bus.js";
 import { NesCpuBus } from "../src/nes/cpu/nes_cpu_bus.js";
 import type { CpuStatusFlag } from "../src/nes/cpu/registers.js";
@@ -12,6 +14,14 @@ import {
     make_cartridge_image,
     project_cartridge_header,
 } from "./support/cartridge_projection.js";
+import {
+    CPU_ADDRESSING_FIXED_INPUT_COUNT,
+    CPU_ADDRESSING_MODES,
+    CPU_OPERAND_ACCESSES,
+    CPU_OPERAND_KIND_IDS,
+    project_cpu_addressing,
+    type CpuAddressingSetup,
+} from "./support/cpu_addressing_projection.js";
 import { parse_ines_rom } from "../src/nes/cartridge/ines.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { get_shared_vector_suite, vector_input } from "./support/shared_port_vectors.js";
@@ -797,6 +807,329 @@ test("the mirror reproduces every shared controller vector", () => {
         const reads = Array.from({ length: read_count }, () => ports.serial_read(controller_index));
         assert.deepEqual(reads, [...vector.expected], `controller vector ${vector.id}`);
     }
+});
+
+/** Builds a mirror CPU core whose decoder starts cleared, like a fresh NesCpuBus per record. */
+function make_mirror_cpu_core(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
+    const core = new ported.GoboscriptCpuCore();
+    core.reset_registers();
+    core.bus.clear_ram();
+    core.bus.reset();
+    core.program_counter = vector_inputs[1] ?? 0;
+    core.a = vector_inputs[2] ?? 0;
+    core.x = vector_inputs[3] ?? 0;
+    core.y = vector_inputs[4] ?? 0;
+    core.stack_pointer = vector_inputs[5] ?? 0;
+    core.status = vector_inputs[6] ?? 0;
+
+    const setup_count = vector_inputs[7] ?? 0;
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector_inputs[CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2] ?? 0;
+        const value = vector_inputs[CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2 + 1] ?? 0;
+        core.bus.write(address, value);
+    }
+
+    core.reset_cycle_accounting();
+    return core;
+}
+
+test("the mirror reproduces every shared cpu_addressing vector", () => {
+    for (const vector of get_shared_vector_suite("cpu_addressing").vectors) {
+        const core = make_mirror_cpu_core(vector.input);
+        core.resolve_operand(vector.operation, vector.input[0] ?? 0);
+
+        assert.deepEqual(core.reported_values(), [...vector.expected], `cpu_addressing vector ${vector.id}`);
+
+        const setup: CpuAddressingSetup[] = [];
+        const setup_count = vector.input[7] ?? 0;
+
+        for (let index = 0; index < setup_count; index += 1) {
+            setup.push({
+                address: vector_input(vector, CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2),
+                value: vector_input(vector, CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2 + 1),
+            });
+        }
+
+        assert.deepEqual(
+            core.reported_values(),
+            project_cpu_addressing(
+                vector.operation,
+                vector.input[0] ?? 0,
+                vector_input(vector, 1),
+                vector_input(vector, 2),
+                vector_input(vector, 3),
+                vector_input(vector, 4),
+                vector_input(vector, 5),
+                vector_input(vector, 6),
+                setup,
+            ),
+            `cpu_addressing vector ${vector.id} against the reference resolution`,
+        );
+    }
+});
+
+test("the mirror resolves every addressing mode and access the reference accepts", () => {
+    const covered = new Set<string>();
+
+    for (const vector of get_shared_vector_suite("cpu_addressing").vectors) {
+        covered.add(`${vector.operation}:${vector.input[0] ?? 0}`);
+    }
+
+    for (const mode of CPU_ADDRESSING_MODES) {
+        assert.ok(covered.has(`${mode.id}:1`), `mode ${mode.name} has no read vector`);
+    }
+
+    for (const access of CPU_OPERAND_ACCESSES) {
+        assert.ok(covered.has(`5:${access.id}`), `zero page has no ${access.name} vector`);
+    }
+});
+
+test("the mirror reports an error code where the reference rejects a mode and access pair", () => {
+    const rejected: readonly { readonly mode: number; readonly access: number }[] = [
+        { mode: ported.CPU_ADDRESSING_MODE.IMPLIED, access: ported.CPU_OPERAND_ACCESS.WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.IMPLIED, access: ported.CPU_OPERAND_ACCESS.READ_MODIFY_WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.ACCUMULATOR, access: ported.CPU_OPERAND_ACCESS.WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.IMMEDIATE, access: ported.CPU_OPERAND_ACCESS.WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.IMMEDIATE, access: ported.CPU_OPERAND_ACCESS.READ_MODIFY_WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.RELATIVE, access: ported.CPU_OPERAND_ACCESS.WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.RELATIVE, access: ported.CPU_OPERAND_ACCESS.READ_MODIFY_WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.INDIRECT, access: ported.CPU_OPERAND_ACCESS.WRITE },
+        { mode: ported.CPU_ADDRESSING_MODE.INDIRECT, access: ported.CPU_OPERAND_ACCESS.READ_MODIFY_WRITE },
+    ];
+
+    for (const entry of rejected) {
+        const reference = new Cpu2A03(new FakeCpuBus());
+        const mode_name = CPU_ADDRESSING_MODES.find((candidate) => candidate.id === entry.mode)?.name;
+        const access_name = CPU_OPERAND_ACCESSES.find((candidate) => candidate.id === entry.access)?.name;
+        assert.ok(mode_name !== undefined && access_name !== undefined);
+        assert.throws(
+            () => reference.resolve_addressing_mode(mode_name as never, access_name as never),
+            TypeError,
+            `${mode_name} with ${access_name} must stay rejected`,
+        );
+
+        const core = new ported.GoboscriptCpuCore();
+        core.resolve_operand(entry.mode, entry.access);
+        assert.equal(core.resolved_error, ported.CPU_OPERAND_ERROR_CODE.UNSUPPORTED_ACCESS, `${mode_name}`);
+        assert.equal(core.resolved_kind, CPU_OPERAND_KIND_IDS.none, `${mode_name} leaves no operand`);
+        assert.equal(core.cycles, 0, `${mode_name} spends no cycle on a rejected combination`);
+    }
+
+    for (const unknown_mode of [0, 14, 255, -1]) {
+        const core = new ported.GoboscriptCpuCore();
+        core.resolve_operand(unknown_mode, ported.CPU_OPERAND_ACCESS.READ);
+        assert.equal(core.resolved_error, ported.CPU_OPERAND_ERROR_CODE.UNKNOWN_MODE, `mode ${unknown_mode}`);
+        assert.equal(core.resolved_kind, CPU_OPERAND_KIND_IDS.none, `mode ${unknown_mode}`);
+    }
+});
+
+test("the mirror page-crossing and dummy-address helpers match the reference formulas", () => {
+    const samples: readonly number[] = [0, 1, 0xff, 0x100, 0x1ff, 0x200, 0x3f0, 0x8000, 0x8010, 0xff00, 0xffff];
+
+    for (const base of samples) {
+        for (const address of samples) {
+            const reference_crossed = (base & 0xff00) !== (address & 0xff00) ? 1 : 0;
+            assert.equal(ported_page_crossed(base, address), reference_crossed, `${base} -> ${address}`);
+            assert.equal(
+                ported_indexed_dummy_address(base, address),
+                (base & 0xff00) | (address & 0xff),
+                `dummy address for ${base} -> ${address}`,
+            );
+        }
+    }
+});
+
+/** Calls the mirror helpers through a core so both stay method-shaped like the .gs funcs. */
+function ported_page_crossed(base_address: number, address: number): number {
+    return new ported.GoboscriptCpuCore().page_crossed(base_address, address);
+}
+
+function ported_indexed_dummy_address(base_address: number, address: number): number {
+    return new ported.GoboscriptCpuCore().indexed_dummy_address(base_address, address);
+}
+
+test("the mirror fetch helpers match the reference program-counter reads", () => {
+    for (const program of [[0xa9, 0x42], [0x20, 0x00, 0x03], [0x6c, 0xff, 0x03]]) {
+        const reference_bus = new FakeCpuBus();
+        reference_bus.load(0x0200, Uint8Array.from(program));
+        const reference = new Cpu2A03(reference_bus);
+        reference.program_counter = 0x0200;
+
+        const core = new ported.GoboscriptCpuCore();
+        core.bus.clear_ram();
+
+        for (let index = 0; index < program.length; index += 1) {
+            core.bus.write(0x0200 + index, program[index] ?? 0);
+        }
+
+        core.reset_cycle_accounting();
+        core.program_counter = 0x0200;
+
+        const reference_bytes = program.map(() => read_reference_fetch_byte(reference));
+        const mirror_bytes = program.map(() => {
+            core.fetch_byte();
+            return core.fetched_byte;
+        });
+        assert.deepEqual(mirror_bytes, reference_bytes, `program ${program.join(",")}`);
+        assert.equal(core.program_counter, reference.program_counter);
+        assert.equal(core.cycles, program.length, "one cycle per fetched byte");
+        const logged_kinds = core.access_log.filter((_value, index) => index % 3 === 0);
+        assert.deepEqual(logged_kinds, program.map(() => ported.CPU_ACCESS_KIND.READ));
+    }
+
+    // fetch_word joins the two fetched bytes little-endian, like fetch_word_cycle().
+    const core = new ported.GoboscriptCpuCore();
+    core.bus.write(0x0200, 0x34);
+    core.bus.write(0x0201, 0x12);
+    core.program_counter = 0x0200;
+    core.reset_cycle_accounting();
+    core.fetch_word();
+    assert.equal(core.fetched_word, 0x1234);
+    assert.equal(core.cycles, 2);
+});
+
+/** Reads one byte through the reference fetch path by resolving an immediate operand. */
+function read_reference_fetch_byte(cpu: Cpu2A03): number {
+    const before = cpu.program_counter;
+    const operand = cpu.resolve_addressing_mode("immediate");
+    assert.equal(operand.kind, "immediate");
+    assert.equal(cpu.program_counter, (before + 1) & 0xffff);
+    return operand.kind === "immediate" ? operand.value : 0;
+}
+
+test("the mirror stack operations match the reference stack transactions", () => {
+    // PHA pushes the accumulator at $0100+SP and then decrements SP.
+    const pha_bus = new FakeCpuBus();
+    pha_bus.load(0x0200, Uint8Array.from([0x48]));
+    const pha = new Cpu2A03(pha_bus);
+    pha.program_counter = 0x0200;
+    pha.a = 0x5a;
+    pha.stack_pointer = 0xfd;
+    pha.step();
+
+    const pha_core = new ported.GoboscriptCpuCore();
+    pha_core.stack_pointer = 0xfd;
+    pha_core.push_byte(0x5a);
+    assert.equal(pha_core.stack_pointer, pha.stack_pointer);
+    assert.deepEqual(pha_core.access_log, [ported.CPU_ACCESS_KIND.WRITE, 0x01fd, 0x5a]);
+    assert.equal(pha_bus.peek(0x01fd), 0x5a);
+
+    // PLA increments SP first and then reads $0100+SP into the accumulator.
+    const pla_bus = new FakeCpuBus();
+    pla_bus.load(0x0200, Uint8Array.from([0x68]));
+    pla_bus.write_cpu(0x01fe, 0x77);
+    const pla = new Cpu2A03(pla_bus);
+    pla.program_counter = 0x0200;
+    pla.stack_pointer = 0xfd;
+    pla.step();
+
+    const pla_core = new ported.GoboscriptCpuCore();
+    pla_core.bus.write(0x01fe, 0x77);
+    pla_core.stack_pointer = 0xfd;
+    pla_core.reset_cycle_accounting();
+    pla_core.pop_byte();
+    assert.equal(pla_core.popped_byte, 0x77);
+    assert.equal(pla_core.stack_pointer, pla.stack_pointer);
+    assert.equal(pla.a, 0x77);
+    assert.deepEqual(pla_core.access_log, [ported.CPU_ACCESS_KIND.READ, 0x01fe, 0x77]);
+
+    // JSR pushes the address of its last operand byte ($0202 here) high byte first, and RTS
+    // pops low first, adds one, and spends a cycle reading that address.
+    const jsr_bus = new FakeCpuBus();
+    jsr_bus.load(0x0200, Uint8Array.from([0x20, 0x00, 0x03]));
+    const jsr = new Cpu2A03(jsr_bus);
+    jsr.program_counter = 0x0200;
+    jsr.stack_pointer = 0xfd;
+    jsr.step();
+    assert.equal(jsr.program_counter, 0x0300);
+
+    const jsr_core = new ported.GoboscriptCpuCore();
+    jsr_core.stack_pointer = 0xfd;
+    jsr_core.push_word(0x0202);
+    assert.equal(jsr_core.stack_pointer, jsr.stack_pointer);
+    assert.equal(jsr_bus.peek(0x01fd), 0x02);
+    assert.equal(jsr_bus.peek(0x01fc), 0x02);
+    assert.deepEqual(jsr_core.access_log, [
+        ported.CPU_ACCESS_KIND.WRITE,
+        0x01fd,
+        0x02,
+        ported.CPU_ACCESS_KIND.WRITE,
+        0x01fc,
+        0x02,
+    ]);
+
+    const rts_bus = new FakeCpuBus();
+    rts_bus.load(0x0200, Uint8Array.from([0x60]));
+    rts_bus.write_cpu(0x01fe, 0x33);
+    rts_bus.write_cpu(0x01ff, 0x44);
+    const rts = new Cpu2A03(rts_bus);
+    rts.program_counter = 0x0200;
+    rts.stack_pointer = 0xfd;
+    rts.step();
+
+    const rts_core = new ported.GoboscriptCpuCore();
+    rts_core.bus.write(0x01fe, 0x33);
+    rts_core.bus.write(0x01ff, 0x44);
+    rts_core.stack_pointer = 0xfd;
+    rts_core.reset_cycle_accounting();
+    rts_core.pop_word();
+    assert.equal(rts_core.popped_word, 0x4433);
+    assert.equal(rts_core.stack_pointer, rts.stack_pointer);
+    assert.equal(rts.program_counter, 0x4434);
+    assert.equal(rts_core.cycles, 2);
+
+    // BRK pushes PC then status with BREAK set; RTI restores status and pops PC.
+    const brk_bus = new FakeCpuBus();
+    brk_bus.load(0x0200, Uint8Array.from([0x00]));
+    brk_bus.write_cpu(0xfffe, 0x00);
+    brk_bus.write_cpu(0xffff, 0x04);
+    const brk = new Cpu2A03(brk_bus);
+    brk.program_counter = 0x0200;
+    brk.stack_pointer = 0xfd;
+    brk.status = 0x24;
+    brk.step();
+
+    const brk_core = new ported.GoboscriptCpuCore();
+    brk_core.stack_pointer = 0xfd;
+    brk_core.status = 0x24;
+    brk_core.program_counter = 0x0202;
+    brk_core.push_word(0x0202);
+    brk_core.push_status(1);
+    assert.equal(brk_core.stack_pointer, brk.stack_pointer);
+    assert.equal(brk_bus.peek(0x01fb), 0x34);
+    assert.equal(brk_core.access_log.at(-1), 0x34, "BRK pushes the status with BREAK set");
+
+    const irq_core = new ported.GoboscriptCpuCore();
+    irq_core.stack_pointer = 0xfd;
+    irq_core.status = 0x24;
+    irq_core.push_status(0);
+    assert.equal(irq_core.access_log.at(-1), 0x24, "a hardware interrupt pushes BREAK clear");
+
+    const rti_bus = new FakeCpuBus();
+    rti_bus.load(0x0200, Uint8Array.from([0x40]));
+    rti_bus.write_cpu(0x01fe, 0x24);
+    rti_bus.write_cpu(0x01ff, 0x33);
+    rti_bus.write_cpu(0x0100, 0x44);
+    const rti = new Cpu2A03(rti_bus);
+    rti.program_counter = 0x0200;
+    rti.stack_pointer = 0xfd;
+    rti.step();
+
+    const rti_core = new ported.GoboscriptCpuCore();
+    rti_core.bus.write(0x01fe, 0x24);
+    rti_core.bus.write(0x01ff, 0x33);
+    rti_core.bus.write(0x0100, 0x44);
+    rti_core.stack_pointer = 0xfd;
+    rti_core.reset_cycle_accounting();
+    rti_core.pop_byte();
+    rti_core.restore_status_from_stack(rti_core.popped_byte);
+    rti_core.pop_word();
+    const restored_pc = rti_core.popped_word;
+    assert.equal(restored_pc, rti.program_counter);
+    assert.equal(rti_core.status, rti.status);
+    assert.equal(rti_core.stack_pointer, rti.stack_pointer);
+    assert.equal(rti_core.cycles, 3);
 });
 
 const CARTRIDGE_MAGIC: readonly number[] = [0x4e, 0x45, 0x53, 0x1a];

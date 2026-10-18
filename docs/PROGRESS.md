@@ -243,6 +243,25 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       `parse_ines_rom` for every `flags6` byte, every `flags7` byte, every legacy PRG RAM bank count, every
       NES 2.0 mapper and RAM byte, all 4,096 encoded NES 2.0 ROM sizes, every RAM shift nibble, and image
       lengths 0 through 16 (nine new tests, 41 in that file).
+- [x] Ported the CPU scaffolding that does not need opcode decoding: `scratch/src/cpu_core.gs` holds the six
+      registers, one logged bus transaction per cycle, program-counter fetch byte/word, the four stack
+      operations, and status push/restore; `scratch/src/cpu_addressing.gs` resolves all thirteen official
+      addressing modes with the dummy reads, the page-crossing extra cycle, and the JMP indirect pointer wrap
+      inside one page. The port documents its execution model: the reference suspends each instruction with a
+      generator so `clock_cycle()` exposes one transaction at a time, while the port performs the same
+      accesses in the same order and counts one cycle each without suspending, which is exact for CPU state
+      and access order and an approximation only for a device that would interleave mid-instruction (DMC DMA,
+      not ported). Opcode fetch/decode/dispatch, interrupts, reset sequencing, and the unstable high-byte
+      stores are not ported.
+- [x] Grew the shared fixture from 299 to 338 records with suite 10 (`cpu_addressing`, 39 records) derived by
+      executing `Cpu2A03.resolve_addressing_mode()` behind a fresh `NesCpuBus` with no devices attached. Each
+      record pins the resolved operand, the cycle count, the final PC and SP, and the ordered
+      `(kind, address, value)` bus trace, so dummy-read addresses are checked as well as results. Added
+      `tests/support/cpu_addressing_projection.ts` for the shared projection, six mirror tests (47 in
+      `tests/goboscript-port-algorithms.test.ts`) covering the mode/access sweeps, the illegal combinations the
+      reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
+      and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
+      `run_cpu_addressing_vector` replay in the self test.
 - [x] Fixed a systematic port syntax error and locked it down: every parenthesized multi-argument `proc`
       call in the `.gs` sources (39 call sites across `cartridge.gs`, `cpu_bus.gs`, and
       `vector_selftest.gs`) would not parse, because GoboScript calls a proc as `name arg1, arg2;` and only
@@ -253,13 +272,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 911 tests in about 12.6 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 300 shared port-vector tests (299 records), 41 GoboScript port-algorithm
-  tests, 14 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
+- `npm test` on 2026-10-18: passed all 957 tests in about 12 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 339 shared port-vector tests (338 records), 47 GoboScript port-algorithm
+  tests, 15 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 3,808 decimal values for 299 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 5,170 decimal values for 338 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -276,7 +295,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 299 records and 3,808 values).
+  (2026-10-15 figures; the fixture has since grown to 338 records and 5,170 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

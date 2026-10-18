@@ -1,0 +1,232 @@
+# Addressing-mode resolution for the GoboScript port.
+#
+# Mirrors resolve_addressing_mode_cycles() in src/nes/cpu/cpu_2a03.ts for all thirteen
+# official modes, including the dummy reads, the page-crossing extra cycle, and the JMP
+# indirect pointer wrap inside one page. Each mode performs the same bus accesses in the same
+# order as the reference and spends one cycle per access through src/cpu_core.gs.
+#
+# The reference reports an illegal mode/access combination by throwing; a Scratch project must
+# not stop, so the port records `cpu_resolved_error` and leaves the operand kind at none. The
+# unstable high-byte store variant (which drops the data mask on a tagged dummy read) is not
+# ported yet, so no caller can request it.
+
+%include src/cpu_core
+
+enum cpu_addressing_mode {
+    implied = 1,
+    accumulator = 2,
+    immediate = 3,
+    relative = 4,
+    zero_page = 5,
+    zero_page_x = 6,
+    zero_page_y = 7,
+    absolute = 8,
+    absolute_x = 9,
+    absolute_y = 10,
+    indirect = 11,
+    indexed_indirect = 12,
+    indirect_indexed = 13
+}
+
+enum cpu_operand_access {
+    read = 1,
+    write = 2,
+    read_modify_write = 3
+}
+
+enum cpu_operand_kind {
+    none = 0,
+    implied = 1,
+    accumulator = 2,
+    immediate = 3,
+    relative = 4,
+    memory = 5,
+    jump_target = 6
+}
+
+enum cpu_operand_error_code {
+    none = 0,
+    unsupported_access = 1,
+    unknown_mode = 2
+}
+
+var cpu_resolved_kind = 0;
+var cpu_resolved_mode = 0;
+var cpu_resolved_access = 0;
+var cpu_resolved_base_address = 0;
+var cpu_resolved_address = 0;
+var cpu_resolved_value = 0;
+var cpu_resolved_page_crossed = 0;
+var cpu_resolved_error = 0;
+
+# Reports whether two addresses sit in different pages; mirrors page_crossed().
+func cpu_page_crossed(base_address, address) {
+    if byte_high($base_address) == byte_high($address) {
+        return 0;
+    }
+
+    return 1;
+}
+
+# Builds the dummy address an indexed access uses: the base page and the effective low byte.
+# Mirrors indexed_dummy_address().
+func cpu_indexed_dummy_address(base_address, address) {
+    return join_bytes(byte_high($base_address), byte_low($address));
+}
+
+# Clears every operand global so a rejected or unknown mode stays a deterministic zero record.
+proc cpu_reset_operand {
+    cpu_resolved_kind = cpu_operand_kind.none;
+    cpu_resolved_mode = 0;
+    cpu_resolved_access = 0;
+    cpu_resolved_base_address = 0;
+    cpu_resolved_address = 0;
+    cpu_resolved_value = 0;
+    cpu_resolved_page_crossed = 0;
+    cpu_resolved_error = cpu_operand_error_code.none;
+}
+
+# Records a memory operand; the mode and access are already stored by the caller.
+proc cpu_set_memory_operand base_address, address, page_crossed {
+    cpu_resolved_kind = cpu_operand_kind.memory;
+    cpu_resolved_base_address = normalize_word($base_address);
+    cpu_resolved_address = normalize_word($address);
+    cpu_resolved_page_crossed = to_number($page_crossed);
+}
+
+# Resolves one addressing mode. Mirrors the reference switch, including which accesses spend
+# a cycle and which address each dummy read uses.
+proc cpu_resolve_operand mode, access {
+    local numeric_mode = to_number($mode);
+    local numeric_access = to_number($access);
+    local base_address = 0;
+    local address = 0;
+    local index_register = 0;
+    local crossed = 0;
+    local pointer_address = 0;
+    local pointer_high_address = 0;
+    local target_low = 0;
+    local target_high = 0;
+    local offset = 0;
+    cpu_reset_operand;
+    cpu_resolved_mode = numeric_mode;
+    cpu_resolved_access = numeric_access;
+
+    if numeric_mode == cpu_addressing_mode.implied {
+        if numeric_access != cpu_operand_access.read {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_resolved_kind = cpu_operand_kind.implied;
+        }
+    } elif numeric_mode == cpu_addressing_mode.accumulator {
+        if numeric_access == cpu_operand_access.write {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_resolved_kind = cpu_operand_kind.accumulator;
+        }
+    } elif numeric_mode == cpu_addressing_mode.immediate {
+        if numeric_access != cpu_operand_access.read {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_resolved_kind = cpu_operand_kind.immediate;
+            cpu_fetch_byte;
+            cpu_resolved_value = cpu_fetched_byte;
+        }
+    } elif numeric_mode == cpu_addressing_mode.relative {
+        if numeric_access != cpu_operand_access.read {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_fetch_byte;
+            offset = to_signed_byte(cpu_fetched_byte);
+            base_address = cpu_program_counter;
+            address = normalize_word(base_address + offset);
+            cpu_resolved_kind = cpu_operand_kind.relative;
+            cpu_resolved_value = offset;
+            cpu_resolved_base_address = base_address;
+            cpu_resolved_address = address;
+            cpu_resolved_page_crossed = cpu_page_crossed(base_address, address);
+        }
+    } elif numeric_mode == cpu_addressing_mode.zero_page {
+        cpu_fetch_byte;
+        base_address = cpu_fetched_byte;
+        cpu_set_memory_operand base_address, base_address, 0;
+    } elif (numeric_mode == cpu_addressing_mode.zero_page_x) or (numeric_mode == cpu_addressing_mode.zero_page_y) {
+        cpu_fetch_byte;
+        base_address = cpu_fetched_byte;
+
+        if numeric_mode == cpu_addressing_mode.zero_page_x {
+            index_register = normalize_byte(cpu_x);
+        } else {
+            index_register = normalize_byte(cpu_y);
+        }
+
+        cpu_dummy_read_cycle base_address;
+        address = normalize_byte(base_address + index_register);
+        cpu_set_memory_operand base_address, address, 0;
+    } elif numeric_mode == cpu_addressing_mode.absolute {
+        cpu_fetch_word;
+        address = cpu_fetched_word;
+        cpu_set_memory_operand address, address, 0;
+    } elif (numeric_mode == cpu_addressing_mode.absolute_x) or (numeric_mode == cpu_addressing_mode.absolute_y) {
+        cpu_fetch_word;
+        base_address = cpu_fetched_word;
+
+        if numeric_mode == cpu_addressing_mode.absolute_x {
+            index_register = normalize_byte(cpu_x);
+        } else {
+            index_register = normalize_byte(cpu_y);
+        }
+
+        address = normalize_word(base_address + index_register);
+        crossed = cpu_page_crossed(base_address, address);
+
+        if (numeric_access != cpu_operand_access.read) or (crossed == 1) {
+            cpu_dummy_read_cycle cpu_indexed_dummy_address(base_address, address);
+        }
+
+        cpu_set_memory_operand base_address, address, crossed;
+    } elif numeric_mode == cpu_addressing_mode.indirect {
+        if numeric_access != cpu_operand_access.read {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_fetch_word;
+            pointer_address = cpu_fetched_word;
+            pointer_high_address = join_bytes(byte_high(pointer_address), normalize_byte(pointer_address + 1));
+            cpu_read_cycle pointer_address;
+            target_low = cpu_cycle_value;
+            cpu_read_cycle pointer_high_address;
+            target_high = cpu_cycle_value;
+            cpu_resolved_kind = cpu_operand_kind.jump_target;
+            cpu_resolved_base_address = pointer_address;
+            cpu_resolved_address = join_bytes(target_high, target_low);
+        }
+    } elif numeric_mode == cpu_addressing_mode.indexed_indirect {
+        cpu_fetch_byte;
+        base_address = cpu_fetched_byte;
+        cpu_dummy_read_cycle base_address;
+        pointer_address = normalize_byte(base_address + normalize_byte(cpu_x));
+        cpu_read_cycle pointer_address;
+        target_low = cpu_cycle_value;
+        cpu_read_cycle normalize_byte(pointer_address + 1);
+        target_high = cpu_cycle_value;
+        cpu_set_memory_operand base_address, join_bytes(target_high, target_low), 0;
+    } elif numeric_mode == cpu_addressing_mode.indirect_indexed {
+        cpu_fetch_byte;
+        pointer_address = cpu_fetched_byte;
+        cpu_read_cycle pointer_address;
+        target_low = cpu_cycle_value;
+        cpu_read_cycle normalize_byte(pointer_address + 1);
+        target_high = cpu_cycle_value;
+        base_address = join_bytes(target_high, target_low);
+        address = normalize_word(base_address + normalize_byte(cpu_y));
+        crossed = cpu_page_crossed(base_address, address);
+
+        if (numeric_access != cpu_operand_access.read) or (crossed == 1) {
+            cpu_dummy_read_cycle cpu_indexed_dummy_address(base_address, address);
+        }
+
+        cpu_set_memory_operand base_address, address, crossed;
+    } else {
+        cpu_resolved_error = cpu_operand_error_code.unknown_mode;
+    }
+}

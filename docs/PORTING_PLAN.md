@@ -40,8 +40,12 @@ host adapter and capability/permission validation.
    payload into bank lists, RAM/NVRAM backing storage, and mapper selection.
 4. **CPU scaffolding.** Port register reset, stack operations, status flags, addressing modes, official
    instructions, cycle counts, and interrupts in separately testable groups. Status flags
-   (`scratch/src/cpu_status.gs`) and the thirteen ALU operations (`scratch/src/cpu_alu.gs`) are written;
-   fetch, decode, addressing modes, cycle accounting, stack operations, and interrupts are not.
+   (`scratch/src/cpu_status.gs`), the thirteen ALU operations (`scratch/src/cpu_alu.gs`), register state with
+   one logged bus transaction per cycle plus fetches and the four stack operations
+   (`scratch/src/cpu_core.gs`), and all thirteen addressing modes including dummy reads, the page-crossing
+   cycle, and the JMP indirect pointer wrap (`scratch/src/cpu_addressing.gs`) are written and replay all 39
+   suite-10 vectors. Not ported: opcode fetch/decode/dispatch, instruction cycle sequences beyond
+   addressing, interrupts, reset sequencing, and the unstable high-byte stores.
 5. **CPU bus and NROM.** Exercise RAM mirroring, PPU register dispatch, and a minimal mapper. Use a fake
    bus for CPU unit tests and real bus tests for integration. `scratch/src/cpu_bus.gs` ports RAM
    mirroring, the open-bus latch with driven masks, and the `$4016`/`$4017` window; PPU, APU, OAM DMA,
@@ -74,11 +78,21 @@ func is compiled separately into each target that includes it.
 | `src/cpu_bus.gs` | RAM and mirroring, open-bus latch, driven-mask merge, `$4016`/`$4017` | PPU, APU, `$4014` OAM DMA, cartridge, cycle counting |
 | `src/cartridge.gs` | iNES 1.0 and NES 2.0 header decode, mapper/submapper, mirroring, battery, trainer flag, ROM and RAM sizes, payload offsets, six numeric error codes | payload copying, RAM/NVRAM storage, mapper dispatch |
 | `src/rom_loader.gs` | iNES signature check, header load into the parser, header state text | ROM selection at runtime |
-| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
+| `src/cpu_core.gs` | register state, one logged bus access per cycle, fetch byte/word, push/pop byte/word, status push and restore | reset sequencing, interrupts, opcode fetch and decode |
+| `src/cpu_addressing.gs` | all thirteen addressing modes with dummy reads, page-cross detection, and the JMP indirect pointer wrap | operand read/write/modify helpers, unstable high-byte stores |
+| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9, 10 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
 
 Overflow for ADC/SBC is derived from signed arithmetic rather than bit masks, and every mask or shift is
 floor division and modulo, because GoboScript exposes no bitwise operators and its `%` and `//` are Scratch's
-floored forms. `scratch/src/cartridge.gs` raises powers of two by doubling in a `repeat` loop instead of the
+floored forms. The ported CPU spends one cycle per bus transaction and logs each one to `cpu_access_log`, so a vector pins
+access order as well as results. The reference suspends each instruction with a generator so `clock_cycle()`
+can expose one transaction at a time; Scratch has no coroutines, so the port performs the same accesses in the
+same order without suspending between them. That is exact for CPU state and access order and is an
+approximation only for a device that would interleave mid-instruction (today DMC DMA, which is not ported).
+The ported PPU will advance by each instruction's cycle count at instruction boundaries, and this note should
+be revisited with measurements before any cycle-interleaving claim.
+
+`scratch/src/cartridge.gs` raises powers of two by doubling in a `repeat` loop instead of the
 float-based `std/math` helper, and reports `Number.isSafeInteger` loss of precision as a `-1` size that the
 caller turns into the invalid-ROM-size code. Procs are called as `name arg1, arg2;` and funcs as
 `name(arg1, arg2)`; `tests/goboscript-source.test.ts` enforces both shapes and their argument counts, because
@@ -105,10 +119,11 @@ divergence in the ported arithmetic fails in Node even though the `.gs` sources 
 ## Shared vectors
 
 The parity contract is in [`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md), with canonical cases at
-`tests/fixtures/goboscript/shared_port_vectors.json`: nine suites and 299 records covering byte/word/status
+`tests/fixtures/goboscript/shared_port_vectors.json`: ten suites and 338 records covering byte/word/status
 and bit helpers, instruction results and cycles, CPU-bus mirroring, open bus, and driven-mask controller
 reads, MMC3 PRG banks and filtered IRQ edges, scheduled PPU vblank/NMI, pulse APU status, serial controller
-reads, per-instruction ALU value/status results, and iNES/NES 2.0 header decode with its error codes. Node tests run those vectors against the production
+reads, per-instruction ALU value/status results, iNES/NES 2.0 header decode with its error codes, and
+addressing-mode resolution with its bus access trace. Node tests run those vectors against the production
 TypeScript modules, the TypeScript mirror of the ported algorithms replays them as well, and
 `npm run scratch:vectors` generates the ignored one-value-per-line list loaded by
 `scratch/src/shared_vectors.gs`.

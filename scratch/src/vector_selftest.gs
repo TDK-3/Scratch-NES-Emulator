@@ -18,6 +18,8 @@
 %include src/cpu_alu
 %include src/controller
 %include src/cpu_bus
+%include src/cpu_core
+%include src/cpu_addressing
 %include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
@@ -31,7 +33,8 @@ enum port_suite {
     apu = 6,
     controller = 7,
     alu = 8,
-    cartridge = 9
+    cartridge = 9,
+    cpu_addressing = 10
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -140,6 +143,8 @@ proc run_next_port_vector {
         run_controller_vector input_start;
     } elif suite_id == port_suite.cartridge {
         run_cartridge_vector input_start;
+    } elif suite_id == port_suite.cpu_addressing {
+        run_cpu_addressing_vector operation, input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -325,6 +330,60 @@ proc run_cartridge_vector input_start {
     add cartridge_prg_rom_offset to port_actual_values;
     add cartridge_chr_rom_offset to port_actual_values;
     add cartridge_payload_end to port_actual_values;
+}
+
+# Suite 10: one addressing-mode resolution, where the operation id is the addressing mode.
+# Inputs are the access kind (1 read, 2 write, 3 read-modify-write), PC, A, X, Y, SP, status,
+# a setup count, and then that many (address, value) pairs written to the decoder before the
+# resolution. Expected values are the eleven resolved-operand fields (kind, mode, access, base
+# address, address, value, page crossed, error, cycles, final PC, final SP) followed by one
+# (kind, address, value) triple per bus access, so the dummy reads, their addresses, and the
+# cycle count are pinned along with the operand. Setup writes spend no cycles on either side,
+# which is why the accounting is cleared after them.
+proc run_cpu_addressing_vector operation, input_start {
+    local access = to_number(shared_port_vectors[$input_start]);
+    local setup_count = to_number(shared_port_vectors[$input_start + 7]);
+    local setup_index = 0;
+    local setup_address = 0;
+    local setup_value = 0;
+    local log_index = 1;
+    local log_count = 0;
+    cpu_reset_registers;
+    cpu_bus_clear_ram;
+    cpu_bus_reset;
+    cpu_program_counter = to_number(shared_port_vectors[$input_start + 1]);
+    cpu_a = to_number(shared_port_vectors[$input_start + 2]);
+    cpu_x = to_number(shared_port_vectors[$input_start + 3]);
+    cpu_y = to_number(shared_port_vectors[$input_start + 4]);
+    cpu_stack_pointer = to_number(shared_port_vectors[$input_start + 5]);
+    cpu_status = to_number(shared_port_vectors[$input_start + 6]);
+
+    repeat setup_count {
+        setup_address = to_number(shared_port_vectors[$input_start + 8 + (setup_index * 2)]);
+        setup_value = to_number(shared_port_vectors[$input_start + 9 + (setup_index * 2)]);
+        cpu_bus_write setup_address, setup_value;
+        setup_index++;
+    }
+
+    cpu_reset_cycle_accounting;
+    cpu_resolve_operand operation, access;
+    add cpu_resolved_kind to port_actual_values;
+    add cpu_resolved_mode to port_actual_values;
+    add cpu_resolved_access to port_actual_values;
+    add cpu_resolved_base_address to port_actual_values;
+    add cpu_resolved_address to port_actual_values;
+    add cpu_resolved_value to port_actual_values;
+    add cpu_resolved_page_crossed to port_actual_values;
+    add cpu_resolved_error to port_actual_values;
+    add cpu_cycles to port_actual_values;
+    add cpu_program_counter to port_actual_values;
+    add cpu_stack_pointer to port_actual_values;
+    log_count = length cpu_access_log;
+
+    repeat log_count {
+        add to_number(cpu_access_log[log_index]) to port_actual_values;
+        log_index++;
+    }
 }
 
 # Compares the produced values with the recorded expectations and keeps the first failure.

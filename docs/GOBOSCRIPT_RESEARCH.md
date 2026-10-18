@@ -266,6 +266,20 @@ lint in `tests/goboscript-source.test.ts` exists.
   grouped argument, and a func used as a statement becomes an unknown-proc call. Reading that rule out of the
   grammar found 39 parenthesized proc call sites in this project's `.gs` sources, all now written as
   `name arg1, arg2;` and guarded by a lint that also checks argument counts.
+- An expression-position func call is lowered, not inlined: `src/visitor/pass1.rs` pushes a `Stmt::FuncCall`
+  into the enclosing statement's hoisted prefix and replaces the expression with a fresh callsite variable
+  (`@1`, `@2`, ...), so the call runs before the statement that reads its result. Arguments are visited before
+  the outer call, which keeps inner-first order, but a func that spends cycles or touches the bus must never be
+  nested inside another call: the emitted access order then depends on a lowering detail instead of reading off
+  the source. This project writes every cycle-spending helper as a `proc` that leaves its result in a
+  documented global (`cpu_cycle_value`, `cpu_fetched_byte`, `cpu_fetched_word`, `cpu_popped_byte`,
+  `cpu_popped_word`) and lints for any cycle-spending name inside another call's arguments.
+- A `func` compiles to a warp custom block rather than a Scratch reporter: `Codegen::func` emits
+  `procedures_definition` with `Mutation::prototype(name, args, warp = true, compact = false)`, and
+  `Stmt::Return` becomes `data_setvariableto`. Its body may therefore contain stack blocks, including proc
+  calls, assignments, and control flow. An expression-position call whose name is not a declared func is an
+  `UnrecognizedFunction` diagnostic in `src/codegen/sb3.rs`, so a misspelled helper fails at compile time
+  rather than silently.
 - Any proc or func whose name and arity match a builtin is emitted as that builtin
   (`Block::from_shape` / `Repr::from_shape` in `src/blocks.rs`): 130 block and reporter shapes plus 64
   keyword tokens from `src/lexer/token.rs`. The lint forbids all of them as declaration names.
@@ -345,11 +359,11 @@ assets, run `goboscript build`, open or reload the emitted `.sb3`, and test it i
    playable emulator.
 
 Position as of 2026-10-18: steps 1 through 4 are done for the helper layer (numeric, status, ALU, controller,
-a CPU-bus subset, and cartridge header parsing), and step 6 is written but unrun, because the project cannot
-be compiled here. Step 5 (CPU state transitions and yield policy) and the cartridge payload copy are the next
-porting work, and step 7 remains entirely blocked on a toolchain. The in-project self test replays suites 1,
-3, 7, 8, and 9 of the shared fixture and counts the CPU, MMC3, PPU, and APU suites as skipped rather than
-passing.
+a CPU-bus subset, cartridge header parsing, and the CPU register/fetch/stack/addressing scaffolding), and step
+6 is written but unrun, because the project cannot be compiled here. Step 5 (opcode dispatch, instruction cycle
+sequences, interrupts, and yield policy) and the cartridge payload copy are the next porting work, and step 7
+remains entirely blocked on a toolchain. The in-project self test replays suites 1, 3, 7, 8, 9, and 10 of the
+shared fixture and counts the CPU instruction, MMC3, PPU, and APU suites as skipped rather than passing.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

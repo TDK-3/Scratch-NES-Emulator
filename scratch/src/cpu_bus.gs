@@ -20,6 +20,17 @@ proc cpu_bus_reset {
     cpu_open_bus = 0;
 }
 
+# Zeroes RAM. NesCpuBus starts every instance with cleared RAM, so a shared-vector record
+# that reads an address it never wrote must see zero on both sides.
+proc cpu_bus_clear_ram {
+    local index = 1;
+
+    repeat 2048 {
+        cpu_ram[index] = 0;
+        index++;
+    }
+}
+
 # Merges a device value with the open-bus latch and re-latches the merged byte.
 func cpu_apply_driven_value(value, driven_mask) {
     local driven = normalize_byte($driven_mask);
