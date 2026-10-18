@@ -401,18 +401,23 @@ export const MMC3_VALUES_PER_OP = 3;
 
 /**
  * Suite 18 ("mmc3") runs an MMC3 board the way suite 16 runs an NROM one, with one extra operation:
- * reporting the mirroring mode the board would hand the PPU. The four IRQ registers, the PPU A12
- * filter, and the NVRAM snapshots are not ported yet, so a record never writes $C000, $C001, $E000,
- * or $E001 and never observes an IRQ.
+ * reporting the mirroring mode the board would hand the PPU. Suite 19 ("mmc3_irq") uses the same
+ * record layout and the same board to drive the scanline IRQ: its records write the four IRQ
+ * registers through the CPU window, observe PPU addresses, clock PPU dots, and report the IRQ line.
+ * The NVRAM snapshots are not ported yet, so no record saves or restores one.
  */
 
-/** Operation kinds a suite-18 record can run, in the order the ported handler dispatches them. */
+/** Operation kinds a suite-18 or suite-19 record can run, in the order the ported handler dispatches
+ * them. */
 export const MMC3_OPS: readonly { readonly id: number; readonly name: string }[] = [
     { id: 1, name: "cpu-read" },
     { id: 2, name: "cpu-write" },
     { id: 3, name: "pattern-read" },
     { id: 4, name: "pattern-write" },
     { id: 5, name: "report-mirroring" },
+    { id: 6, name: "observe-ppu-access" },
+    { id: 7, name: "clock-ppu-dot" },
+    { id: 8, name: "report-irq" },
 ];
 
 export const MMC3_CPU_READ = 1;
@@ -420,6 +425,17 @@ export const MMC3_CPU_WRITE = 2;
 export const MMC3_PATTERN_READ = 3;
 export const MMC3_PATTERN_WRITE = 4;
 export const MMC3_REPORT_MIRRORING = 5;
+export const MMC3_OBSERVE_PPU_ACCESS = 6;
+export const MMC3_CLOCK_PPU_DOT = 7;
+export const MMC3_REPORT_IRQ = 8;
+
+/** The PPU access kinds a suite-19 record can name, matching the ported `mmc3_ppu_access` enum. */
+export const MMC3_PPU_ACCESSES: readonly { readonly id: number; readonly name: string }[] = [
+    { id: 1, name: "read-pattern" },
+    { id: 2, name: "write-pattern" },
+    { id: 3, name: "read-nametable" },
+    { id: 4, name: "write-nametable" },
+];
 
 /** Builds the MMC3 board a record describes, or reports why the reference rejected it. */
 function build_mmc3_board(
@@ -538,6 +554,28 @@ export function project_mmc3_memory(
             values.push(mapper.read_pattern(op.address) === op.value ? 1 : 0, 0, 0);
         } else if (op.kind === MMC3_REPORT_MIRRORING) {
             values.push(1, CARTRIDGE_MIRRORING_IDS[mapper.get_nametable_mirroring()], 0);
+        } else if (op.kind === MMC3_OBSERVE_PPU_ACCESS) {
+            // The reference raises a range error for an address outside its 14-bit space; the port
+            // reports the refusal instead, so the projection turns the throw into a "not taken".
+            try {
+                mapper.observe_ppu_access({
+                    kind: op.value === 2 || op.value === 4 ? "write" : "read",
+                    address: op.address,
+                    region: op.address >= 0x2000 && op.address < 0x4000 ? "nametable" : "pattern",
+                });
+                values.push(1, 0, 0);
+            } catch (error) {
+                if (!(error instanceof RangeError)) {
+                    throw error;
+                }
+
+                values.push(0, 0, 0);
+            }
+        } else if (op.kind === MMC3_CLOCK_PPU_DOT) {
+            mapper.clock_ppu_dot();
+            values.push(1, 0, 0);
+        } else if (op.kind === MMC3_REPORT_IRQ) {
+            values.push(1, mapper.get_irq_line_asserted() ? 1 : 0, 0);
         } else {
             throw new RangeError(`Unknown MMC3 operation kind ${op.kind}.`);
         }

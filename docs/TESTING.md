@@ -16,16 +16,16 @@ npm run scratch:vectors
 - `npm run build:ts` emits JavaScript into ignored `dist/`.
 - `npm run scratch:assets` regenerates the decimal byte list from `test_rom.nes`; pass
   `-- --rom /path/to/rom.nes` to select a different build-time ROM without altering that fixture.
-- `npm run scratch:vectors` generates the numeric GoboScript list (13,471 decimal values for the current
-  562-record fixture) from the shared JSON vector fixture. `tests/shared-port-vectors.test.ts` executes all
+- `npm run scratch:vectors` generates the numeric GoboScript list (17,613 decimal values for the current
+  579-record fixture) from the shared JSON vector fixture. `tests/shared-port-vectors.test.ts` executes all
   current vectors against the TypeScript reference modules, and `scratch/src/vector_selftest.gs` replays the
   same records inside the GoboScript project.
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 1,214 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
-to source fixtures, 563 cross-domain shared-vector checks (562 records plus the generator regression), 257 pinned
-MIT single-step corpus checks covering all 256 opcode bytes, 74 GoboScript port-algorithm comparisons, 17
+The 1,234 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
+to source fixtures, 580 cross-domain shared-vector checks (579 records plus the generator regression), 257 pinned
+MIT single-step corpus checks covering all 256 opcode bytes, 77 GoboScript port-algorithm comparisons, 17
 GoboScript source-lint checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console

@@ -262,6 +262,53 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported the MMC3 scanline IRQ and the PPU A12 filter that clocks it.
+      `scratch/src/mapper_004.gs` now carries the four IRQ registers in the same
+      `bitwise_and(address, $E001)` switch the banking registers use: `$C000` takes the latch, `$C001`
+      empties the counter and leaves a reload pending rather than loading the latch itself, `$E000`
+      disables the counter and acknowledges the line, and `$E001` enables it again. Three procs mirror
+      the reference's PPU-facing port: `mmc3_observe_ppu_access` and `mmc3_observe_ppu_address` both
+      forward to `mmc3_observe_ppu_a12`, which ignores an address whose A12 matches the last observed
+      one, clocks the counter on a rising edge only after A12 has been low for at least ten dots, and
+      clears the low-dot count on either edge; `mmc3_clock_ppu_dot` counts those dots while A12 is low
+      and saturates at the filter instead of running away across a long low stretch; and
+      `mmc3_clock_irq_counter` loads the latch when the counter is empty or a reload is pending,
+      otherwise counts down, and asserts the line when it reaches zero with the counter enabled. The
+      line then holds until `$E000` acknowledges it, which is what lets a scanline IRQ survive its own
+      handler. The reference raises a `RangeError` for a PPU address that is fractional or outside its
+      14-bit space; the port reports the refusal in `mmc3_ppu_observed` instead, using the integer test
+      `value == value // 1` and a range check, and leaves the A12 state and the counter untouched.
+      `cartridge_loader.gs` gained `cartridge_board_irq_line()`, the cartridge's half of the OR that
+      `src/nes/core/nes_console.ts` feeds to `set_irq_line`: an attached MMC3 board answers with its
+      counter and any other window answers zero. Suite 19 (`mmc3_irq`, 17 records) shares suite 18's
+      record layout and its handler, because the board and its inputs are the same and only the
+      operations differ: kinds 1 through 5 are the suite-18 operations, 6 shows the board a PPU address
+      with an access kind in the value, 7 clocks one dot, and 8 reports the line. The records cover a
+      latch of one asserting on the second filtered rise, a latch of zero asserting on the first, nine
+      low dots staying below the filter while ten pass it, a latch of three counting down over four
+      rises, a forty-dot low stretch saturating the filter, a repeated high address clocking nothing, a
+      repeated low address not restarting the count, `$E000` acknowledging and disabling, a reload in
+      the middle of a countdown taking the new latch, counting while disabled and asserting only once
+      enabled, nametable addresses carrying A12, a pattern read not observing A12 on its own, every
+      access kind clocking identically, two refused addresses outside the PPU space, and a rejected
+      board running no operations. Every accepted record ends with the line asserted, so no record can
+      pass by never reaching the counter. On the reference side the mirror is compared with a
+      production `Mmc3Mapper` behind its real `PpuMemoryBus` over nine scripts, which is where the
+      observation rules the ported PPU will have to reproduce are pinned: a pattern or nametable access
+      is reported to the mapper and a palette access is not. A second test compares the refusals, the
+      access-kind indifference, the saturation, and the edge deduplication directly, and the mirrored
+      bus differential now arms the counter through the CPU window and compares
+      `board_irq_line()` with the reference line after every rise, after the acknowledge, and after a
+      re-arm with a latch of zero. Mutations that moved the filter boundary in either direction, let
+      the low-dot count pass the filter, asserted the line while the counter was disabled, dropped the
+      `$E000` acknowledge, dropped the edge deduplication, dropped the low-dot reset, read A13 instead
+      of A12, accepted an address one past the PPU space, decremented by two, or never cleared the
+      pending reload were all caught, as were two that stopped the loader's IRQ report from reaching the
+      attached board and four wrong literals in the ported enums. The fixture is now nineteen suites and
+      579 records, and the generated list is 17,613 values. Not ported: the NVRAM snapshots of both
+      boards; nothing in the project calls the A12 observation or the dot clock yet, because the ported
+      PPU that would report addresses and dots does not exist; compile validation stays blocked by the
+      missing toolchain.
 - [x] Ported the MMC3 board's registers, banking, and windows, and attached it to the bus.
       `scratch/src/mapper_004.gs` mirrors `Mmc3Mapper` for everything but its IRQ: the creation checks in the
       reference's order (board family, PRG ROM in whole 8 KiB banks of at least 32 KiB, at most 8 KiB of summed
@@ -485,13 +532,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,214 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 563 shared port-vector tests (562 records), 74 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,234 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 580 shared port-vector tests (579 records), 77 GoboScript port-algorithm
   tests, 17 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 13,471 decimal values for 562 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 17,613 decimal values for 579 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -508,7 +555,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 562 records and 13,471 values).
+  (2026-10-15 figures; the fixture has since grown to 579 records and 17,613 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

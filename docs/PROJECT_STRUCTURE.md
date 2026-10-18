@@ -251,12 +251,13 @@ toolchain needs Cargo and rustc, which are unavailable here.
 - `src/mapper_004.gs` holds the MMC3 board: the creation checks, the eight banking registers with the masks
   bank data applies to each of them, PRG and CHR bank selection in both modes, the PRG RAM enable and
   write-protect bits, the mirroring register with its four-screen override, the payload and trainer copies,
-  and the CPU and pattern windows. Its IRQ registers, the PPU A12 filter with its ten-dot low window, and the
-  NVRAM snapshots are not ported, so an attached MMC3 board never raises a mapper IRQ.
+  the CPU and pattern windows, the four IRQ registers, and the PPU A12 observation whose ten-dot low filter
+  decides which rising edges clock the scanline counter. Only its NVRAM snapshots are not ported, and the
+  observation itself has no caller yet: the ported PPU that would report addresses and dots is not written.
 - `src/cartridge_loader.gs` composes the boot path: check the embedded image's signature, copy and parse its
   header, route the mapper selection, then validate, copy, and attach whichever ported board that selection
-  names, recording one summary line for the report. The embedded default image is an MMC3 cartridge, so it
-  attaches through the MMC3 path.
+  names, recording one summary line for the report and reporting the IRQ line the attached cartridge drives.
+  The embedded default image is an MMC3 cartridge, so it attaches through the MMC3 path.
 - `src/cpu_core.gs` holds the six CPU registers, one logged bus transaction per cycle in `cpu_access_log`,
   fetch byte/word, and push/pop byte/word with status push and restore.
 - `src/cpu_addressing.gs` resolves all thirteen addressing modes, including the zero-page and indexed dummy

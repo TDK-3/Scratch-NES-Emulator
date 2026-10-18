@@ -428,6 +428,19 @@ export class GoboscriptCpuBus {
         this.open_bus = 0;
     }
 
+    /**
+     * Mirror of `cartridge_board_irq_line()`. The loader composes it, and the bus is what holds the
+     * attached board, so the mirror lives here: an MMC3 board drives its scanline counter and any
+     * other cartridge window drives nothing.
+     */
+    board_irq_line(): number {
+        if (this.cartridge_kind === MAPPER_KIND.MMC3 && this.mmc3_board !== null) {
+            return this.mmc3_board.get_irq_line_asserted();
+        }
+
+        return 0;
+    }
+
     /** Mirror of `cpu_bus_clear_ram`. */
     clear_ram(): void {
         this.ram.fill(0);
@@ -1359,6 +1372,9 @@ export const MMC3_LIMIT = {
     PRG_ROM_OFFSET_MASK: 8191,
     CHR_OFFSET_MASK: 1023,
     FULL_BYTE_MASK: 255,
+    PPU_ADDRESS_SPACE_BYTES: 0x4000,
+    A12_WEIGHT: 0x1000,
+    A12_FILTER_DOTS: 10,
 } as const;
 
 /** Mirror of the `mmc3_register` enum in scratch/src/mapper_004.gs. */
@@ -1380,15 +1396,27 @@ export const MMC3_OP = {
     PATTERN_READ: 3,
     PATTERN_WRITE: 4,
     REPORT_MIRRORING: 5,
+    OBSERVE_PPU_ACCESS: 6,
+    CLOCK_PPU_DOT: 7,
+    REPORT_IRQ: 8,
+} as const;
+
+/** Mirror of the `mmc3_ppu_access` enum in scratch/src/mapper_004.gs. */
+export const MMC3_PPU_ACCESS = {
+    READ_PATTERN: 1,
+    WRITE_PATTERN: 2,
+    READ_NAMETABLE: 3,
+    WRITE_NAMETABLE: 4,
 } as const;
 
 /**
  * Mirror of scratch/src/mapper_004.gs: the MMC3 creation checks, the eight banking registers with the
  * masks bank execute applies to them, PRG and CHR bank selection in both modes, the PRG RAM enable
  * and write-protect bits, the mirroring register with its four-screen override, and the CPU and
- * pattern windows. The fields named after the parsed header stand for the `cartridge_*` globals the
- * ported validation reads, including the mirroring the header declared. The IRQ registers, the PPU
- * A12 filter, and the NVRAM snapshots are not ported yet, so this mirror does not carry them either.
+ * pattern windows, the four IRQ registers, and the PPU A12 observation with the ten-dot low filter
+ * that decides when a rising edge clocks the IRQ counter. The fields named after the parsed header
+ * stand for the `cartridge_*` globals the ported validation reads, including the mirroring the header
+ * declared. The NVRAM snapshots are not ported yet, so this mirror does not carry them either.
  */
 export class GoboscriptMmc3Mapper {
     mapper_id = 0;
@@ -1446,6 +1474,7 @@ export class GoboscriptMmc3Mapper {
     cpu_write_accepted = 0;
     pattern_value = 0;
     pattern_write_accepted = 0;
+    ppu_observed = 0;
 
     /** Mirror of `mmc3_reset`. */
     reset(): void {
@@ -1673,6 +1702,16 @@ export class GoboscriptMmc3Mapper {
         } else if (register_id === MMC3_REGISTER.PRG_RAM_PROTECT) {
             this.prg_ram_enabled = bit_at(bank_value, 128);
             this.prg_ram_write_protected = bit_at(bank_value, 64);
+        } else if (register_id === MMC3_REGISTER.IRQ_LATCH) {
+            this.irq_latch = bank_value;
+        } else if (register_id === MMC3_REGISTER.IRQ_RELOAD) {
+            this.irq_counter = 0;
+            this.irq_reload_pending = 1;
+        } else if (register_id === MMC3_REGISTER.IRQ_DISABLE) {
+            this.irq_enabled = 0;
+            this.irq_line_asserted = 0;
+        } else if (register_id === MMC3_REGISTER.IRQ_ENABLE) {
+            this.irq_enabled = 1;
         }
     }
 
@@ -1748,8 +1787,76 @@ export class GoboscriptMmc3Mapper {
     }
 
     /**
-     * Mirror of the suite-18 handler's operation loop: runs each (kind, address, value) triple and
-     * returns the four board values followed by three values per operation.
+     * Mirror of `mmc3_observe_ppu_access access_kind, address`. The reference reads the address out
+     * of its access struct and ignores the kind and region, so this mirror ignores the kind too.
+     */
+    observe_ppu_access(_access_kind: number, address: number): void {
+        this.observe_ppu_a12(address);
+    }
+
+    /** Mirror of `mmc3_observe_ppu_address address`. */
+    observe_ppu_address(address: number): void {
+        this.observe_ppu_a12(address);
+    }
+
+    /** Mirror of `mmc3_clock_ppu_dot`. */
+    clock_ppu_dot(): void {
+        if (this.ppu_a12_high === 0 && this.a12_low_dots < MMC3_LIMIT.A12_FILTER_DOTS) {
+            this.a12_low_dots += 1;
+        }
+    }
+
+    /** Mirror of `mmc3_get_irq_line_asserted()`. */
+    get_irq_line_asserted(): number {
+        return this.irq_line_asserted;
+    }
+
+    /** Mirror of `mmc3_observe_ppu_a12 address`. */
+    observe_ppu_a12(address: number): void {
+        const numeric_address = to_number(address);
+        this.ppu_observed = 0;
+
+        if (numeric_address !== scratch_floor_divide(numeric_address, 1)) {
+            return;
+        }
+
+        if (numeric_address < 0 || numeric_address >= MMC3_LIMIT.PPU_ADDRESS_SPACE_BYTES) {
+            return;
+        }
+
+        this.ppu_observed = 1;
+        const next_high = bit_at(numeric_address, MMC3_LIMIT.A12_WEIGHT);
+
+        if (next_high === this.ppu_a12_high) {
+            return;
+        }
+
+        if (next_high === 1 && this.a12_low_dots >= MMC3_LIMIT.A12_FILTER_DOTS) {
+            this.clock_irq_counter();
+        }
+
+        this.ppu_a12_high = next_high;
+        this.a12_low_dots = 0;
+    }
+
+    /** Mirror of `mmc3_clock_irq_counter`. */
+    clock_irq_counter(): void {
+        if (this.irq_counter === 0 || this.irq_reload_pending === 1) {
+            this.irq_counter = this.irq_latch;
+        } else {
+            this.irq_counter -= 1;
+        }
+
+        this.irq_reload_pending = 0;
+
+        if (this.irq_counter === 0 && this.irq_enabled === 1) {
+            this.irq_line_asserted = 1;
+        }
+    }
+
+    /**
+     * Mirror of the suite-18 and suite-19 handler's operation loop: runs each (kind, address, value)
+     * triple and returns the board values followed by three values per operation.
      */
     run_memory_operations(ops: readonly (readonly [number, number, number])[]): number[] {
         const values = [this.ok, this.error_code, this.mapped_prg_ram_bytes];
@@ -1769,6 +1876,14 @@ export class GoboscriptMmc3Mapper {
                 values.push(this.pattern_write_accepted, 0, 0);
             } else if (kind === MMC3_OP.REPORT_MIRRORING) {
                 values.push(1, this.mirroring, 0);
+            } else if (kind === MMC3_OP.OBSERVE_PPU_ACCESS) {
+                this.observe_ppu_access(value, address);
+                values.push(this.ppu_observed, 0, 0);
+            } else if (kind === MMC3_OP.CLOCK_PPU_DOT) {
+                this.clock_ppu_dot();
+                values.push(1, 0, 0);
+            } else if (kind === MMC3_OP.REPORT_IRQ) {
+                values.push(1, this.get_irq_line_asserted(), 0);
             } else {
                 values.push(0, 0, 0);
             }

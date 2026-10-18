@@ -114,7 +114,7 @@ What the ported modules cover:
   is PRG ROM modulo its size, so a 16 KiB board mirrors twice; $6000-$7FFF is PRG RAM modulo the
   mapped size when the board has any; and a write only lands in RAM. The NVRAM snapshots are not
   ported yet.
-* mapper_004.gs: the MMC3 board, mirroring Mmc3Mapper for everything but its IRQ. It runs the
+* mapper_004.gs: the MMC3 board, mirroring Mmc3Mapper for everything but its NVRAM snapshots. It runs the
   creation checks in the reference's order (PRG ROM in whole 8 KiB banks of at least 32 KiB, at
   most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG RAM, and one CHR region of at
   least 8 KiB in whole 1 KiB banks that is not CHR ROM beside declared CHR RAM), holds the eight
@@ -126,19 +126,31 @@ What the ported modules cover:
   the register an address selects is bitwise_and(address, $E001) and every mask is a bitwise_and
   or a bit_at. The mirroring ids are the cartridge parser's, 1 horizontal, 2 vertical, and 3
   four-screen, which is the opposite of the shorthand the register's low bit suggests: a zero low
-  bit selects vertical. The IRQ latch, counter, reload, enable, and acknowledge registers, the PPU
-  A12 filter with its ten-dot low window, and the NVRAM snapshots are not ported, so an attached
-  MMC3 board never raises a mapper IRQ.
+  bit selects vertical. It also carries the scanline IRQ: $C000 takes the latch, $C001 empties the
+  counter and leaves a reload pending, $E000 disables the counter and acknowledges the line, and
+  $E001 enables it again. mmc3_observe_ppu_a12 watches one PPU address for an A12 rising edge and
+  clocks the counter only when A12 has been low for at least ten dots, mmc3_clock_ppu_dot counts
+  those dots while A12 is low and saturates at the filter, and mmc3_clock_irq_counter loads the
+  latch when the counter is empty or a reload is pending and otherwise counts down, asserting the
+  line when it reaches zero with the counter enabled. An address outside the 14-bit PPU space, or a
+  fractional one, is refused: the reference raises a range error there and the port reports the
+  refusal in mmc3_ppu_observed, which is the integer test `value == value // 1` plus a range check.
+  Only the NVRAM snapshots are not ported, so a battery-backed board keeps its RAM for the session
+  but offers no way to save or restore it.
 * cartridge_loader.gs: the boot path. It checks the embedded image's signature, copies and parses
   its header, routes the mapper selection, then validates, copies, and attaches whichever ported
   board that selection names, and it records one summary line so a report can say why the
   cartridge window is undriven. The embedded default image is an MMC3 cartridge, so it attaches
-  through the MMC3 path.
+  through the MMC3 path. cartridge_board_irq_line reports the line the attached cartridge drives,
+  which is the half of the OR the reference console feeds to the CPU: an MMC3 board answers with its
+  scanline counter and anything else answers zero.
 * vector_selftest.gs: walks the generated list in data/shared_port_vectors.txt and compares
   each record with the value recorded from the TypeScript reference. Suites 1 (numeric), 3
   (bus), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing), 11 (CPU
   cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), 15 (NROM
-  board validation), 16 (NROM memory windows), 17 (cartridge bus), and 18 (MMC3) are replayed;
+  board validation), 16 (NROM memory windows), 17 (cartridge bus), 18 (MMC3), and 19 (MMC3
+  scanline IRQ, replayed by the suite-18 handler because the record layout and the board are the
+  same) are replayed;
   records for the CPU state, mapper, PPU, and APU suites are counted as skipped rather than
   treated as passing. Its summary reports the ROM header state and the board state the loader recorded.
 
@@ -150,5 +162,6 @@ Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
 Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-and the yield policy a frame loop needs; the MMC3 IRQ registers and its PPU A12 filter; the NVRAM
-snapshots of both boards; PPU rendering; APU channels; and any frame loop or rendering path.
+and the yield policy a frame loop needs; the NVRAM snapshots of both boards; PPU rendering, which
+is also what would feed the ported A12 observation and its dot clock; APU channels; and any frame
+loop or rendering path.

@@ -98,8 +98,10 @@ decode, one whole instruction for all 151 official opcodes, the control loop tha
 instruction with the jam vector reads and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection,
 the NROM board checks with the memory sizes an accepted board would map, the NROM payload and trainer copies,
 the NROM CPU and pattern address windows with PRG ROM mirroring and aliasing RAM, and a boot path that
-validates a board, copies its payload, and attaches it to the bus, and a Stage-run self test
-that replays 562 shared vectors from
+validates a board, copies its payload, and attaches it to the bus, the MMC3 board checks with both bank modes
+and the bank-data masks, the MMC3 CPU and pattern windows, the MMC3 scanline IRQ with its four registers and
+the ten-dot A12 low filter, and a Stage-run self test
+that replays 579 shared vectors from
 `scratch/data/shared_port_vectors.txt`, counting the CPU state, mapper, PPU, and APU suites as
 skipped. The green flag broadcasts a summary that the display sprite reports.
 Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not

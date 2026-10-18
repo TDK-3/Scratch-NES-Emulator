@@ -6,9 +6,9 @@
 # image reads the open-bus latch instead of fetching garbage, and the reason stays in the
 # nrom_error_code global the validation reports.
 #
-# Both ported boards attach: an NROM image and an MMC3 image. The MMC3 board's IRQ registers, its PPU
-# A12 filter, and the NVRAM snapshots are not ported yet, so an attached MMC3 image fetches and banks
-# correctly but never raises a mapper IRQ.
+# Both ported boards attach: an NROM image and an MMC3 image, and an attached MMC3 image raises a
+# scanline IRQ through cartridge_board_irq_line. The NVRAM snapshots are not ported yet, so a
+# battery-backed image keeps its RAM for the session only.
 
 %include src/rom_loader
 %include src/mapper_000
@@ -63,6 +63,18 @@ proc cartridge_attach_nrom {
     } else {
         cartridge_board_state_text = "board error " & nrom_error_code;
     }
+}
+
+# The IRQ line the attached cartridge drives, as the one src/nes/core/nes_console.ts ORs with the APU
+# line before it hands the result to the CPU. An NROM board has no counter and drives nothing; an MMC3
+# board drives its scanline counter, which stays asserted until the board's $E000 acknowledges it. A
+# window with no board attached drives nothing either.
+func cartridge_board_irq_line() {
+    if cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+        return mmc3_get_irq_line_asserted();
+    }
+
+    return 0;
 }
 
 # Validates an MMC3 board, copies its payload, and attaches it.

@@ -278,6 +278,25 @@ separate from TypeScript success.
       `scripts/generate_goboscript_opcode_table.mjs` flattens it to the ignored
       `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. The `.gs` mnemonic enum,
       the list loader, and the decode proc that reads it landed in the next entry.
+- [x] Port the MMC3 scanline IRQ and the PPU A12 filter that clocks it.
+      `scratch/src/mapper_004.gs` gained the four IRQ registers in the same `bitwise_and(address, $E001)`
+      switch the banking registers use (`$C000` latch, `$C001` reload, `$E000` disable and acknowledge,
+      `$E001` enable), the A12 observation that ignores a repeated level and clocks a rising edge only
+      after ten low dots, the dot clock that counts those dots while A12 is low and saturates at the
+      filter, the counter step that loads the latch when the counter is empty or a reload is pending and
+      otherwise counts down to an assertion, and `mmc3_get_irq_line_asserted()`. An address the reference
+      refuses with a `RangeError` is reported as a refused observation instead, and it changes nothing.
+      `cartridge_loader.gs` reports the attached cartridge's line through `cartridge_board_irq_line()`,
+      the half of the OR `nes_console.ts` feeds to `set_irq_line`. Suite 19 (17 records) shares suite
+      18's layout and handler and covers both sides of the filter boundary, the saturation, repeated
+      high and repeated low addresses, the reload, the acknowledge, counting while disabled, nametable
+      A12, a pattern read that observes nothing on its own, every access kind, refused addresses, and a
+      rejected board; every accepted record ends asserted. The mirror is compared with a production
+      `Mmc3Mapper` behind its real `PpuMemoryBus` over nine scripts, which pins the observation rules the
+      ported PPU will need, and the mirrored bus differential now compares the reported line with the
+      reference after every rise. Not ported: the NVRAM snapshots of both boards, and nothing calls the
+      A12 observation or the dot clock yet because the ported PPU does not exist. Compile validation
+      stays blocked by the missing toolchain.
 - [x] Port the MMC3 board's registers, banking, and windows, and attach it to the bus.
       `scratch/src/mapper_004.gs` mirrors everything `Mmc3Mapper` does except its IRQ: the creation checks, the
       eight banking registers with their bank-data masks, PRG and CHR bank selection in both modes, the PRG RAM
@@ -366,10 +385,12 @@ separate from TypeScript success.
       pattern address windows (`mapper_000.gs`), the cartridge window an attached board drives
       (`cpu_bus.gs`), and the boot path that validates a board, copies its payload, and attaches it
       (`cartridge_loader.gs`), and the MMC3 board's creation checks, banking registers, both bank modes, PRG
-      RAM protection, mirroring control, payload copy, and CPU and pattern windows (`mapper_004.gs`), which the
-      loader attaches, so the embedded MMC3 image drives the bus; PPU, APU, and OAM DMA still behave as absent
-      devices on the bus. Not started: the MMC3 IRQ registers and PPU A12 filter, the NVRAM snapshots of both
-      boards, PPU rendering, APU channels, DMA stalls, and the frame-loop yield policy.
+      RAM protection, mirroring control, payload copy, CPU and pattern windows, IRQ registers, and PPU A12
+      observation with its ten-dot low filter (`mapper_004.gs`), which the loader attaches and whose IRQ line
+      it reports, so the embedded MMC3 image drives the bus and can raise a scanline IRQ; PPU, APU, and OAM DMA
+      still behave as absent devices on the bus. Not started: the NVRAM snapshots of both
+      boards, PPU rendering, which is also what would report PPU addresses and clock PPU dots to the ported A12
+      filter, APU channels, DMA stalls, and the frame-loop yield policy.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,

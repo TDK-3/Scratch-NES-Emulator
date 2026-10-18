@@ -2,12 +2,12 @@
 #
 # This mirrors src/nes/cartridge/mapper_004.ts: the creation checks, the eight banking registers with
 # the masks bank execute applies to each of them, the PRG and CHR bank selection both modes use, the
-# PRG RAM enable and write-protect bits, the mirroring register with its four-screen override, and the
-# CPU and pattern address windows.
+# PRG RAM enable and write-protect bits, the mirroring register with its four-screen override, the CPU
+# and pattern address windows, the four IRQ registers, and the PPU A12 observation with the ten-dot
+# low filter that decides when a rising edge clocks the IRQ counter.
 #
-# What is not ported yet: the IRQ latch, counter, reload, enable, and acknowledge registers, the PPU
-# A12 observation with its ten-dot low filter, and the NVRAM snapshots. A write to $C000, $C001,
-# $E000, or $E001 is therefore accepted and ignored, and the IRQ line stays low.
+# What is not ported yet: the NVRAM snapshots, so a battery-backed board still reports its sizes but
+# offers no way to save or restore them.
 #
 # Scratch has no bitwise operators, so this header uses the numeric helpers the other modules use:
 # bitwise_and for masks, bit_at for one bit, and floor division for a bank index. The register an
@@ -34,7 +34,10 @@ enum mmc3_limit {
     prg_rom_start = 32768,
     prg_rom_offset_mask = 8191,
     chr_offset_mask = 1023,
-    full_byte_mask = 255
+    full_byte_mask = 255,
+    ppu_address_space_bytes = 16384,
+    a12_weight = 4096,
+    a12_filter_dots = 10
 }
 
 # The register an address selects, as bitwise_and(address, $E001) reports it.
@@ -49,14 +52,29 @@ enum mmc3_register {
     irq_enable = 57345
 }
 
-# The memory operations a shared-vector record can ask this board to perform. The first four are the
-# ones src/mapper_000.gs uses, and the fifth reports the mirroring mode the board would give the PPU.
+# The operations a shared-vector record can ask this board to perform. The first four are the ones
+# src/mapper_000.gs uses, the fifth reports the mirroring mode the board would give the PPU, and the
+# last three drive the IRQ path: a PPU bus access, one PPU dot, and a report of the IRQ line.
 enum mmc3_op {
     cpu_read = 1,
     cpu_write = 2,
     pattern_read = 3,
     pattern_write = 4,
-    report_mirroring = 5
+    report_mirroring = 5,
+    observe_ppu_access = 6,
+    clock_ppu_dot = 7,
+    report_irq = 8
+}
+
+# The PPU bus operations a mapper can observe. The reference's MapperPpuBusAccess carries a kind and
+# a region beside the address, and Mmc3Mapper looks at the address alone, so a record names one of
+# these to pin that all four clock A12 the same way. The region is a function of the address the bus
+# already normalized, which is why it is not a separate field here.
+enum mmc3_ppu_access {
+    read_pattern = 1,
+    write_pattern = 2,
+    read_nametable = 3,
+    write_nametable = 4
 }
 
 var mmc3_ok = 0;
@@ -103,6 +121,11 @@ var mmc3_cpu_driven_mask = 0;
 # Whether the last CPU write landed in PRG RAM. A bank register write reports zero here, because its
 # effect shows up in the reads that follow it rather than in the write itself.
 var mmc3_cpu_write_accepted = 0;
+
+# Whether the last observed PPU address was inside the 14-bit space the reference accepts. An address
+# outside it raises a range error there; the port reports the refusal instead, as it does everywhere
+# else, and leaves the A12 state and the IRQ counter untouched.
+var mmc3_ppu_observed = 0;
 
 # The last pattern byte read, and whether the last pattern write landed in CHR RAM.
 var mmc3_pattern_value = 0;
@@ -361,8 +384,9 @@ func mmc3_chr_bank(slot) {
 
 # Writes one mapper register. Bank select takes the register index and the two mode bits, bank data
 # stores the value with the mask that register requires, mirroring takes the low bit unless the header
-# declared four-screen, and PRG RAM protect takes the enable and write-protect bits. The four IRQ
-# registers are not ported yet, so a write to them is accepted and ignored.
+# declared four-screen, PRG RAM protect takes the enable and write-protect bits, IRQ latch takes the
+# count the next clock loads, IRQ reload empties the counter and asks the next clock to load it, IRQ
+# disable turns the counter off and acknowledges the line, and IRQ enable turns the counter on.
 proc mmc3_write_register address, value {
     local register_id = bitwise_and(normalize_word($address), 57345);
     local bank_value = normalize_byte($value);
@@ -394,6 +418,18 @@ proc mmc3_write_register address, value {
     } elif register_id == mmc3_register.prg_ram_protect {
         mmc3_prg_ram_enabled = bit_at(bank_value, 128);
         mmc3_prg_ram_write_protected = bit_at(bank_value, 64);
+    } elif register_id == mmc3_register.irq_latch {
+        mmc3_irq_latch = bank_value;
+    } elif register_id == mmc3_register.irq_reload {
+        # A reload does not load the latch itself: it empties the counter and makes the next clock
+        # take the latch, which is why the reference keeps a pending flag beside the counter.
+        mmc3_irq_counter = 0;
+        mmc3_irq_reload_pending = 1;
+    } elif register_id == mmc3_register.irq_disable {
+        mmc3_irq_enabled = 0;
+        mmc3_irq_line_asserted = 0;
+    } elif register_id == mmc3_register.irq_enable {
+        mmc3_irq_enabled = 1;
     }
 }
 
@@ -467,5 +503,76 @@ proc mmc3_write_pattern address, value {
     if mmc3_chr_ram_bytes > 0 {
         mmc3_chr_ram[offset + 1] = normalize_byte($value);
         mmc3_pattern_write_accepted = 1;
+    }
+}
+
+# Observes one PPU memory access. The reference takes a MapperPpuBusAccess carrying a kind, an
+# address, and a region, and reads the address alone, so the access kind changes nothing here either.
+proc mmc3_observe_ppu_access access_kind, address {
+    mmc3_observe_ppu_a12 $address;
+}
+
+# Observes an address the CPU placed on the PPU bus through PPUADDR, with no memory access behind it.
+proc mmc3_observe_ppu_address address {
+    mmc3_observe_ppu_a12 $address;
+}
+
+# Advances the board's PPU timing by one dot. The low-dot count only grows while A12 is low and has
+# not reached the filter yet, so it saturates instead of running away across a long low stretch.
+proc mmc3_clock_ppu_dot {
+    if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
+        mmc3_a12_low_dots++;
+    }
+}
+
+# The IRQ line the CPU samples at the start of an instruction. Mirrors get_irq_line_asserted().
+func mmc3_get_irq_line_asserted() {
+    return mmc3_irq_line_asserted;
+}
+
+# Watches one PPU address for the A12 rising edge that clocks the IRQ counter. An address outside the
+# 14-bit space is refused and changes nothing. An address whose A12 matches the last observed one is
+# ignored, so the two pattern fetches inside one tile clock nothing. A rising edge clocks the counter
+# only when A12 has been low for at least ten dots, which is the filter that keeps a background-only
+# frame from firing the IRQ; either edge clears the low-dot count.
+proc mmc3_observe_ppu_a12 address {
+    local numeric_address = to_number($address);
+    local next_high = 0;
+    mmc3_ppu_observed = 0;
+
+    # Floor division by one is the integer test: a fractional address does not equal its own floor,
+    # which is the case the reference's Number.isInteger check refuses.
+    if numeric_address == numeric_address // 1 {
+        if numeric_address >= 0 and numeric_address < mmc3_limit.ppu_address_space_bytes {
+            mmc3_ppu_observed = 1;
+            next_high = bit_at(numeric_address, mmc3_limit.a12_weight);
+
+            if next_high != mmc3_ppu_a12_high {
+                if next_high == 1 and mmc3_a12_low_dots >= mmc3_limit.a12_filter_dots {
+                    mmc3_clock_irq_counter;
+                }
+
+                mmc3_ppu_a12_high = next_high;
+                mmc3_a12_low_dots = 0;
+            }
+        }
+    }
+}
+
+# Clocks the IRQ counter one step: a counter at zero or a pending reload takes the latch value, any
+# other counter counts down by one, the reload stops being pending, and a counter that reaches zero
+# while the IRQ is enabled asserts the line. The line then stays asserted until a write to $E000
+# acknowledges it, which is what lets a scanline IRQ hold across the handler's own code.
+proc mmc3_clock_irq_counter {
+    if mmc3_irq_counter == 0 or mmc3_irq_reload_pending == 1 {
+        mmc3_irq_counter = mmc3_irq_latch;
+    } else {
+        mmc3_irq_counter = mmc3_irq_counter - 1;
+    }
+
+    mmc3_irq_reload_pending = 0;
+
+    if mmc3_irq_counter == 0 and mmc3_irq_enabled == 1 {
+        mmc3_irq_line_asserted = 1;
     }
 }

@@ -50,7 +50,8 @@ enum port_suite {
     nrom = 15,
     nrom_memory = 16,
     cartridge_bus = 17,
-    mmc3 = 18
+    mmc3 = 18,
+    mmc3_irq = 19
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -183,8 +184,11 @@ proc run_next_port_vector {
         run_cartridge_bus_vector input_start;
     } elif suite_id == port_suite.mmc3 {
         run_mmc3_vector input_start;
+    } elif suite_id == port_suite.mmc3_irq {
+        # Suite 19 shares suite 18's record layout and its board; only the operations differ.
+        run_mmc3_vector input_start;
     } else {
-        # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
+        # Suite 2 (CPU core), 4 (mapper selection), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
     }
 
@@ -880,12 +884,15 @@ proc run_cartridge_bus_vector input_start {
     }
 }
 
-# Suite 18: one MMC3 board. Inputs are the declared image length, the sixteen header bytes, the PRG
-# ROM and CHR ROM prepare counts, the operation count, then the prepared (index, value) pairs for each
-# ROM region and the (kind, address, value) operations, where kind 1 reads the CPU window, 2 writes
-# it, 3 reads the pattern table, 4 writes it, and 5 reports the mirroring mode the board would give
-# the PPU. Expected values are ok, the board error code, the mapped PRG RAM bytes, then three values
-# per operation: whether the board took it, the byte a read returned, and the bits a CPU read drove.
+# Suites 18 and 19: one MMC3 board. Inputs are the declared image length, the sixteen header bytes,
+# the PRG ROM and CHR ROM prepare counts, the operation count, then the prepared (index, value) pairs
+# for each ROM region and the (kind, address, value) operations, where kind 1 reads the CPU window,
+# 2 writes it, 3 reads the pattern table, 4 writes it, 5 reports the mirroring mode the board would
+# give the PPU, 6 shows the board a PPU address with an access kind in the value, 7 clocks one PPU
+# dot, and 8 reports the IRQ line. Expected values are ok, the board error code, the mapped PRG RAM
+# bytes, then three values per operation: whether the board took it, the byte a read returned, and the
+# bits a CPU read drove. Suite 18 records exercise the memory windows and suite 19 records the scanline
+# IRQ, and both replay through this one handler because the board and its layout are the same.
 # The mapped CHR RAM size is not reported, because a bank register decides which part of CHR RAM a
 # pattern address reaches, so no aliasing probe can measure it; the records that wrap a CHR bank pin
 # the bank count instead.
@@ -960,6 +967,20 @@ proc run_mmc3_vector input_start {
         } elif op_kind == mmc3_op.report_mirroring {
             add 1 to port_actual_values;
             add mmc3_mirroring to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.observe_ppu_access {
+            mmc3_observe_ppu_access op_value, op_address;
+            add mmc3_ppu_observed to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.clock_ppu_dot {
+            mmc3_clock_ppu_dot;
+            add 1 to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.report_irq {
+            add 1 to port_actual_values;
+            add mmc3_get_irq_line_asserted() to port_actual_values;
             add 0 to port_actual_values;
         } else {
             # No record carries another kind; report an operation the board did not take.

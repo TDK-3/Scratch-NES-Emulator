@@ -48,6 +48,7 @@ import {
 } from "./support/cpu_sequence_projection.js";
 import { make_absent_bus_devices } from "./support/recording_cpu_bus.js";
 import { Mmc3Mapper } from "../src/nes/cartridge/mapper_004.js";
+import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
 import {
     MMC3_FIXED_INPUT_COUNT,
     MMC3_FIXED_VALUE_COUNT,
@@ -2320,9 +2321,10 @@ function make_mirror_mmc3(vector_inputs: readonly number[]): ported.GoboscriptMm
     return mapper;
 }
 
-test("the mirrored MMC3 board replays every suite 18 vector", () => {
-    const vectors = get_shared_vector_suite("mmc3").vectors;
-    assert.ok(vectors.length >= 16, "suite 18 covers banking, both modes, protection, and mirroring");
+test("the mirrored MMC3 board replays every suite 18 and suite 19 vector", () => {
+    const suites = ["mmc3", "mmc3_irq"] as const;
+    const vectors = suites.flatMap((name) => get_shared_vector_suite(name).vectors);
+    assert.ok(vectors.length >= 32, "suites 18 and 19 cover banking, protection, mirroring, and the IRQ");
 
     for (const vector of vectors) {
         const input = [...vector.input];
@@ -2480,6 +2482,288 @@ test("the mirrored MMC3 registers and windows follow the reference", () => {
 
     // An unknown memory operation reports that the board did not take it.
     assert.deepEqual(mirror.run_memory_operations([[9, 0x8000, 0]]).slice(3), [0, 0, 0]);
+});
+
+/** Builds one 64 KiB PRG, 8 KiB CHR ROM MMC3 board on both sides, ready for an IRQ script. */
+function make_irq_pair(): { readonly reference: Mmc3Mapper; readonly mirror: ported.GoboscriptMmc3Mapper } {
+    const header = [0x4e, 0x45, 0x53, 0x1a, 4, 1, 0x40, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+    const image_bytes = 16 + 4 * 16384 + 8192;
+    const parsed = parse_ines_rom(make_cartridge_image(image_bytes, header));
+    assert.ok(parsed.ok, "the synthetic MMC3 image parses");
+    const created = Mmc3Mapper.create(parsed.value);
+    assert.ok(created.ok, "the synthetic image is an acceptable MMC3 board");
+
+    const mirror = make_mirror_mmc3([image_bytes, ...header]);
+    mirror.validate();
+    assert.equal(mirror.ok, 1, "the mirror accepts the image the reference accepts");
+    mirror.reset_memory();
+    return { reference: created.value, mirror };
+}
+
+type IrqStep =
+    | readonly ["cpu_write", number, number]
+    | readonly ["ppu_read", number]
+    | readonly ["ppu_write", number, number]
+    | readonly ["observe_address", number]
+    | readonly ["dots", number]
+    | readonly ["irq"];
+
+/** One filtered A12 cycle: drop A12, spend the dots the filter needs, then raise it and report. */
+function a12_cycle(low_dots: number, high_address = 0x1000, low_address = 0x0000): IrqStep[] {
+    return [["ppu_read", low_address], ["dots", low_dots], ["ppu_read", high_address], ["irq"]];
+}
+
+/**
+ * Runs one IRQ script against the reference board behind its production PPU bus and against the
+ * mirror, comparing the IRQ line at every report. The mirror side applies the observation rules the
+ * bus applies: a pattern or nametable access is reported to the mapper and a palette access is not,
+ * which is the behavior the ported PPU will have to reproduce when it arrives.
+ */
+function run_irq_script(steps: readonly IrqStep[]): number {
+    const { reference, mirror } = make_irq_pair();
+    const ppu_bus = new PpuMemoryBus(reference);
+    let reports = 0;
+
+    for (const step of steps) {
+        switch (step[0]) {
+            case "cpu_write": {
+                reference.write_cpu(step[1], step[2]);
+                mirror.write_cpu(step[1], step[2]);
+                break;
+            }
+            case "ppu_read": {
+                const address = step[1] % 0x4000;
+                ppu_bus.read_ppu(step[1]);
+
+                // A palette access never reaches the mapper, so it observes nothing on either side.
+                if (address < 0x2000) {
+                    mirror.observe_ppu_access(ported.MMC3_PPU_ACCESS.READ_PATTERN, address);
+                } else if (address < 0x3f00) {
+                    mirror.observe_ppu_access(ported.MMC3_PPU_ACCESS.READ_NAMETABLE, address);
+                }
+
+                break;
+            }
+            case "ppu_write": {
+                const address = step[1] % 0x4000;
+                ppu_bus.write_ppu(step[1], step[2]);
+
+                if (address < 0x2000) {
+                    mirror.observe_ppu_access(ported.MMC3_PPU_ACCESS.WRITE_PATTERN, address);
+                } else if (address < 0x3f00) {
+                    mirror.observe_ppu_access(ported.MMC3_PPU_ACCESS.WRITE_NAMETABLE, address);
+                }
+
+                break;
+            }
+            case "observe_address": {
+                ppu_bus.observe_ppu_address(step[1]);
+                mirror.observe_ppu_address(step[1] % 0x4000);
+                break;
+            }
+            case "dots": {
+                for (let dot = 0; dot < step[1]; dot += 1) {
+                    ppu_bus.clock_ppu_dot();
+                    mirror.clock_ppu_dot();
+                }
+
+                break;
+            }
+            case "irq": {
+                reports += 1;
+                const expected = reference.get_irq_line_asserted() ? 1 : 0;
+                assert.equal(
+                    mirror.get_irq_line_asserted(),
+                    expected,
+                    `the mirrored IRQ line follows the reference at report ${reports}`,
+                );
+                break;
+            }
+        }
+    }
+
+    return reports;
+}
+
+test("the mirrored MMC3 scanline IRQ follows the reference through its PPU bus", () => {
+    const ARM: readonly IrqStep[] = [["cpu_write", 0xc000, 1], ["cpu_write", 0xc001, 0], ["cpu_write", 0xe001, 0]];
+
+    // A latch of one needs two filtered rises: the first loads the latch, the second counts to zero.
+    assert.equal(run_irq_script([...ARM, ["irq"], ...a12_cycle(10), ...a12_cycle(10)]), 3);
+
+    // Nine low dots are below the filter, so that rise costs no count and the reload stays pending.
+    assert.equal(run_irq_script([...ARM, ...a12_cycle(9), ...a12_cycle(10), ...a12_cycle(10)]), 3);
+
+    // A latch of three counts down over four rises, and a long low stretch saturates the filter.
+    assert.equal(
+        run_irq_script([
+            ["cpu_write", 0xc000, 3], ["cpu_write", 0xc001, 0], ["cpu_write", 0xe001, 0],
+            ...a12_cycle(40), ...a12_cycle(11), ...a12_cycle(10), ...a12_cycle(10),
+        ]),
+        4,
+    );
+
+    // Nametable addresses carry A12 too, and a palette access does not reach the mapper at all.
+    assert.equal(
+        run_irq_script([...ARM, ...a12_cycle(10, 0x3000, 0x2000), ["ppu_read", 0x3f00], ["irq"]]),
+        2,
+    );
+
+    // A repeated low address is not an edge either, so it must not restart the ten-dot filter: the
+    // dots spent before it still count toward the rise that follows. Without the dedup guard the
+    // second low observation would clear the count and the rise below would clock nothing.
+    assert.equal(
+        run_irq_script([
+            ["cpu_write", 0xc000, 0], ["cpu_write", 0xc001, 0], ["cpu_write", 0xe001, 0],
+            ["ppu_read", 0x0000], ["dots", 5], ["ppu_read", 0x0400], ["dots", 4],
+            ["ppu_read", 0x1000], ["irq"],
+            ["ppu_read", 0x0000], ["dots", 5], ["ppu_read", 0x0800], ["dots", 5],
+            ["ppu_read", 0x1000], ["irq"],
+        ]),
+        2,
+    );
+
+    // Writes observe A12 exactly as reads do.
+    assert.equal(
+        run_irq_script([
+            ...ARM,
+            ["ppu_write", 0x0000, 0x11], ["dots", 10], ["ppu_write", 0x1800, 0x22], ["irq"],
+            ["ppu_write", 0x0400, 0x33], ["dots", 10], ["ppu_write", 0x1c00, 0x44], ["irq"],
+        ]),
+        2,
+    );
+
+    // An address the CPU placed on the bus through PPUADDR is its own observation path.
+    assert.equal(
+        run_irq_script([
+            ...ARM,
+            ["observe_address", 0x0000], ["dots", 10], ["observe_address", 0x1000], ["irq"],
+            ["observe_address", 0x0000], ["dots", 10], ["observe_address", 0x1000], ["irq"],
+        ]),
+        2,
+    );
+
+    // $E000 acknowledges the line and disables the counter; $E001 enables it again without asserting.
+    assert.equal(
+        run_irq_script([
+            ["cpu_write", 0xc000, 0], ["cpu_write", 0xc001, 0], ["cpu_write", 0xe001, 0],
+            ...a12_cycle(10),
+            ["cpu_write", 0xe000, 0], ["irq"],
+            ...a12_cycle(10),
+            ["cpu_write", 0xe001, 0], ["irq"],
+            ...a12_cycle(10),
+        ]),
+        5,
+    );
+
+    // A reload in the middle of a countdown empties the counter and takes the new latch next clock.
+    assert.equal(
+        run_irq_script([
+            ["cpu_write", 0xc000, 4], ["cpu_write", 0xc001, 0], ["cpu_write", 0xe001, 0],
+            ...a12_cycle(10), ...a12_cycle(10),
+            ["cpu_write", 0xc000, 1], ["cpu_write", 0xc001, 0], ["irq"],
+            ...a12_cycle(10), ...a12_cycle(10),
+        ]),
+        5,
+    );
+
+    // The counter keeps counting while it is disabled and only asserts once it is enabled again.
+    assert.equal(
+        run_irq_script([
+            ["cpu_write", 0xc000, 1], ["cpu_write", 0xc001, 0],
+            ...a12_cycle(10), ...a12_cycle(10),
+            ["cpu_write", 0xe001, 0], ["irq"],
+            ...a12_cycle(10), ...a12_cycle(10),
+        ]),
+        5,
+    );
+});
+
+test("the mirrored MMC3 A12 filter refuses what the reference refuses", () => {
+    // The bus normalizes every address it forwards, so an out-of-range one can only reach the mapper
+    // directly. The reference raises a range error; the mirror reports that it took no observation.
+    for (const address of [0x4000, 0xffff, -1, 8192.5]) {
+        const { reference, mirror } = make_irq_pair();
+        assert.throws(() => reference.observe_ppu_address(address), RangeError, `address ${address}`);
+        mirror.observe_ppu_address(address);
+        assert.equal(mirror.ppu_observed, 0, `address ${address} is refused`);
+        assert.equal(mirror.get_irq_line_asserted(), 0, "a refused observation asserts nothing");
+    }
+
+    // An in-range address is taken, and an integer one only: the fractional case the reference's
+    // Number.isInteger check refuses is refused by the mirror's floor-division comparison.
+    const { reference, mirror } = make_irq_pair();
+    reference.observe_ppu_address(0x1000);
+    mirror.observe_ppu_address(0x1000);
+    assert.equal(mirror.ppu_observed, 1, "an in-range integer address is observed");
+    mirror.observe_ppu_address(4095.5);
+    assert.equal(mirror.ppu_observed, 0, "a fractional address is refused");
+    assert.equal(mirror.ppu_a12_high, 1, "a refused observation leaves the A12 state alone");
+
+    // Every access kind clocks A12 the same way, because the reference reads the address alone.
+    const traces: string[] = [];
+
+    for (const kind of Object.values(ported.MMC3_PPU_ACCESS)) {
+        const pair = make_irq_pair();
+        pair.mirror.write_cpu(0xc000, 1);
+        pair.mirror.write_cpu(0xc001, 0);
+        pair.mirror.write_cpu(0xe001, 0);
+        const line: number[] = [];
+
+        for (let rise = 0; rise < 3; rise += 1) {
+            pair.mirror.observe_ppu_access(kind, 0x0000);
+
+            for (let dot = 0; dot < 10; dot += 1) {
+                pair.mirror.clock_ppu_dot();
+            }
+
+            pair.mirror.observe_ppu_access(kind, 0x1000);
+            line.push(pair.mirror.get_irq_line_asserted());
+        }
+
+        traces.push(line.join(","));
+    }
+
+    assert.deepEqual(traces, ["0,1,1", "0,1,1", "0,1,1", "0,1,1"], "the access kind changes nothing");
+
+    // The low-dot count saturates at the filter, so a long low stretch is not a bigger count.
+    const saturated = make_irq_pair();
+    saturated.mirror.write_cpu(0xc000, 2);
+    saturated.mirror.write_cpu(0xc001, 0);
+    saturated.mirror.write_cpu(0xe001, 0);
+    saturated.mirror.observe_ppu_address(0x0000);
+
+    for (let dot = 0; dot < 500; dot += 1) {
+        saturated.mirror.clock_ppu_dot();
+    }
+
+    assert.equal(saturated.mirror.a12_low_dots, 10, "the count stops at the filter");
+    saturated.mirror.observe_ppu_address(0x1000);
+    assert.equal(saturated.mirror.irq_counter, 2, "one saturated stretch is still one clock");
+    assert.equal(saturated.mirror.get_irq_line_asserted(), 0);
+
+    // A high address while A12 is already high is not an edge, so it clocks nothing.
+    const deduped = make_irq_pair();
+    deduped.mirror.write_cpu(0xc000, 1);
+    deduped.mirror.write_cpu(0xc001, 0);
+    deduped.mirror.write_cpu(0xe001, 0);
+    deduped.mirror.observe_ppu_address(0x0000);
+
+    for (let dot = 0; dot < 10; dot += 1) {
+        deduped.mirror.clock_ppu_dot();
+    }
+
+    deduped.mirror.observe_ppu_address(0x1000);
+    assert.equal(deduped.mirror.irq_counter, 1, "the first rise loads the latch");
+
+    for (let dot = 0; dot < 10; dot += 1) {
+        deduped.mirror.clock_ppu_dot();
+    }
+
+    deduped.mirror.observe_ppu_address(0x1400);
+    deduped.mirror.observe_ppu_address(0x1fff);
+    assert.equal(deduped.mirror.irq_counter, 1, "a second high address is not an edge");
+    assert.equal(deduped.mirror.a12_low_dots, 0, "the rising edge cleared the low-dot count");
 });
 
 test("the mirrored MMC3 payload copy lands the bytes the reference board holds", () => {
@@ -2686,4 +2970,76 @@ test("the mirrored bus drives an attached MMC3 board the way the reference does"
     bus.write(0xa001, 0x00);
     reference.write_cpu(0xa001, 0x00);
     assert.equal(bus.read(0x6000), reference.read_cpu(0x6000), "a disabled PRG RAM window returns the latch");
+
+    // The scanline IRQ: the registers arm through the same CPU window, and the line the loader
+    // reports is the cartridge's half of the OR the reference console feeds to the CPU.
+    assert.equal(bus.board_irq_line(), 0, "a freshly attached board drives no IRQ");
+
+    for (const [address, value] of [[0xc000, 1], [0xc001, 0], [0xe001, 0]] as const) {
+        bus.write(address, value);
+        reference.write_cpu(address, value);
+    }
+
+    for (let rise = 0; rise < 3; rise += 1) {
+        board.observe_ppu_address(0x0000);
+        reference_mapper.observe_ppu_address(0x0000);
+
+        for (let dot = 0; dot < 10; dot += 1) {
+            board.clock_ppu_dot();
+            reference_mapper.clock_ppu_dot();
+        }
+
+        board.observe_ppu_address(0x1000);
+        reference_mapper.observe_ppu_address(0x1000);
+        assert.equal(
+            bus.board_irq_line(),
+            reference_mapper.get_irq_line_asserted() ? 1 : 0,
+            `the cartridge IRQ line follows the reference after rise ${rise}`,
+        );
+    }
+
+    assert.equal(bus.board_irq_line(), 1, "a latch of one asserts on the second filtered rise");
+
+    // Acknowledge, then re-arm with a latch of zero: the counter stays off until $E001 enables it.
+    for (const [address, value] of [[0xe000, 0], [0xc000, 0], [0xc001, 0], [0xe001, 0]] as const) {
+        bus.write(address, value);
+        reference.write_cpu(address, value);
+    }
+
+    assert.equal(bus.board_irq_line(), 0, "$E000 acknowledges the line on both sides");
+    assert.equal(reference_mapper.get_irq_line_asserted(), false);
+
+    board.observe_ppu_address(0x0000);
+    reference_mapper.observe_ppu_address(0x0000);
+
+    for (let dot = 0; dot < 10; dot += 1) {
+        board.clock_ppu_dot();
+        reference_mapper.clock_ppu_dot();
+    }
+
+    board.observe_ppu_address(0x1000);
+    reference_mapper.observe_ppu_address(0x1000);
+    assert.equal(bus.board_irq_line(), 1, "a latch of zero asserts again on the next filtered rise");
+    assert.equal(reference_mapper.get_irq_line_asserted(), true);
+});
+
+test("the mirrored cartridge IRQ line stays quiet without an MMC3 board", () => {
+    const bus = new ported.GoboscriptCpuBus();
+    assert.equal(bus.board_irq_line(), 0, "a cartridge window with no board drives nothing");
+
+    const nrom = new ported.GoboscriptNromMapper();
+    nrom.mapper_id = 0;
+    nrom.prg_rom_bytes = 32768;
+    nrom.chr_rom_bytes = 8192;
+    nrom.validate();
+    assert.equal(nrom.ok, 1, "the NROM board the loader would attach validates");
+    bus.board = nrom;
+    bus.cartridge_kind = ported.MAPPER_KIND.NROM;
+    assert.equal(bus.board_irq_line(), 0, "an NROM board has no scanline counter");
+
+    // The ported loader only records the MMC3 kind after a board validated and copied, so the port
+    // cannot reach an MMC3 window with no board behind it; the mirror's null check stands for that.
+    const unattached = new ported.GoboscriptCpuBus();
+    unattached.cartridge_kind = ported.MAPPER_KIND.MMC3;
+    assert.equal(unattached.board_irq_line(), 0, "an MMC3 window with no board drives nothing");
 });

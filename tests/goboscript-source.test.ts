@@ -431,6 +431,11 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "composes the board validation, payload copy, and bus attachment",
     },
+    {
+        source: "src/cartridge_loader.gs",
+        declaration: "cartridge_board_irq_line",
+        mirror: "GoboscriptCpuBus.board_irq_line",
+    },
     { source: "src/mapper_000.gs", declaration: "nrom_reset_memory", mirror: "GoboscriptNromMapper.reset_memory" },
     { source: "src/mapper_000.gs", declaration: "nrom_copy_prg_rom", mirror: "GoboscriptNromMapper.copy_prg_rom" },
     { source: "src/mapper_000.gs", declaration: "nrom_copy_chr_rom", mirror: "GoboscriptNromMapper.copy_chr_rom" },
@@ -474,6 +479,36 @@ const MIRROR_CONTRACT: readonly {
         source: "src/mapper_004.gs",
         declaration: "mmc3_write_pattern",
         mirror: "GoboscriptMmc3Mapper.write_pattern",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_observe_ppu_access",
+        mirror: "GoboscriptMmc3Mapper.observe_ppu_access",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_observe_ppu_address",
+        mirror: "GoboscriptMmc3Mapper.observe_ppu_address",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_clock_ppu_dot",
+        mirror: "GoboscriptMmc3Mapper.clock_ppu_dot",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_get_irq_line_asserted",
+        mirror: "GoboscriptMmc3Mapper.get_irq_line_asserted",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_observe_ppu_a12",
+        mirror: "GoboscriptMmc3Mapper.observe_ppu_a12",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_clock_irq_counter",
+        mirror: "GoboscriptMmc3Mapper.clock_irq_counter",
     },
     {
         source: "src/cpu_control.gs",
@@ -964,6 +999,7 @@ test("the ported board enums match the mirror's constants", () => {
         ["src/mapper_004.gs", "mmc3_limit", ported.MMC3_LIMIT],
         ["src/mapper_004.gs", "mmc3_register", ported.MMC3_REGISTER],
         ["src/mapper_004.gs", "mmc3_op", ported.MMC3_OP],
+        ["src/mapper_004.gs", "mmc3_ppu_access", ported.MMC3_PPU_ACCESS],
     ] as const) {
         const variants = get_enum(get_source(file), enumeration);
         const expected = Object.entries(constants);
@@ -1013,6 +1049,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "cpu_opcode",
             "cpu_sequence",
             "mmc3",
+            "mmc3_irq",
             "nrom",
             "nrom_memory",
             "numeric",
@@ -1122,6 +1159,7 @@ test("the self-test operation ids match the shared vector fixture operations", (
     assert.deepEqual([...fixture_operations("nrom_memory")], [1], "board memory has one operation");
     assert.deepEqual([...fixture_operations("cartridge_bus")], [1], "the cartridge bus has one operation");
     assert.deepEqual([...fixture_operations("mmc3")], [1], "an MMC3 board has one operation");
+    assert.deepEqual([...fixture_operations("mmc3_irq")], [1], "an MMC3 IRQ record has one operation");
 
     // The MMC3 operation kinds the self-test dispatches are the projection's ids.
     const mmc3_ops = get_enum(get_source("src/mapper_004.gs"), "mmc3_op");

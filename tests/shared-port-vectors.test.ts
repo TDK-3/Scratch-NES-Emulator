@@ -51,12 +51,16 @@ import {
 } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
+    MMC3_CLOCK_PPU_DOT,
     MMC3_CPU_READ,
     MMC3_CPU_WRITE,
     MMC3_FIXED_INPUT_COUNT,
     MMC3_FIXED_VALUE_COUNT,
+    MMC3_OBSERVE_PPU_ACCESS,
     MMC3_OPS,
     MMC3_PATTERN_READ,
+    MMC3_PPU_ACCESSES,
+    MMC3_REPORT_IRQ,
     MMC3_REPORT_MIRRORING,
     MMC3_VALUES_PER_OP,
     project_mmc3_memory,
@@ -958,8 +962,14 @@ for_each_vector("cartridge_bus", (vector) => {
     }
 });
 
-for_each_vector("mmc3", (vector) => {
-    assert.equal(vector.operation, 1, "MMC3 vectors have a single operation.");
+/** One suite-18 or suite-19 record: both carry the same board image, prepares, and operation list. */
+function parse_mmc3_record(vector: { readonly input: readonly number[] }): {
+    readonly image_bytes: number;
+    readonly header: readonly number[];
+    readonly prg_prepare: NromMemoryPrepare[];
+    readonly chr_prepare: NromMemoryPrepare[];
+    readonly operations: NromMemoryOp[];
+} {
     const image_bytes = vector.input[0] ?? 0;
     const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
     const prg_count = vector.input[17] ?? 0;
@@ -1000,6 +1010,13 @@ for_each_vector("mmc3", (vector) => {
         operations.push({ kind, address, value });
     }
 
+    return { image_bytes, header, prg_prepare, chr_prepare, operations };
+}
+
+for_each_vector("mmc3", (vector) => {
+    assert.equal(vector.operation, 1, "MMC3 vectors have a single operation.");
+    const { image_bytes, header, prg_prepare, chr_prepare, operations } = parse_mmc3_record(vector);
+    const op_count = operations.length;
     const actual = project_mmc3_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
     assert.deepEqual(actual, [...vector.expected]);
     assert.equal(actual.length, MMC3_FIXED_VALUE_COUNT + op_count * MMC3_VALUES_PER_OP);
@@ -1043,6 +1060,67 @@ for_each_vector("mmc3", (vector) => {
             assert.equal(driven, 0);
         }
     }
+});
+
+for_each_vector("mmc3_irq", (vector) => {
+    assert.equal(vector.operation, 1, "MMC3 IRQ vectors have a single operation.");
+    const { image_bytes, header, prg_prepare, chr_prepare, operations } = parse_mmc3_record(vector);
+    const op_count = operations.length;
+    const actual = project_mmc3_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, MMC3_FIXED_VALUE_COUNT + op_count * MMC3_VALUES_PER_OP);
+    assert.equal(prg_prepare.length, 0, "an IRQ record prepares no PRG ROM bytes");
+    assert.equal(chr_prepare.length, 0, "an IRQ record prepares no CHR ROM bytes");
+
+    let observed_a_rise = false;
+    let asserted_at_least_once = false;
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = MMC3_FIXED_VALUE_COUNT + index * MMC3_VALUES_PER_OP;
+        const taken = actual[at] ?? 0;
+        const value = actual[at + 1] ?? 0;
+        const driven = actual[at + 2] ?? 0;
+        assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
+
+        if (op?.kind === MMC3_CPU_READ) {
+            assert.equal(driven, taken === 1 ? 0xff : 0, `Operation ${index} drives every bit it answers.`);
+        } else {
+            assert.equal(driven, 0, `Operation ${index} drives no CPU bits.`);
+        }
+
+        if (op?.kind === MMC3_OBSERVE_PPU_ACCESS) {
+            assert.ok(
+                MMC3_PPU_ACCESSES.some((entry) => entry.id === op.value),
+                `Operation ${index} names a PPU access kind the port enumerates.`,
+            );
+            assert.equal(value, 0, "an observation reports no byte");
+
+            const in_range = Number.isInteger(op.address) && op.address >= 0 && op.address < 0x4000;
+            assert.equal(taken, in_range ? 1 : 0, `Operation ${index} is refused only outside the PPU space.`);
+            observed_a_rise ||= in_range && (op.address & 0x1000) !== 0;
+        } else if (op?.kind === MMC3_CLOCK_PPU_DOT) {
+            assert.equal(taken, 1, `Operation ${index} always clocks a dot.`);
+            assert.equal(value, 0, "a dot reports no byte");
+        } else if (op?.kind === MMC3_REPORT_IRQ) {
+            assert.equal(taken, 1, `Operation ${index} always reports the IRQ line.`);
+            assert.ok(value === 0 || value === 1, `Operation ${index} reports the line as a flag.`);
+            asserted_at_least_once ||= value === 1;
+        }
+    }
+
+    if (actual[0] === 1) {
+        assert.ok(op_count > 0, "an accepted board in this suite always runs operations");
+        assert.ok(observed_a_rise, "an IRQ record has to put an A12-high address on the PPU bus");
+    } else {
+        assert.equal(op_count, 0, "a rejected board runs no operations");
+    }
+
+    assert.equal(
+        asserted_at_least_once,
+        actual[0] === 1,
+        "every accepted board in this suite eventually asserts the line, and a rejected one never runs",
+    );
 });
 
 const ALU_PROGRAM_ADDRESS = 0x8000;
