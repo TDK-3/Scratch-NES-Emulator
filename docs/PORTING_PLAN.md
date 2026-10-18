@@ -45,9 +45,10 @@ host adapter and capability/permission validation.
    (`scratch/src/cpu_core.gs`), and all thirteen addressing modes including dummy reads, the page-crossing
    cycle, and the JMP indirect pointer wrap (`scratch/src/cpu_addressing.gs`) are written and replay all 39
    suite-10 vectors, and the reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch sequences
-   (`scratch/src/cpu_sequence.gs`) replay all 12 suite-11 vectors. Not ported: opcode fetch/decode/dispatch,
-   the per-instruction sequences of the remaining official opcodes, interrupt acceptance policy between
-   instructions, and the unstable high-byte stores.
+   (`scratch/src/cpu_sequence.gs`) replay all 12 suite-11 vectors, and the opcode decode step
+   (`scratch/src/cpu_opcode.gs`, reading the generated `data/opcode_table.txt`) replays all 20 suite-12
+   vectors. Not ported: opcode dispatch, the per-instruction sequences of the remaining official opcodes,
+   interrupt acceptance policy between instructions, and the unstable high-byte stores.
 5. **CPU bus and NROM.** Exercise RAM mirroring, PPU register dispatch, and a minimal mapper. Use a fake
    bus for CPU unit tests and real bus tests for integration. `scratch/src/cpu_bus.gs` ports RAM
    mirroring, the open-bus latch with driven masks, and the `$4016`/`$4017` window; PPU, APU, OAM DMA,
@@ -83,7 +84,8 @@ func is compiled separately into each target that includes it.
 | `src/cpu_core.gs` | register state, one logged bus access per cycle, fetch byte/word, push/pop byte/word, status push and restore | reset sequencing, interrupts, opcode fetch and decode |
 | `src/cpu_addressing.gs` | all thirteen addressing modes with dummy reads, page-cross detection, and the JMP indirect pointer wrap | operand read/write/modify helpers, unstable high-byte stores |
 | `src/cpu_sequence.gs` | reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences | opcode fetch and dispatch, interrupt acceptance policy, the remaining instruction sequences |
-| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9, 10, 11 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
+| `src/cpu_opcode.gs` | the 76-mnemonic enum, the generated table load with its length and header check, and the six-field decode of one opcode byte | opcode dispatch, per-instruction execution, operand access by mnemonic |
+| `src/vector_selftest.gs` | suites 1, 3, 7, 8, 9, 10, 11, 12 | suites 2 (CPU), 4 (MMC3), 5 (PPU), 6 (APU) are counted as skipped |
 
 Overflow for ADC/SBC is derived from signed arithmetic rather than bit masks, and every mask or shift is
 floor division and modulo, because GoboScript exposes no bitwise operators and its `%` and `//` are Scratch's
@@ -122,7 +124,7 @@ divergence in the ported arithmetic fails in Node even though the `.gs` sources 
 ## Shared vectors
 
 The parity contract is in [`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md), with canonical cases at
-`tests/fixtures/goboscript/shared_port_vectors.json`: eleven suites and 350 records covering byte/word/status
+`tests/fixtures/goboscript/shared_port_vectors.json`: twelve suites and 370 records covering byte/word/status
 and bit helpers, instruction results and cycles, CPU-bus mirroring, open bus, and driven-mask controller
 reads, MMC3 PRG banks and filtered IRQ edges, scheduled PPU vblank/NMI, pulse APU status, serial controller
 reads, per-instruction ALU value/status results, iNES/NES 2.0 header decode with its error codes, and

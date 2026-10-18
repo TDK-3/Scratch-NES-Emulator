@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for eleven suites and 350 records. TypeScript regression tests execute each vector
+inputs and expected outputs for twelve suites and 370 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,12 +14,12 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (5,669 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (5,929 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
-into the project. `npm run build:scratch` generates both the ROM list and this vector list before invoking
-GoboScript.
+into the project. `npm run build:scratch` generates the ROM list, this vector list, and the opcode decode table
+before invoking GoboScript.
 
 ## Numeric list format
 
@@ -56,6 +56,7 @@ suite and operation IDs present in the fixture.
 | 9 | Cartridge header | 1: inputs are the declared image length in bytes followed by all 16 header bytes. | Eighteen values: ok, error code, format, mapper, submapper, mirroring, battery, trainer, PRG ROM bytes, CHR ROM bytes, PRG RAM, PRG NVRAM, CHR RAM, CHR NVRAM, trainer offset, PRG offset, CHR offset, payload end. Recorded by executing `parse_ines_rom` in `src/nes/cartridge/ines.ts`. |
 | 10 | CPU addressing | Operation id is the addressing mode (1-13). Inputs: access kind, PC, A, X, Y, SP, status, setup count, then `(address, value)` pairs. | Resolved operand kind, mode, access, base address, address, value, page crossed, error code, cycles, final PC, final SP, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder with no devices. |
 | 11 | CPU cycle sequence | Operation id is the sequence (1 reset, 2 BRK, 3 JSR, 4 RTI, 5 RTS, 6 IRQ, 7 NMI, 8 relative branch). Inputs: PC, A, X, Y, SP, status, taken flag, setup count, then `(address, value)` pairs. | Cycles, final PC, SP, status, A, X, Y, sequence error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.reset()` or `step()` behind a fresh decoder with no devices. |
+| 12 | Opcode decode | 1: input is one opcode byte. | Mnemonic id, addressing mode id, base cycles, operand access id, page-cross cycle flag, official flag, and decoder error code, read from `CPU_OPCODE_TABLE` in `src/nes/cpu/opcode_table.ts` and encoded by `tests/fixtures/goboscript/opcode_table.json`. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
 1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
@@ -86,6 +87,15 @@ the return address, IRQ acceptance with interrupt disable clear, NMI acceptance 
 is taken inside one page, taken across a page, and not taken. Their vector reads of `$FFFA`-`$FFFF` return open
 bus, because no cartridge is attached on either side, which also pins the open-bus latch that the pushes drive.
 
+Suite 12 pins the decode step alone: one opcode byte in, six table fields plus an error code out. Its 20
+records cover one official opcode per addressing mode plus the boundaries that matter for dispatch, namely the
+page-cross flag set on an indexed read and clear on an indexed read-modify-write and on a write, an unofficial
+KIL, the unofficial ISC and SHY encodings, JMP absolute and JMP indirect, RTS, and NOP. The mnemonic, mode, and
+access ids are the same integers the ported enums use, so each record also checks that
+`scratch/src/cpu_opcode.gs` and `scratch/src/cpu_addressing.gs` agree on numbering. Expected values come from
+`CPU_OPCODE_TABLE` through `tests/support/cpu_opcode_projection.ts`, and the mirror decoder compares all 256
+opcodes against the generated table rather than only these 20.
+
 Operation 1 of suite 3 replays against a decoder with no devices attached, while the GoboScript port always has
 live controller ports; suite 3 operation 1 records therefore must not read `$4016`/`$4017`, and
 `tests/shared-port-vectors.test.ts` asserts that constraint. Use operation 2 for controller-window reads.
@@ -106,7 +116,8 @@ stand in for that until the toolchain is available:
   Scratch's floored modulo and floor division instead of ECMAScript operators and no bitwise operators at all.
   `tests/goboscript-port-algorithms.test.ts` compares those mirrors exhaustively against the bitwise reference
   in `src/nes/cpu/registers.ts`, `src/nes/cpu/alu.ts`, and the instruction steps of `src/nes/cpu/cpu_2a03.ts`,
-  replays every numeric, ALU, bus, controller, cartridge, addressing, and sequence vector through them, and
+  replays every numeric, ALU, bus, controller, cartridge, addressing, sequence, and opcode vector through
+  them, and
   differentially checks the bus, controller, cartridge, and CPU mirrors against `NesCpuBus`,
   `NesControllerPorts`, and `Cpu2A03`. The
   CPU mirror is `GoboscriptCpuCore`, which reproduces the register state, one logged bus transaction per
@@ -119,7 +130,10 @@ stand in for that until the toolchain is available:
   and absent-device factory in `tests/support/recording_cpu_bus.ts`. The cartridge mirror is
   `GoboscriptCartridgeParser`, which is compared against `parse_ines_rom` for every `flags6` byte, every
   `flags7` byte, every legacy PRG RAM bank count, every NES 2.0 mapper and RAM byte, and all 4,096 encoded
-  NES 2.0 ROM sizes, through the shared projection in `tests/support/cartridge_projection.ts`.
+  NES 2.0 ROM sizes, through the shared projection in `tests/support/cartridge_projection.ts`. The opcode
+  mirror is `GoboscriptCpuOpcodeDecoder`, which reads the same flat list the generator writes and is compared
+  with `CPU_OPCODE_TABLE` for all 256 opcodes through `tests/support/cpu_opcode_projection.ts`, including the
+  length and header checks that report a truncated, reversioned, or missing table.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared

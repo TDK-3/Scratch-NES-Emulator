@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { cpu_mnemonic_ids, opcode_table_fixture } from "./support/cpu_opcode_projection.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { shared_port_fixture } from "./support/shared_port_vectors.js";
 
@@ -70,6 +71,7 @@ const MIRRORED_HEADERS: readonly string[] = [
     "src/cpu_alu.gs",
     "src/cpu_bus.gs",
     "src/cpu_core.gs",
+    "src/cpu_opcode.gs",
     "src/cpu_sequence.gs",
     "src/cpu_status.gs",
     "src/numeric.gs",
@@ -203,6 +205,21 @@ const MIRROR_CONTRACT: readonly {
         mirror: "GoboscriptCpuCore.resolve_operand",
     },
     {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_reset_opcode_decode",
+        mirror: "GoboscriptCpuOpcodeDecoder.reset_decode",
+    },
+    {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_check_opcode_table",
+        mirror: "GoboscriptCpuOpcodeDecoder.check_table",
+    },
+    {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_decode_opcode",
+        mirror: "GoboscriptCpuOpcodeDecoder.decode",
+    },
+    {
         source: "src/cpu_sequence.gs",
         declaration: "cpu_reset_sequence_error",
         mirror: "GoboscriptCpuCore.reset_sequence_error",
@@ -318,6 +335,12 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "dispatcher",
     },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_cpu_opcode_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
 ];
 
@@ -333,6 +356,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_alu.gs",
         "src/cpu_bus.gs",
         "src/cpu_core.gs",
+        "src/cpu_opcode.gs",
         "src/cpu_sequence.gs",
         "src/cpu_status.gs",
         "src/numeric.gs",
@@ -778,7 +802,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
     );
     assert.deepEqual(
         [...handled].sort(),
-        ["alu", "bus", "cartridge", "controller", "cpu_addressing", "cpu_sequence", "numeric"],
+        ["alu", "bus", "cartridge", "controller", "cpu_addressing", "cpu_opcode", "cpu_sequence", "numeric"],
     );
 
     const skipped = shared_port_fixture.suites
@@ -846,6 +870,33 @@ test("the self-test operation ids match the shared vector fixture operations", (
     assert.deepEqual(
         [...fixture_operations("cpu_sequence")].sort((first, second) => first - second),
         [...sequence_enum.values()].sort((first, second) => first - second),
+    );
+
+    // Suite 12 has one operation per record, so its ids are checked against the generated opcode
+    // table instead: the ported mnemonic enum must name exactly the fixture's 76 mnemonics with
+    // the fixture's ids, and the field enum must hold the record offsets the decoder adds.
+    assert.deepEqual([...fixture_operations("cpu_opcode")], [1], "opcode decoding has one operation");
+
+    const opcode_source = get_source("src/cpu_opcode.gs");
+    const mnemonic_enum = get_enum(opcode_source, "cpu_mnemonic");
+    const mnemonic_ids = cpu_mnemonic_ids();
+    assert.equal(mnemonic_enum.size, mnemonic_ids.size, "the ported enum names every fixture mnemonic");
+    assert.deepEqual(
+        [...mnemonic_enum.values()].sort((first, second) => first - second),
+        contiguous_ids(mnemonic_enum.size),
+        "cpu_mnemonic ids must be contiguous from one",
+    );
+
+    for (const [mnemonic, id] of mnemonic_ids) {
+        assert.equal(mnemonic_enum.get(`op_${mnemonic.toLowerCase()}`), id, `cpu_mnemonic.op_${mnemonic}`);
+    }
+
+    const field_enum = get_enum(opcode_source, "cpu_opcode_field");
+    assert.equal(field_enum.size, opcode_table_fixture().field_count, "the field enum covers every table field");
+    assert.deepEqual(
+        [...field_enum.values()].sort((first, second) => first - second),
+        Array.from({ length: field_enum.size }, (_, index) => index),
+        "cpu_opcode_field ids are the record offsets, contiguous from zero",
     );
 });
 

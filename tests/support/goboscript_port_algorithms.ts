@@ -1307,3 +1307,100 @@ export class GoboscriptCpuCore {
         ];
     }
 }
+
+/** Mirror of the `cpu_opcode_error_code` enum in scratch/src/cpu_opcode.gs. */
+export const CPU_OPCODE_ERROR_CODE = { NONE: 0, UNKNOWN_OPCODE: 1, BAD_TABLE: 2 } as const;
+
+/** Mirror of the `cpu_opcode_layout` enum in scratch/src/cpu_opcode.gs. */
+export const CPU_OPCODE_LAYOUT = {
+    HEADER_VALUES: 2,
+    FIELDS_PER_OPCODE: 6,
+    OPCODE_COUNT: 256,
+    SCHEMA_VERSION: 1,
+} as const;
+
+/** Mirror of the `cpu_opcode_field` enum in scratch/src/cpu_opcode.gs. */
+export const CPU_OPCODE_FIELD = {
+    MNEMONIC: 0,
+    ADDRESSING_MODE: 1,
+    BASE_CYCLES: 2,
+    OPERAND_ACCESS: 3,
+    PAGE_CROSS_CYCLE: 4,
+    OFFICIAL: 5,
+} as const;
+
+/**
+ * Mirror of scratch/src/cpu_opcode.gs: the decoded fields of one opcode byte read out of the
+ * generated table list. The list is a constructor argument because the GoboScript side loads it
+ * from data/opcode_table.txt at project start, and the mirror has no file to load.
+ */
+export class GoboscriptCpuOpcodeDecoder {
+    readonly table: number[];
+    mnemonic = 0;
+    mode = 0;
+    base_cycles = 0;
+    access = 0;
+    page_cross_cycle = 0;
+    official = 0;
+    error = 0;
+
+    constructor(table: readonly number[]) {
+        this.table = [...table];
+    }
+
+    /** Mirror of `cpu_reset_opcode_decode`. */
+    reset_decode(): void {
+        this.mnemonic = 0;
+        this.mode = 0;
+        this.base_cycles = 0;
+        this.access = 0;
+        this.page_cross_cycle = 0;
+        this.official = 0;
+        this.error = CPU_OPCODE_ERROR_CODE.NONE;
+    }
+
+    /** Mirror of `cpu_check_opcode_table`. */
+    check_table(): void {
+        const expected_length =
+            CPU_OPCODE_LAYOUT.HEADER_VALUES + CPU_OPCODE_LAYOUT.OPCODE_COUNT * CPU_OPCODE_LAYOUT.FIELDS_PER_OPCODE;
+        this.error = CPU_OPCODE_ERROR_CODE.NONE;
+
+        if (this.table.length !== expected_length) {
+            this.error = CPU_OPCODE_ERROR_CODE.BAD_TABLE;
+        } else if ((this.table[0] ?? 0) !== CPU_OPCODE_LAYOUT.SCHEMA_VERSION) {
+            this.error = CPU_OPCODE_ERROR_CODE.BAD_TABLE;
+        } else if ((this.table[1] ?? 0) !== CPU_OPCODE_LAYOUT.OPCODE_COUNT) {
+            this.error = CPU_OPCODE_ERROR_CODE.BAD_TABLE;
+        }
+    }
+
+    /** Mirror of `cpu_decode_opcode opcode`. */
+    decode(opcode: number): void {
+        const numeric_opcode = normalize_byte(opcode);
+        const record_start = CPU_OPCODE_LAYOUT.HEADER_VALUES + numeric_opcode * CPU_OPCODE_LAYOUT.FIELDS_PER_OPCODE;
+        this.reset_decode();
+        this.mnemonic = this.table[record_start + CPU_OPCODE_FIELD.MNEMONIC] ?? 0;
+        this.mode = this.table[record_start + CPU_OPCODE_FIELD.ADDRESSING_MODE] ?? 0;
+        this.base_cycles = this.table[record_start + CPU_OPCODE_FIELD.BASE_CYCLES] ?? 0;
+        this.access = this.table[record_start + CPU_OPCODE_FIELD.OPERAND_ACCESS] ?? 0;
+        this.page_cross_cycle = this.table[record_start + CPU_OPCODE_FIELD.PAGE_CROSS_CYCLE] ?? 0;
+        this.official = this.table[record_start + CPU_OPCODE_FIELD.OFFICIAL] ?? 0;
+
+        if (this.mnemonic === 0) {
+            this.error = CPU_OPCODE_ERROR_CODE.UNKNOWN_OPCODE;
+        }
+    }
+
+    /** The seven values `run_cpu_opcode_vector` appends to the actual list. */
+    reported_values(): number[] {
+        return [
+            this.mnemonic,
+            this.mode,
+            this.base_cycles,
+            this.access,
+            this.page_cross_cycle,
+            this.official,
+            this.error,
+        ];
+    }
+}

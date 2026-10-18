@@ -23,6 +23,12 @@ import {
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
 import {
+    cpu_mnemonic_ids,
+    flat_opcode_table,
+    opcode_table_fixture,
+    project_opcode_decode,
+} from "./support/cpu_opcode_projection.js";
+import {
     CPU_SEQUENCE_FIXED_INPUT_COUNT,
     CPU_SEQUENCE_OPS,
     project_cpu_sequence,
@@ -33,14 +39,14 @@ import * as ported from "./support/goboscript_port_algorithms.js";
 import { get_shared_vector_suite, vector_input } from "./support/shared_port_vectors.js";
 
 /**
- * Exhaustive comparison of the bit-free GoboScript port algorithms with the bitwise
- * TypeScript reference. tests/support/goboscript_port_algorithms.ts mirrors the arithmetic in
- * scratch/src/numeric.gs, cpu_status.gs, cpu_alu.gs, controller.gs, cpu_bus.gs, and
- * cartridge.gs, so a
+ * Exhaustive comparison of the bit-free GoboScript port algorithms with the bitwise TypeScript
+ * reference. tests/support/goboscript_port_algorithms.ts mirrors every algorithm in the
+ * mirrored headers: numeric.gs, cpu_status.gs, cpu_alu.gs, controller.gs, cpu_bus.gs,
+ * cartridge.gs, cpu_core.gs, cpu_addressing.gs, cpu_sequence.gs, and cpu_opcode.gs. A
  * divergence here means either the mirror or the reference is wrong; a pass means the ported
- * arithmetic reproduces production CPU, bus, and controller behavior for every input in the
- * swept ranges. It does not mean the .gs sources compile: the pinned GoboScript toolchain is
- * still unavailable.
+ * arithmetic reproduces production CPU, bus, cartridge, and controller behavior for every input
+ * in the swept ranges. It does not mean the .gs sources compile: the pinned GoboScript toolchain
+ * is still unavailable.
  */
 
 /** Every bit of the status byte, including the two the reference API does not expose. */
@@ -1544,4 +1550,106 @@ test("the mirror reports an error when a branch is applied to a non-relative ope
     assert.equal(not_taken.sequence_error, ported.CPU_SEQUENCE_ERROR_CODE.NONE);
     assert.equal(not_taken.cycles, cycles_after_operand, "a branch that is not taken spends nothing");
     assert.equal(not_taken.program_counter, 0x0202);
+});
+
+test("the mirrored opcode decoder reproduces the production table for all 256 opcodes", () => {
+    const decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
+    decoder.check_table();
+    assert.equal(decoder.error, ported.CPU_OPCODE_ERROR_CODE.NONE, "the generated table passes its own check");
+    assert.equal(decoder.table.length, 2 + 256 * 6);
+
+    const mnemonic_ids = cpu_mnemonic_ids();
+    const fixture = opcode_table_fixture();
+    let officials = 0;
+
+    for (let opcode = 0; opcode < 256; opcode += 1) {
+        decoder.decode(opcode);
+        const reported = decoder.reported_values();
+        assert.deepEqual(reported, project_opcode_decode(opcode), `opcode $${opcode.toString(16)} decode`);
+        assert.equal(reported.length, 7, "seven values are reported per opcode");
+        assert.equal(reported[6], ported.CPU_OPCODE_ERROR_CODE.NONE, `opcode ${opcode} reports no error`);
+
+        const entry = fixture.opcodes[opcode];
+        assert.ok(entry !== undefined && entry.opcode === opcode, `fixture entry ${opcode} is in opcode order`);
+        assert.deepEqual(reported.slice(0, 6), [
+            entry.mnemonic_id,
+            entry.addressing_mode_id,
+            entry.base_cycles,
+            entry.operand_access_id,
+            entry.page_cross_cycle,
+            entry.official,
+        ]);
+
+        const mnemonic = [...mnemonic_ids].find(([, id]) => id === reported[0])?.[0];
+        assert.ok(mnemonic !== undefined, `mnemonic id ${reported[0]} names an instruction`);
+        assert.ok(
+            CPU_ADDRESSING_MODES.some((mode) => mode.id === reported[1]),
+            `addressing mode id ${reported[1]} names a mode`,
+        );
+        assert.ok(
+            CPU_OPERAND_ACCESSES.some((access) => access.id === reported[3]),
+            `operand access id ${reported[3]} names an access`,
+        );
+        assert.ok(reported[4] === 0 || reported[4] === 1, "the page-cross flag is a flag");
+        officials += reported[5] === 1 ? 1 : 0;
+    }
+
+    assert.equal(officials, 151, "the table marks the 151 official encodings");
+});
+
+test("the mirrored opcode decoder replays every suite 12 vector", () => {
+    const decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
+
+    for (const vector of get_shared_vector_suite("cpu_opcode").vectors) {
+        decoder.decode(vector_input(vector, 0));
+        assert.deepEqual(decoder.reported_values(), [...vector.expected], `cpu_opcode vector ${vector.id}`);
+        assert.deepEqual(
+            decoder.reported_values(),
+            project_opcode_decode(vector_input(vector, 0)),
+            `cpu_opcode vector ${vector.id} against the production table`,
+        );
+    }
+});
+
+test("the mirrored opcode decoder reports a table that did not load", () => {
+    const canonical = flat_opcode_table();
+
+    for (const broken of [
+        canonical.slice(0, canonical.length - 6),
+        [2, ...canonical.slice(1)],
+        [canonical[0] ?? 0, 255, ...canonical.slice(2)],
+        [],
+    ]) {
+        const decoder = new ported.GoboscriptCpuOpcodeDecoder(broken);
+        decoder.check_table();
+        assert.equal(decoder.error, ported.CPU_OPCODE_ERROR_CODE.BAD_TABLE, "a stale or missing table is reported");
+    }
+
+    // A table whose record is all zeros decodes to no mnemonic, which the port reports instead
+    // of dispatching on a zero id.
+    const zeroed = [...canonical];
+    zeroed[2] = 0;
+    const decoder = new ported.GoboscriptCpuOpcodeDecoder(zeroed);
+    decoder.decode(0);
+    assert.equal(decoder.mnemonic, 0);
+    assert.equal(decoder.error, ported.CPU_OPCODE_ERROR_CODE.UNKNOWN_OPCODE);
+});
+
+test("the mirrored opcode decoder normalizes its argument and resets cleanly", () => {
+    const decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
+
+    decoder.decode(0x69);
+    assert.equal(decoder.mnemonic, cpu_mnemonic_ids().get("ADC"), "ADC immediate decodes to ADC");
+    assert.equal(decoder.mode, ported.CPU_ADDRESSING_MODE.IMMEDIATE);
+    assert.equal(decoder.access, ported.CPU_OPERAND_ACCESS.READ);
+    assert.equal(decoder.base_cycles, 2);
+
+    // GoboScript list indexes are numbers, so an out-of-range byte is normalized first.
+    decoder.decode(256);
+    assert.deepEqual(decoder.reported_values(), project_opcode_decode(0), "256 normalizes to opcode 0");
+    decoder.decode(-1);
+    assert.deepEqual(decoder.reported_values(), project_opcode_decode(255), "-1 normalizes to opcode 255");
+
+    decoder.reset_decode();
+    assert.deepEqual(decoder.reported_values(), [0, 0, 0, 0, 0, 0, 0], "a reset decoder reports zeros");
 });

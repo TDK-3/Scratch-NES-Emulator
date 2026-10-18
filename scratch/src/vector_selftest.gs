@@ -21,6 +21,7 @@
 %include src/cpu_core
 %include src/cpu_addressing
 %include src/cpu_sequence
+%include src/cpu_opcode
 %include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
@@ -36,7 +37,8 @@ enum port_suite {
     alu = 8,
     cartridge = 9,
     cpu_addressing = 10,
-    cpu_sequence = 11
+    cpu_sequence = 11,
+    cpu_opcode = 12
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -102,9 +104,12 @@ proc run_port_self_test {
     port_self_test_done = 0;
     port_self_test_summary = "";
     rom_header_report;
+    cpu_check_opcode_table;
 
     if schema_version != 1 {
         port_self_test_summary = "unsupported shared vector schema " & schema_version;
+    } elif cpu_opcode_error != cpu_opcode_error_code.none {
+        port_self_test_summary = "opcode table failed its length and header check";
     } else {
         repeat record_count {
             run_next_port_vector;
@@ -149,6 +154,8 @@ proc run_next_port_vector {
         run_cpu_addressing_vector operation, input_start;
     } elif suite_id == port_suite.cpu_sequence {
         run_cpu_sequence_vector operation, input_start;
+    } elif suite_id == port_suite.cpu_opcode {
+        run_cpu_opcode_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -506,4 +513,19 @@ proc compare_vector_results suite_id, case_id, expected_start, expected_count {
     } else {
         port_vectors_failed++;
     }
+}
+
+# Replays one opcode decode vector: decode the opcode byte and report the six table fields
+# together with the decoder's error code. Suite 12 has a single operation, so the handler takes
+# only the input position, like the bus, controller, and cartridge handlers.
+proc run_cpu_opcode_vector input_start {
+    local opcode = to_number(shared_port_vectors[$input_start]);
+    cpu_decode_opcode opcode;
+    add cpu_opcode_mnemonic to port_actual_values;
+    add cpu_opcode_mode to port_actual_values;
+    add cpu_opcode_base_cycles to port_actual_values;
+    add cpu_opcode_access to port_actual_values;
+    add cpu_opcode_page_cross_cycle to port_actual_values;
+    add cpu_opcode_official to port_actual_values;
+    add cpu_opcode_error to port_actual_values;
 }

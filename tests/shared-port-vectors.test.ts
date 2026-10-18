@@ -12,6 +12,7 @@ import { Mmc3Mapper } from "../src/nes/cartridge/mapper_004.js";
 import { Cpu2A03 } from "../src/nes/cpu/cpu_2a03.js";
 import type { NesCpuBusDevices } from "../src/nes/cpu/nes_cpu_bus.js";
 import { NesCpuBus } from "../src/nes/cpu/nes_cpu_bus.js";
+import { CPU_OPCODE_TABLE, OFFICIAL_OPCODE_DEFINITIONS } from "../src/nes/cpu/opcode_table.js";
 import {
     normalize_byte,
     normalize_status,
@@ -28,9 +29,12 @@ import { CARTRIDGE_HEADER_BYTES, project_cartridge_header } from "./support/cart
 import {
     CPU_ADDRESSING_FIXED_INPUT_COUNT,
     CPU_ADDRESSING_FIXED_VALUE_COUNT,
+    CPU_ADDRESSING_MODES,
+    CPU_OPERAND_ACCESSES,
     project_cpu_addressing,
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
+import { cpu_mnemonic_ids, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
     CPU_SEQUENCE_FIXED_INPUT_COUNT,
     CPU_SEQUENCE_FIXED_VALUE_COUNT,
@@ -523,6 +527,40 @@ for_each_vector("cpu_sequence", (vector) => {
         const address = actual[offset + 1] ?? 0;
         assert.ok(address < 0x4000 || address > 0x401f, `Access at $${address.toString(16)} is controller space.`);
     }
+});
+
+for_each_vector("cpu_opcode", (vector) => {
+    assert.equal(vector.operation, 1, "Opcode decoding has a single operation.");
+    assert.equal(vector.input.length, 1, "An opcode vector supplies exactly one opcode byte.");
+    const opcode = vector.input[0];
+    assert.ok(opcode !== undefined, "The opcode byte is present.");
+
+    const actual = project_opcode_decode(opcode);
+    assert.deepEqual(actual, [...vector.expected]);
+
+    // Cross-check the projected integers against the production table so a fixture that drifted
+    // from src/nes/cpu/opcode_table.ts cannot pass by matching a stale projection.
+    const definition = CPU_OPCODE_TABLE.get(opcode);
+    assert.ok(definition !== undefined, `Opcode $${opcode.toString(16)} is defined.`);
+    assert.equal(cpu_mnemonic_ids().get(definition.mnemonic), actual[0], "The mnemonic id names the instruction.");
+    assert.equal(
+        CPU_ADDRESSING_MODES.find((mode) => mode.id === actual[1])?.name,
+        definition.addressing_mode,
+        "The addressing mode id names the mode.",
+    );
+    assert.equal(actual[2], definition.base_cycles, "The base cycles match.");
+    assert.equal(
+        CPU_OPERAND_ACCESSES.find((access) => access.id === actual[3])?.name,
+        definition.operand_access,
+        "The operand access id names the access.",
+    );
+    assert.equal(actual[4], definition.page_cross_cycle ? 1 : 0, "The page-cross cycle flag matches.");
+    assert.equal(
+        actual[5],
+        OFFICIAL_OPCODE_DEFINITIONS.some((entry) => entry.opcode === opcode) ? 1 : 0,
+        "The official flag matches.",
+    );
+    assert.equal(actual[6], 0, "Decoding a defined opcode reports no error.");
 });
 
 const ALU_PROGRAM_ADDRESS = 0x8000;

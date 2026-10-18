@@ -262,6 +262,17 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported the opcode decode step. `scratch/src/cpu_opcode.gs` holds the 76-name `cpu_mnemonic` enum whose
+      ids come from the canonical fixture, the `data/opcode_table.txt` list, a length and header check that
+      reports a table which failed to load instead of decoding zeros, and `cpu_decode_opcode`, which turns one
+      opcode byte into the mnemonic, addressing mode, base cycles, operand access, page-cross flag, and
+      official flag at the record offset `3 + opcode * 6`. Suite 12 of the shared fixture (20 records: one per
+      addressing mode plus the page-cross, official, KIL, ISC, SHY, JMP, RTS, and NOP boundaries) pins the same
+      values, the mirror `GoboscriptCpuOpcodeDecoder` is compared with `CPU_OPCODE_TABLE` for all 256 opcodes,
+      and the source lint now checks that the mnemonic enum carries exactly the fixture's ids and that the
+      field enum holds the record offsets. Mutation-checked by renumbering `op_lda` and by shifting a field
+      offset. Dispatch and per-instruction execution are not ported; compile validation stays blocked by the
+      missing toolchain.
 - [x] Extracted the opcode decode table into a canonical, generated form for the port:
       `tests/fixtures/goboscript/opcode_table.json` holds all 256 encodings as integers (mnemonic id,
       addressing mode id, base cycles, operand access id, page-cross flag, official flag) plus the 76 mnemonic
@@ -316,13 +327,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 977 tests in about 12 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 351 shared port-vector tests (350 records), 50 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,001 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 371 shared port-vector tests (370 records), 54 GoboScript port-algorithm
   tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 5,669 decimal values for 350 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 5,929 decimal values for 370 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official

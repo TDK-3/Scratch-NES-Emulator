@@ -225,7 +225,7 @@ separate from TypeScript success.
 - [x] Create an initial shared, generated vector set for numeric helpers, CPU instruction state/cycles,
       CPU-bus mirroring/open bus, MMC3 PRG banks/filtered IRQs, scheduled PPU vblank/NMI, pulse APU state,
       controller serialization, and per-instruction ALU results. `tests/fixtures/goboscript/shared_port_vectors.json`
-      is canonical: eleven suites and 350 records, whose expected ALU bytes were derived by executing the
+      is canonical: twelve suites and 370 records, whose expected ALU bytes were derived by executing the
       production CPU, whose expected cartridge header fields were derived by executing `parse_ines_rom`, and
       whose expected addressing operands and bus traces were derived by executing
       `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
@@ -276,8 +276,18 @@ separate from TypeScript success.
       operand access id, page-cross flag, official flag) plus the 76 mnemonic names, kept equal to
       `CPU_OPCODE_TABLE` by `tests/goboscript-opcode-table.test.ts`, and
       `scripts/generate_goboscript_opcode_table.mjs` flattens it to the ignored
-      `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. Not done: the `.gs`
-      mnemonic enum, the list loader, and the decode proc that reads it.
+      `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. The `.gs` mnemonic enum,
+      the list loader, and the decode proc that reads it landed in the next entry.
+- [x] Port the opcode decode step. `scratch/src/cpu_opcode.gs` holds the 76-name `cpu_mnemonic` enum with the
+      fixture's ids, the `data/opcode_table.txt` list, a length and header check that reports a table which
+      failed to load instead of decoding zeros, and `cpu_decode_opcode`, which reads the six fields at the
+      record offset `3 + opcode * 6` into the `cpu_opcode_*` globals that `cpu_resolve_operand` can consume
+      directly. Suite 12 (20 records) pins one opcode per addressing mode plus the page-cross, official, KIL,
+      ISC, SHY, JMP, RTS, and NOP boundaries; the mirror `GoboscriptCpuOpcodeDecoder` is compared with
+      `CPU_OPCODE_TABLE` for all 256 opcodes; and the source lint checks the mnemonic and field enum ids
+      against the generated table. Not ported: opcode dispatch, the per-instruction sequences of the remaining
+      official opcodes, interrupt acceptance policy between instructions, and the unstable high-byte stores.
+      Compile validation stays blocked by the missing toolchain.
 - [ ] Port the CPU, bus, mapper, PPU, APU, and controller incrementally. Keep GoboScript list indices
       1-based and bound every long no-refresh loop. Done so far: both serial controller ports
       (`scratch/src/controller.gs`), a documented CPU-bus subset (`scratch/src/cpu_bus.gs`) covering RAM
@@ -298,7 +308,7 @@ separate from TypeScript success.
 
 - [x] Run CPU, PPU, APU, DMA, interrupt, mapper, and timing test suites; document skips and known
       failures. On 2026-10-15, `npm test` passed all 332 tests (including strict type-checking) and
-      `npm run build:ts` passed; on 2026-10-18 it passed all 977 tests. Coverage and known external-ROM
+      `npm run build:ts` passed; on 2026-10-18 it passed all 1,001 tests. Coverage and known external-ROM
       failures/skips are recorded in `docs/TESTING.md`.
 - [ ] Differentially compare CPU traces and framebuffer/audio outputs against trusted reference
       behavior. The first 5,003 external `nestest` trace entries match; TypeScript and a temporary JSNES 2.1.0
@@ -319,15 +329,14 @@ separate from TypeScript success.
       open under P6 and `docs/COMPLETION_CRITERIA.md`.
 - [x] From a clean npm install (`npm ci`), run TypeScript tests/build and regenerate the selected-ROM and
       shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed. Rechecked on
-      2026-10-18 with 977 tests passing and all three generators completing (5,669 vector values, 1,538 opcode
-      values, 81,936 ROM
-      bytes).
+      2026-10-18 with 1,001 tests passing and all three generators completing (5,929 vector values, 1,538
+      opcode values, 81,936 ROM bytes).
 - [ ] Install the documented GoboScript compiler, build/open the `.sb3`, and validate it in TurboWarp;
       review source, asset, and ROM rights before distribution. Compiler availability and runtime validation
       remain blocked; see the P0 notes above.
 - [x] Keep `PROGRESS.md` and `COMPLETION_CRITERIA.md` current with test results, measurements, and open
       blockers. The 2026-10-15 clean-install run passed 332 tests, TypeScript build, and both data generators;
-      the 2026-10-18 run passed 977 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
+      the 2026-10-18 run passed 1,001 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
       is a progress record, not a claim that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria
       are complete.
 
