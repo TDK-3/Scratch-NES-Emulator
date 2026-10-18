@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { CPU_INSTRUCTION_PORTED_MNEMONICS } from "./support/cpu_instruction_projection.js";
 import { cpu_mnemonic_ids, opcode_table_fixture } from "./support/cpu_opcode_projection.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { shared_port_fixture } from "./support/shared_port_vectors.js";
@@ -71,6 +72,7 @@ const MIRRORED_HEADERS: readonly string[] = [
     "src/cpu_alu.gs",
     "src/cpu_bus.gs",
     "src/cpu_core.gs",
+    "src/cpu_instruction.gs",
     "src/cpu_opcode.gs",
     "src/cpu_sequence.gs",
     "src/cpu_status.gs",
@@ -205,6 +207,41 @@ const MIRROR_CONTRACT: readonly {
         mirror: "GoboscriptCpuCore.resolve_operand",
     },
     {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_reset_instruction_error",
+        mirror: "GoboscriptCpuCore.reset_instruction_error",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_fetch_and_decode_opcode",
+        mirror: "GoboscriptCpuCore.fetch_and_decode_opcode",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_execute_branch",
+        mirror: "GoboscriptCpuCore.execute_branch",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_execute_jump",
+        mirror: "GoboscriptCpuCore.execute_jump",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_execute_implied_instruction",
+        mirror: "GoboscriptCpuCore.execute_implied_instruction",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_apply_implied_instruction",
+        mirror: "GoboscriptCpuCore.apply_implied_instruction",
+    },
+    {
+        source: "src/cpu_instruction.gs",
+        declaration: "cpu_execute_instruction",
+        mirror: "GoboscriptCpuCore.execute_instruction",
+    },
+    {
         source: "src/cpu_opcode.gs",
         declaration: "cpu_reset_opcode_decode",
         mirror: "GoboscriptCpuOpcodeDecoder.reset_decode",
@@ -337,6 +374,12 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/vector_selftest.gs",
+        declaration: "run_cpu_instruction_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
+    {
+        source: "src/vector_selftest.gs",
         declaration: "run_cpu_opcode_vector",
         mirror: null,
         reason: "dispatcher",
@@ -356,6 +399,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_alu.gs",
         "src/cpu_bus.gs",
         "src/cpu_core.gs",
+        "src/cpu_instruction.gs",
         "src/cpu_opcode.gs",
         "src/cpu_sequence.gs",
         "src/cpu_status.gs",
@@ -802,7 +846,17 @@ test("the self-test suite ids match the shared vector fixture", () => {
     );
     assert.deepEqual(
         [...handled].sort(),
-        ["alu", "bus", "cartridge", "controller", "cpu_addressing", "cpu_opcode", "cpu_sequence", "numeric"],
+        [
+            "alu",
+            "bus",
+            "cartridge",
+            "controller",
+            "cpu_addressing",
+            "cpu_instruction",
+            "cpu_opcode",
+            "cpu_sequence",
+            "numeric",
+        ],
     );
 
     const skipped = shared_port_fixture.suites
@@ -890,6 +944,26 @@ test("the self-test operation ids match the shared vector fixture operations", (
     for (const [mnemonic, id] of mnemonic_ids) {
         assert.equal(mnemonic_enum.get(`op_${mnemonic.toLowerCase()}`), id, `cpu_mnemonic.op_${mnemonic}`);
     }
+
+    // Suite 13 executes one instruction per record, so it has a single operation, and the
+    // dispatcher's reach has to agree three ways: the mnemonics named in the .gs dispatch
+    // chains, the ids the mirror declares, and the ported set the projection refuses to derive
+    // an executed record for. A mnemonic missing from any of the three would let an unported
+    // instruction pass as executed, or an executed one be recorded as refused.
+    assert.deepEqual([...fixture_operations("cpu_instruction")], [1], "instruction execution has one operation");
+
+    const dispatched = new Set(
+        (get_source("src/cpu_instruction.gs").text.match(/cpu_mnemonic\.op_(\w+)/g) ?? []).map((match) =>
+            match.slice("cpu_mnemonic.op_".length),
+        ),
+    );
+    const mirrored_mnemonics = Object.keys(ported.CPU_MNEMONIC).map((name) => name.toLowerCase());
+    assert.deepEqual([...dispatched].sort(), mirrored_mnemonics.sort(), "the mirror declares the dispatched set");
+    assert.deepEqual(
+        [...dispatched].sort(),
+        CPU_INSTRUCTION_PORTED_MNEMONICS.map((name) => name.toLowerCase()).sort(),
+        "the projection's ported set is the dispatched set",
+    );
 
     const field_enum = get_enum(opcode_source, "cpu_opcode_field");
     assert.equal(field_enum.size, opcode_table_fixture().field_count, "the field enum covers every table field");

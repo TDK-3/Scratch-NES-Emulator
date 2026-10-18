@@ -23,6 +23,12 @@ import {
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
 import {
+    CPU_INSTRUCTION_ERROR_IDS,
+    CPU_INSTRUCTION_FIXED_INPUT_COUNT,
+    CPU_INSTRUCTION_FIXED_VALUE_COUNT,
+    CPU_INSTRUCTION_PORTED_MNEMONICS,
+} from "./support/cpu_instruction_projection.js";
+import {
     cpu_mnemonic_ids,
     flat_opcode_table,
     opcode_table_fixture,
@@ -1375,6 +1381,41 @@ function make_controller_bus_devices(controllers: NesControllerPorts): NesCpuBus
  * Loads the register state and memory setup of one suite-11 record, then clears the cycle
  * accounting, exactly as `run_cpu_sequence_vector` in scratch/src/vector_selftest.gs does.
  */
+/**
+ * Builds a mirror core for one suite-13 record the way `run_cpu_instruction_vector` does: the
+ * decoder reads the canonical generated table, the setup pairs and the program bytes are written
+ * through the mirrored bus, and cycle accounting starts clean at the opcode fetch.
+ */
+function make_mirror_cpu_instruction(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
+    const core = new ported.GoboscriptCpuCore();
+    core.decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
+    core.reset_registers();
+    core.bus.clear_ram();
+    core.bus.reset();
+    core.program_counter = vector_inputs[0] ?? 0;
+    core.a = vector_inputs[1] ?? 0;
+    core.x = vector_inputs[2] ?? 0;
+    core.y = vector_inputs[3] ?? 0;
+    core.stack_pointer = vector_inputs[4] ?? 0;
+    core.status = vector_inputs[5] ?? 0;
+    core.jammed = 0;
+
+    const program_count = vector_inputs[CPU_INSTRUCTION_FIXED_INPUT_COUNT - 2] ?? 0;
+    const setup_count = vector_inputs[CPU_INSTRUCTION_FIXED_INPUT_COUNT - 1] ?? 0;
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const pair_start = CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + index * 2;
+        core.bus.write(vector_inputs[pair_start] ?? 0, vector_inputs[pair_start + 1] ?? 0);
+    }
+
+    for (let index = 0; index < program_count; index += 1) {
+        core.bus.write(core.program_counter + index, vector_inputs[CPU_INSTRUCTION_FIXED_INPUT_COUNT + index] ?? 0);
+    }
+
+    core.reset_cycle_accounting();
+    return core;
+}
+
 function make_mirror_cpu_sequence(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
     const core = new ported.GoboscriptCpuCore();
     core.reset_registers();
@@ -1652,4 +1693,82 @@ test("the mirrored opcode decoder normalizes its argument and resets cleanly", (
 
     decoder.reset_decode();
     assert.deepEqual(decoder.reported_values(), [0, 0, 0, 0, 0, 0, 0], "a reset decoder reports zeros");
+});
+
+test("the mirrored dispatcher replays every suite 13 instruction vector", () => {
+    const vectors = get_shared_vector_suite("cpu_instruction").vectors;
+    assert.ok(vectors.length >= 40, "suite 13 covers the ported instruction groups");
+
+    for (const vector of vectors) {
+        const core = make_mirror_cpu_instruction([...vector.input]);
+        core.execute_instruction();
+
+        const reported = core.instruction_values();
+        assert.deepEqual(reported, [...vector.expected], `cpu_instruction vector ${vector.id}`);
+        assert.equal(reported.length, CPU_INSTRUCTION_FIXED_VALUE_COUNT + core.cycles * 3, "one triple per cycle");
+        assert.equal(core.cycles, reported[0], "the reported cycle count is the counter");
+    }
+});
+
+test("the mirrored dispatcher reports what it does not execute", () => {
+    // A project whose opcode table failed to load decodes nothing and refuses the instruction
+    // after spending only the opcode fetch.
+    const without_table = new ported.GoboscriptCpuCore();
+    without_table.reset_registers();
+    without_table.bus.clear_ram();
+    without_table.bus.reset();
+    without_table.program_counter = 0x0200;
+    without_table.status = 0x24;
+    without_table.bus.write(0x0200, 0xea);
+    without_table.reset_cycle_accounting();
+    without_table.execute_instruction();
+    assert.equal(without_table.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.UNDECODABLE_OPCODE);
+    assert.equal(without_table.cycles, 1, "a refused instruction spends only its fetch");
+    assert.equal(without_table.program_counter, 0x0201);
+
+    // An official instruction the port has not reached yet is refused, not guessed at.
+    const load = make_mirror_cpu_instruction([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 2, 0, 0xa9, 0x5a]);
+    load.execute_instruction();
+    assert.equal(load.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.UNSUPPORTED_MNEMONIC);
+    assert.equal(load.cycles, 1);
+    assert.equal(load.a, 0x11, "a refused load leaves the accumulator alone");
+    assert.deepEqual(load.access_log, [0, 0x0200, 0xa9], "only the opcode fetch reaches the bus");
+
+    // An unofficial opcode other than KIL is refused as unofficial.
+    const unofficial = make_mirror_cpu_instruction([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 2, 0, 0x03, 0x10]);
+    unofficial.execute_instruction();
+    assert.equal(unofficial.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.UNOFFICIAL_OPCODE);
+    assert.equal(unofficial.cycles, 1);
+    assert.equal(unofficial.jammed, 0, "only KIL jams");
+
+    // KIL spends the fetch plus one read at the advanced program counter, then jams.
+    const jam = make_mirror_cpu_instruction([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 1, 0, 0x02]);
+    jam.execute_instruction();
+    assert.equal(jam.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.NONE);
+    assert.equal(jam.jammed, 1);
+    assert.equal(jam.cycles, 2);
+    assert.deepEqual(jam.access_log, [0, 0x0200, 0x02, 0, 0x0201, 0], "the jam read follows the fetch");
+
+    // A ported instruction clears the jam flag it did not set and reports no error.
+    const nop = make_mirror_cpu_instruction([0x0200, 0x11, 0x22, 0x33, 0xfd, 0x24, 1, 0, 0xea]);
+    nop.execute_instruction();
+    assert.equal(nop.instruction_error, ported.CPU_INSTRUCTION_ERROR_CODE.NONE);
+    assert.equal(nop.jammed, 0);
+    assert.equal(nop.cycles, 2, "an implied instruction spends the fetch and one dummy read");
+});
+
+test("the mirrored mnemonic ids and ported set agree with the canonical opcode table", () => {
+    const mnemonic_ids = cpu_mnemonic_ids();
+
+    for (const [name, id] of Object.entries(ported.CPU_MNEMONIC)) {
+        assert.equal(mnemonic_ids.get(name), id, `CPU_MNEMONIC.${name} matches the fixture id`);
+        assert.ok(CPU_INSTRUCTION_PORTED_MNEMONICS.includes(name), `${name} is in the ported set`);
+    }
+
+    assert.equal(
+        Object.keys(ported.CPU_MNEMONIC).length,
+        CPU_INSTRUCTION_PORTED_MNEMONICS.length,
+        "the mirror declares every ported mnemonic",
+    );
+    assert.equal(CPU_INSTRUCTION_ERROR_IDS.none, 0, "no error is the zero code the fixture records");
 });

@@ -262,6 +262,22 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported instruction dispatch for the instructions that need no memory operand.
+      `scratch/src/cpu_instruction.gs` fetches and decodes the opcode byte, then executes the KIL jam flag,
+      BRK, JSR, RTI, RTS, the eight relative branches (dispatched on the decoded relative mode with the
+      condition taken from the mnemonic), JMP absolute and JMP indirect, PHA, PHP, PLA, PLP, the six register
+      transfers, TXS, the seven flag instructions, INX, DEX, INY, DEY, and NOP. Implied instructions spend the
+      dummy read the reference spends, and everything the port does not execute yet sets one of five
+      `cpu_instruction_error` codes after the opcode fetch instead of guessing. Suite 13 of the shared fixture
+      (44 records, derived by executing `Cpu2A03.step()` behind a fresh decoder) pins the cycles, the final
+      registers, and the ordered trace, including two refusal records whose error code the reference test
+      derives from the production table and the ported mnemonic set rather than from the expected values. The
+      mirror `GoboscriptCpuCore.execute_instruction()` replays all 44 records, and the source lint now compares
+      the dispatched mnemonic names three ways: the `.gs` chains, the mirror ids, and the projection's ported
+      set. Mutation-checked by dropping a PLA dummy read, inverting the BNE condition, retargeting TAX,
+      drifting a mirror mnemonic id, and adding an undispatched mnemonic to the `.gs`. Not ported: loads,
+      stores, the ALU and read-modify-write groups, the jam vector reads, interrupt acceptance, and
+      `finish_instruction`; compile validation stays blocked by the missing toolchain.
 - [x] Ported the opcode decode step. `scratch/src/cpu_opcode.gs` holds the 76-name `cpu_mnemonic` enum whose
       ids come from the canonical fixture, the `data/opcode_table.txt` list, a length and header check that
       reports a table which failed to load instead of decoding zeros, and `cpu_decode_opcode`, which turns one
@@ -327,13 +343,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,001 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 371 shared port-vector tests (370 records), 54 GoboScript port-algorithm
+- `npm test` on 2026-10-18: passed all 1,048 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 415 shared port-vector tests (414 records), 57 GoboScript port-algorithm
   tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 5,929 decimal values for 370 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 7,303 decimal values for 414 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official

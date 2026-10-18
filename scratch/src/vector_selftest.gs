@@ -22,6 +22,7 @@
 %include src/cpu_addressing
 %include src/cpu_sequence
 %include src/cpu_opcode
+%include src/cpu_instruction
 %include src/cartridge
 %include src/rom_loader
 %include src/shared_vectors
@@ -38,7 +39,8 @@ enum port_suite {
     cartridge = 9,
     cpu_addressing = 10,
     cpu_sequence = 11,
-    cpu_opcode = 12
+    cpu_opcode = 12,
+    cpu_instruction = 13
 }
 
 # Suite 1 operations. Values 1 through 6 are the original numeric contract; 7 through 13
@@ -156,6 +158,8 @@ proc run_next_port_vector {
         run_cpu_sequence_vector operation, input_start;
     } elif suite_id == port_suite.cpu_opcode {
         run_cpu_opcode_vector input_start;
+    } elif suite_id == port_suite.cpu_instruction {
+        run_cpu_instruction_vector input_start;
     } else {
         # Suite 2 (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU) are not ported yet.
         skipped = 1;
@@ -528,4 +532,62 @@ proc run_cpu_opcode_vector input_start {
     add cpu_opcode_page_cross_cycle to port_actual_values;
     add cpu_opcode_official to port_actual_values;
     add cpu_opcode_error to port_actual_values;
+}
+
+# Replays one executed instruction: write the setup pairs and the program bytes, run one
+# instruction through the ported dispatcher, and report the eight fixed values followed by one
+# (kind, address, value) triple per bus access.
+proc run_cpu_instruction_vector input_start {
+    local program_counter = to_number(shared_port_vectors[$input_start]);
+    local program_count = to_number(shared_port_vectors[$input_start + 6]);
+    local setup_count = to_number(shared_port_vectors[$input_start + 7]);
+    local program_start = $input_start + 8;
+    local setup_start = program_start + program_count;
+    local program_index = 0;
+    local setup_index = 0;
+    local setup_address = 0;
+    local setup_value = 0;
+    local log_index = 1;
+    local log_count = 0;
+    cpu_reset_registers;
+    cpu_bus_clear_ram;
+    cpu_bus_reset;
+    cpu_program_counter = program_counter;
+    cpu_a = to_number(shared_port_vectors[$input_start + 1]);
+    cpu_x = to_number(shared_port_vectors[$input_start + 2]);
+    cpu_y = to_number(shared_port_vectors[$input_start + 3]);
+    cpu_stack_pointer = to_number(shared_port_vectors[$input_start + 4]);
+    cpu_status = to_number(shared_port_vectors[$input_start + 5]);
+    cpu_jammed = 0;
+
+    repeat setup_count {
+        setup_address = to_number(shared_port_vectors[setup_start + (setup_index * 2)]);
+        setup_value = to_number(shared_port_vectors[setup_start + 1 + (setup_index * 2)]);
+        cpu_bus_write setup_address, setup_value;
+        setup_index++;
+    }
+
+    repeat program_count {
+        setup_address = program_counter + program_index;
+        setup_value = to_number(shared_port_vectors[program_start + program_index]);
+        cpu_bus_write setup_address, setup_value;
+        program_index++;
+    }
+
+    cpu_reset_cycle_accounting;
+    cpu_execute_instruction;
+    add cpu_cycles to port_actual_values;
+    add cpu_program_counter to port_actual_values;
+    add cpu_stack_pointer to port_actual_values;
+    add cpu_status to port_actual_values;
+    add cpu_a to port_actual_values;
+    add cpu_x to port_actual_values;
+    add cpu_y to port_actual_values;
+    add cpu_instruction_error to port_actual_values;
+    log_count = length cpu_access_log;
+
+    repeat log_count {
+        add to_number(cpu_access_log[log_index]) to port_actual_values;
+        log_index++;
+    }
 }

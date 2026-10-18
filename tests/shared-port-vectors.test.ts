@@ -34,7 +34,15 @@ import {
     project_cpu_addressing,
     type CpuAddressingSetup,
 } from "./support/cpu_addressing_projection.js";
-import { cpu_mnemonic_ids, project_opcode_decode } from "./support/cpu_opcode_projection.js";
+import {
+    CPU_INSTRUCTION_ERROR_IDS,
+    CPU_INSTRUCTION_FIXED_INPUT_COUNT,
+    CPU_INSTRUCTION_FIXED_VALUE_COUNT,
+    CPU_INSTRUCTION_PORTED_MNEMONICS,
+    project_cpu_instruction,
+    type CpuInstructionSetup,
+} from "./support/cpu_instruction_projection.js";
+import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
     CPU_SEQUENCE_FIXED_INPUT_COUNT,
     CPU_SEQUENCE_FIXED_VALUE_COUNT,
@@ -561,6 +569,72 @@ for_each_vector("cpu_opcode", (vector) => {
         "The official flag matches.",
     );
     assert.equal(actual[6], 0, "Decoding a defined opcode reports no error.");
+});
+
+for_each_vector("cpu_instruction", (vector) => {
+    assert.equal(vector.operation, 1, "Instruction vectors have a single operation.");
+    const [program_counter, accumulator, x, y, stack_pointer, status, program_count, setup_count] = vector.input;
+    assert.ok(
+        program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            program_count !== undefined &&
+            setup_count !== undefined,
+        "Instruction vectors supply all six registers, a program count, and a setup count.",
+    );
+    assert.equal(vector.input.length, CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + setup_count * 2);
+
+    const program: number[] = [];
+
+    for (let index = 0; index < program_count; index += 1) {
+        const byte = vector.input[CPU_INSTRUCTION_FIXED_INPUT_COUNT + index];
+        assert.ok(byte !== undefined, `Program byte ${index} is present.`);
+        program.push(byte);
+    }
+
+    const setup: CpuInstructionSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + index * 2];
+        const value = vector.input[CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    // The refusal a record documents is derived here from the production table and the ported
+    // mnemonic set, never copied out of the expected values, and the projection re-checks it.
+    const opcode = program[0] ?? 0;
+    const mnemonic = CPU_OPCODE_TABLE.get(opcode)?.mnemonic ?? "";
+    const ported_mnemonic = CPU_INSTRUCTION_PORTED_MNEMONICS.includes(mnemonic);
+    const refusal = ported_mnemonic
+        ? CPU_INSTRUCTION_ERROR_IDS.none
+        : is_official_opcode(opcode)
+          ? CPU_INSTRUCTION_ERROR_IDS.unsupported_mnemonic
+          : CPU_INSTRUCTION_ERROR_IDS.unofficial_opcode;
+
+    const actual = project_cpu_instruction(
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        program,
+        setup,
+        refusal,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual[0], (actual.length - CPU_INSTRUCTION_FIXED_VALUE_COUNT) / 3, "one cycle per bus access");
+    assert.ok(Number.isInteger(actual[1]) && (actual[1] ?? 0) >= 0 && (actual[1] ?? 0) <= 0xffff, "final PC is a word");
+
+    if (!ported_mnemonic) {
+        // A refused instruction spends only its opcode fetch and reads that byte.
+        assert.equal(actual[0], 1, "a refused instruction spends one cycle");
+        assert.deepEqual(actual.slice(CPU_INSTRUCTION_FIXED_VALUE_COUNT), [0, program_counter, opcode]);
+    }
 });
 
 const ALU_PROGRAM_ADDRESS = 0x8000;

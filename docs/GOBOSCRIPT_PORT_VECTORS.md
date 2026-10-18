@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for twelve suites and 370 records. TypeScript regression tests execute each vector
+inputs and expected outputs for thirteen suites and 414 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (5,929 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (7,303 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -57,6 +57,7 @@ suite and operation IDs present in the fixture.
 | 10 | CPU addressing | Operation id is the addressing mode (1-13). Inputs: access kind, PC, A, X, Y, SP, status, setup count, then `(address, value)` pairs. | Resolved operand kind, mode, access, base address, address, value, page crossed, error code, cycles, final PC, final SP, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder with no devices. |
 | 11 | CPU cycle sequence | Operation id is the sequence (1 reset, 2 BRK, 3 JSR, 4 RTI, 5 RTS, 6 IRQ, 7 NMI, 8 relative branch). Inputs: PC, A, X, Y, SP, status, taken flag, setup count, then `(address, value)` pairs. | Cycles, final PC, SP, status, A, X, Y, sequence error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.reset()` or `step()` behind a fresh decoder with no devices. |
 | 12 | Opcode decode | 1: input is one opcode byte. | Mnemonic id, addressing mode id, base cycles, operand access id, page-cross cycle flag, official flag, and decoder error code, read from `CPU_OPCODE_TABLE` in `src/nes/cpu/opcode_table.ts` and encoded by `tests/fixtures/goboscript/opcode_table.json`. |
+| 13 | Instruction execution | 1: inputs are PC, A, X, Y, SP, status, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.step()` behind a fresh decoder with no devices. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
 1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
@@ -96,6 +97,17 @@ access ids are the same integers the ported enums use, so each record also check
 `CPU_OPCODE_TABLE` through `tests/support/cpu_opcode_projection.ts`, and the mirror decoder compares all 256
 opcodes against the generated table rather than only these 20.
 
+Suite 13 executes one whole instruction per record, opcode fetch included, so its trace starts at the fetch
+and its cycle count is the instruction's. The 44 records cover the groups the ported dispatcher reaches: the
+six register transfers with their zero and wrap boundaries, TXS, INX, DEX, INY, DEY, NOP, the seven flag
+instructions, the four stack instructions with a prepared stack byte, all eight branches taken plus a
+not-taken and a page-crossing BNE, JMP absolute and JMP indirect, BRK, JSR, RTS, RTI, and a KIL jam. Two
+records document refusals instead of execution: an unofficial SLO reports `unofficial_opcode` and an official
+LDA immediate reports `unsupported_mnemonic`, each after spending only the opcode fetch, so an instruction the
+port has not reached cannot pass as executed. The refusal a record documents is derived in the reference test
+from the production table and `CPU_INSTRUCTION_PORTED_MNEMONICS`, never copied from the expected values, and
+the projection rejects a record whose refusal the table does not justify.
+
 Operation 1 of suite 3 replays against a decoder with no devices attached, while the GoboScript port always has
 live controller ports; suite 3 operation 1 records therefore must not read `$4016`/`$4017`, and
 `tests/shared-port-vectors.test.ts` asserts that constraint. Use operation 2 for controller-window reads.
@@ -133,7 +145,11 @@ stand in for that until the toolchain is available:
   NES 2.0 ROM sizes, through the shared projection in `tests/support/cartridge_projection.ts`. The opcode
   mirror is `GoboscriptCpuOpcodeDecoder`, which reads the same flat list the generator writes and is compared
   with `CPU_OPCODE_TABLE` for all 256 opcodes through `tests/support/cpu_opcode_projection.ts`, including the
-  length and header checks that report a truncated, reversioned, or missing table.
+  length and header checks that report a truncated, reversioned, or missing table. Instruction dispatch is
+  mirrored inside `GoboscriptCpuCore.execute_instruction()`, which composes the decoder, the operand resolver,
+  the sequences, and the status helpers, and replays every suite 13 record; the source lint additionally
+  compares the mnemonics named in the `.gs` dispatch chains with the mirror's `CPU_MNEMONIC` ids and with the
+  projection's ported set, so the three cannot drift.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared
