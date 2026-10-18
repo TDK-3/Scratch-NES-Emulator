@@ -7,6 +7,7 @@ import test from "node:test";
 import { CPU_INSTRUCTION_PORTED_MNEMONICS } from "./support/cpu_instruction_projection.js";
 import { CPU_CONTROL_SEQUENCE_KINDS } from "./support/cpu_control_projection.js";
 import { cpu_mnemonic_ids, opcode_table_fixture } from "./support/cpu_opcode_projection.js";
+import { NROM_MEMORY_OPS } from "./support/mapper_projection.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
 import { shared_port_fixture } from "./support/shared_port_vectors.js";
 
@@ -412,6 +413,25 @@ const MIRROR_CONTRACT: readonly {
         reason: "dispatcher",
     },
     { source: "src/vector_selftest.gs", declaration: "run_nrom_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/mapper_000.gs", declaration: "nrom_reset_memory", mirror: "GoboscriptNromMapper.reset_memory" },
+    { source: "src/mapper_000.gs", declaration: "nrom_copy_prg_rom", mirror: "GoboscriptNromMapper.copy_prg_rom" },
+    { source: "src/mapper_000.gs", declaration: "nrom_copy_chr_rom", mirror: "GoboscriptNromMapper.copy_chr_rom" },
+    { source: "src/mapper_000.gs", declaration: "nrom_copy_trainer", mirror: "GoboscriptNromMapper.copy_trainer" },
+    { source: "src/mapper_000.gs", declaration: "nrom_load_payload", mirror: "GoboscriptNromMapper.load_payload" },
+    { source: "src/mapper_000.gs", declaration: "nrom_read_cpu", mirror: "GoboscriptNromMapper.read_cpu" },
+    { source: "src/mapper_000.gs", declaration: "nrom_write_cpu", mirror: "GoboscriptNromMapper.write_cpu" },
+    { source: "src/mapper_000.gs", declaration: "nrom_read_pattern", mirror: "GoboscriptNromMapper.read_pattern" },
+    {
+        source: "src/mapper_000.gs",
+        declaration: "nrom_write_pattern",
+        mirror: "GoboscriptNromMapper.write_pattern",
+    },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "run_nrom_memory_vector",
+        mirror: null,
+        reason: "dispatcher",
+    },
     {
         source: "src/cpu_control.gs",
         declaration: "cpu_clear_interrupt_state",
@@ -887,6 +907,30 @@ test("every mirrored header declaration has a TypeScript mirror of the same arit
     }
 });
 
+test("the ported board enums match the mirror's constants", () => {
+    // The .gs sources are not executed here, so a wrong literal in one of them would only show up
+    // in a compiled project. Comparing the enum values with the mirror's constants catches it: a
+    // trainer offset of 1024 instead of $1000, or a window that starts at the wrong address, fails
+    // here rather than silently mapping the wrong bytes.
+    const source = get_source("src/mapper_000.gs");
+
+    for (const [enumeration, constants] of [
+        ["nrom_limit", ported.NROM_LIMIT],
+        ["nrom_window", ported.NROM_WINDOW],
+    ] as const) {
+        const variants = get_enum(source, enumeration);
+        const expected = Object.entries(constants);
+        assert.equal(variants.size, expected.length, `${enumeration} has an entry the mirror lacks`);
+
+        for (const [name, value] of variants) {
+            const mirror_name = name.toUpperCase();
+            const mirror_value = (constants as unknown as Record<string, number>)[mirror_name];
+            assert.ok(mirror_value !== undefined, `${enumeration}.${name} is mirrored as ${mirror_name}`);
+            assert.equal(value, mirror_value, `${enumeration}.${name} is ${mirror_value}`);
+        }
+    }
+});
+
 test("the self-test suite ids match the shared vector fixture", () => {
     const self_test = get_source("src/vector_selftest.gs");
     const suites = get_enum(self_test, "port_suite");
@@ -921,6 +965,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "cpu_opcode",
             "cpu_sequence",
             "nrom",
+            "nrom_memory",
             "numeric",
         ],
     );
@@ -1022,8 +1067,20 @@ test("the self-test operation ids match the shared vector fixture operations", (
     // kind ids must be the ones the ported enum reports.
     assert.deepEqual([...fixture_operations("cpu_control")], [1], "the control loop has one operation");
 
-    // Suite 15 validates one board per record, so it has one operation as well.
+    // Suite 15 validates one board per record, so it has one operation as well, and suite 16 runs
+    // that board's memory operations under the same single operation id.
     assert.deepEqual([...fixture_operations("nrom")], [1], "board validation has one operation");
+    assert.deepEqual([...fixture_operations("nrom_memory")], [1], "board memory has one operation");
+
+    // The memory operation kinds the self-test dispatches are the projection's ids.
+    const memory_ops = get_enum(get_source("src/mapper_000.gs"), "nrom_memory_op");
+    assert.deepEqual(
+        [...memory_ops.entries()]
+            .map(([name, id]) => ({ id, name: name.replace(/_/g, "-") }))
+            .sort((first, second) => first.id - second.id),
+        [...NROM_MEMORY_OPS],
+        "the ported memory operation ids are the projection's ids",
+    );
 
     const sequence_kinds = get_enum(get_source("src/cpu_control.gs"), "cpu_sequence_kind");
     assert.deepEqual(

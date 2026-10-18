@@ -105,13 +105,21 @@ What the ported modules cover:
   trainer, 7 unsupported CHR memory), the board kind, and the PRG RAM and CHR RAM bytes an
   accepted board would map. The reference also rejects a trainer that is not 512 bytes long; the
   parser only ever reports a 512-byte trainer, so that check cannot fail here and is not ported.
-  PRG and CHR storage, the CPU and pattern address windows, the trainer copy into PRG RAM at
-  offset $1000, and the NVRAM snapshots are not ported yet.
+  The same header holds the board's memory and address windows. Both ROM lists are sized to the
+  declared payload and zero-filled, both RAM regions are allocated at their full window and
+  alias modulo the mapped size, nrom_load_payload copies PRG ROM, CHR ROM, and the trainer into
+  PRG RAM at offset $1000 out of the generated cartridge list, and the CPU and pattern windows
+  report a mapped flag, a byte, and the driven bits instead of returning a null read: $8000-$FFFF
+  is PRG ROM modulo its size, so a 16 KiB board mirrors twice; $6000-$7FFF is PRG RAM modulo the
+  mapped size when the board has any; and a write only lands in RAM. The NVRAM snapshots and the
+  hookup to cpu_bus.gs, whose cartridge window still behaves as an absent device, are not ported
+  yet.
 * vector_selftest.gs: walks the generated list in data/shared_port_vectors.txt and compares
   each record with the value recorded from the TypeScript reference. Suites 1 (numeric), 3
   (bus), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing), 11 (CPU
   cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), and 15
-  (NROM board validation) are replayed; records for the CPU state, MMC3, PPU, and APU suites
+  (NROM board validation), and 16 (NROM memory windows) are replayed; records for the CPU state,
+  MMC3, PPU, and APU suites
   are counted as skipped rather than treated as passing.
 
 The green flag runs that self test on the Stage and broadcasts "port self test done"; the
@@ -122,6 +130,6 @@ Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
 Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-and the yield policy a frame loop needs; cartridge payload copying into bank lists, RAM/NVRAM
-storage, and the NROM CPU and pattern address windows; PPU rendering; APU channels; MMC3 mapper
-banking and IRQ; and any frame loop or rendering path.
+and the yield policy a frame loop needs; wiring the NROM board into cpu_bus.gs and the NVRAM
+snapshots; PPU rendering; APU channels; MMC3 mapper banking and IRQ; and any frame loop or
+rendering path.

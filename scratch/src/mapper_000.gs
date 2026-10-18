@@ -11,13 +11,22 @@
 # 512-byte trainer, so that check cannot fail here and is not ported; a header that lies about its
 # payload length is caught by the parse, which suite 9 covers.
 #
-# What is not ported yet: the PRG ROM, PRG RAM, CHR ROM, and CHR RAM storage itself, the CPU and
-# pattern address windows with their mirroring, the trainer copy into PRG RAM at offset $1000, the
-# NVRAM snapshots, and the MMC3 board. Nametable mirroring needs no mapper state, because NROM
-# reports the mirroring the header declared.
+# The memory and the address windows are ported too: PRG ROM at $8000-$FFFF modulo its size, so a
+# 16 KiB board mirrors twice, PRG RAM at $6000-$7FFF modulo the mapped size, and the pattern table
+# from CHR ROM when the board has it or from CHR RAM otherwise. A write only lands in RAM, and an
+# address outside both windows is reported unmapped instead of stopping the project, where the
+# reference returns a null read.
+#
+# What is not ported yet: the NVRAM snapshots, the PPU-side nametable mirroring consumer, and the
+# MMC3 board. Nametable mirroring needs no mapper state, because NROM reports the mirroring the
+# header declared.
 
 %include src/cartridge
 %include src/mapper
+# nrom_load_payload reads the Stage-owned generated cartridge list, so this header is included by
+# the Stage, as src/rom_loader.gs is. The window and validation procs only touch the board's own
+# lists and globals.
+%include src/rom_loader
 
 enum nrom_error {
     none = 0,
@@ -36,6 +45,45 @@ enum nrom_limit {
     prg_rom_32k_bytes = 32768,
     pattern_bytes = 8192
 }
+
+# The four memory operations a shared-vector record can ask a board to perform.
+enum nrom_memory_op {
+    cpu_read = 1,
+    cpu_write = 2,
+    pattern_read = 3,
+    pattern_write = 4
+}
+
+enum nrom_window {
+    prg_ram_start = 24576,
+    prg_rom_start = 32768,
+    trainer_bytes = 512,
+    trainer_prg_ram_offset = 4096,
+    full_byte_mask = 255
+}
+
+# The board's memory. Every region is sized to the bytes the board declares, so a Scratch replace
+# always lands inside it: both ROM lists hold the declared PRG and CHR ROM sizes, and both RAM
+# regions hold their full window. The mapped size the validation computed drives the aliasing,
+# exactly as the reference's modulo does, so a 2 KiB PRG RAM board wraps inside the first 2 KiB of
+# an 8 KiB list. A shared-vector record names only the ROM bytes it cares about and leaves the rest
+# at the zero a freshly copied image holds.
+list nrom_prg_rom;
+list nrom_chr_rom;
+list nrom_prg_ram = [0; 8192];
+list nrom_chr_ram = [0; 8192];
+
+# The last CPU read: whether the address was mapped, the byte, and the bits the board drives.
+var nrom_cpu_mapped = 0;
+var nrom_cpu_value = 0;
+var nrom_cpu_driven_mask = 0;
+
+# Whether the last CPU write landed in PRG RAM.
+var nrom_cpu_write_accepted = 0;
+
+# The last pattern byte read, and whether the last pattern write landed in CHR RAM.
+var nrom_pattern_value = 0;
+var nrom_pattern_write_accepted = 0;
 
 # Whether the last validation accepted the board.
 var nrom_ok = 0;
@@ -131,5 +179,131 @@ proc nrom_apply_memory_limits prg_ram_bytes, chr_ram_bytes {
         if has_chr_rom == 0 {
             nrom_chr_ram_bytes = $chr_ram_bytes;
         }
+    }
+}
+
+# Puts every region back to the zeroes a freshly constructed board holds, sizing both ROM lists to
+# the declared payload so the copies and the vector records can replace items inside them.
+proc nrom_reset_memory {
+    local index = 1;
+    delete nrom_prg_rom;
+    delete nrom_chr_rom;
+
+    repeat cartridge_prg_rom_bytes {
+        add 0 to nrom_prg_rom;
+    }
+
+    repeat cartridge_chr_rom_bytes {
+        add 0 to nrom_chr_rom;
+    }
+
+    repeat nrom_limit.prg_ram_bytes {
+        nrom_prg_ram[index] = 0;
+        index++;
+    }
+
+    index = 1;
+
+    repeat nrom_limit.pattern_bytes {
+        nrom_chr_ram[index] = 0;
+        index++;
+    }
+}
+
+# Copies PRG ROM out of the generated cartridge list at the parsed payload offset.
+proc nrom_copy_prg_rom {
+    local index = 0;
+
+    repeat cartridge_prg_rom_bytes {
+        nrom_prg_rom[index + 1] = to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]);
+        index++;
+    }
+}
+
+# Copies CHR ROM out of the generated cartridge list at the parsed payload offset.
+proc nrom_copy_chr_rom {
+    local index = 0;
+
+    repeat cartridge_chr_rom_bytes {
+        nrom_chr_rom[index + 1] = to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]);
+        index++;
+    }
+}
+
+# Copies the trainer into PRG RAM at offset $1000, modulo the mapped size, where the reference's
+# constructor puts it. A board the validation accepted always has PRG RAM when it has a trainer.
+proc nrom_copy_trainer {
+    local index = 0;
+    local ram_index = 0;
+
+    if cartridge_has_trainer == 1 and nrom_prg_ram_bytes > 0 {
+        repeat nrom_window.trainer_bytes {
+            ram_index = ((nrom_window.trainer_prg_ram_offset + index) % nrom_prg_ram_bytes) + 1;
+            nrom_prg_ram[ram_index] = to_number(cartridge_bytes[cartridge_trainer_offset + index + 1]);
+            index++;
+        }
+    }
+}
+
+# Fills the board from the generated cartridge list. Runs after nrom_validate accepted the header,
+# because the mapped sizes it computed drive the copy and the windows.
+proc nrom_load_payload {
+    nrom_reset_memory;
+    nrom_copy_prg_rom;
+    nrom_copy_chr_rom;
+    nrom_copy_trainer;
+}
+
+# Reads one CPU address and reports whether it was mapped, the byte, and the driven bits.
+proc nrom_read_cpu address {
+    local index = 0;
+    nrom_cpu_mapped = 0;
+    nrom_cpu_value = 0;
+    nrom_cpu_driven_mask = 0;
+
+    if $address >= nrom_window.prg_rom_start {
+        index = (($address - nrom_window.prg_rom_start) % cartridge_prg_rom_bytes) + 1;
+        nrom_cpu_mapped = 1;
+        nrom_cpu_value = to_number(nrom_prg_rom[index]);
+        nrom_cpu_driven_mask = nrom_window.full_byte_mask;
+    } elif $address >= nrom_window.prg_ram_start and nrom_prg_ram_bytes > 0 {
+        index = (($address - nrom_window.prg_ram_start) % nrom_prg_ram_bytes) + 1;
+        nrom_cpu_mapped = 1;
+        nrom_cpu_value = to_number(nrom_prg_ram[index]);
+        nrom_cpu_driven_mask = nrom_window.full_byte_mask;
+    }
+}
+
+# Writes one CPU address. Only PRG RAM takes a write; PRG ROM ignores it, as the reference does.
+proc nrom_write_cpu address, value {
+    nrom_cpu_write_accepted = 0;
+
+    if $address >= nrom_window.prg_ram_start and $address < nrom_window.prg_rom_start {
+        if nrom_prg_ram_bytes > 0 {
+            nrom_prg_ram[(($address - nrom_window.prg_ram_start) % nrom_prg_ram_bytes) + 1] = normalize_byte($value);
+            nrom_cpu_write_accepted = 1;
+        }
+    }
+}
+
+# Reads one pattern-table byte from CHR ROM when the board has it, or from CHR RAM modulo the
+# mapped size otherwise.
+proc nrom_read_pattern address {
+    nrom_pattern_value = 0;
+
+    if cartridge_chr_rom_bytes > 0 {
+        nrom_pattern_value = to_number(nrom_chr_rom[$address + 1]);
+    } elif nrom_chr_ram_bytes > 0 {
+        nrom_pattern_value = to_number(nrom_chr_ram[($address % nrom_chr_ram_bytes) + 1]);
+    }
+}
+
+# Writes one pattern-table byte. A CHR ROM board drops the write, as the reference does.
+proc nrom_write_pattern address, value {
+    nrom_pattern_write_accepted = 0;
+
+    if cartridge_chr_rom_bytes == 0 and nrom_chr_ram_bytes > 0 {
+        nrom_chr_ram[($address % nrom_chr_ram_bytes) + 1] = normalize_byte($value);
+        nrom_pattern_write_accepted = 1;
     }
 }

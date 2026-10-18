@@ -903,6 +903,27 @@ export function mapper_sum_memory_sizes(first: number, second: number): number {
     return first + second;
 }
 
+/** Mirror of the `nrom_memory_op` enum in scratch/src/mapper_000.gs. */
+export const NROM_MEMORY_OP = { CPU_READ: 1, CPU_WRITE: 2, PATTERN_READ: 3, PATTERN_WRITE: 4 } as const;
+
+/** Mirror of the `nrom_window` enum in scratch/src/mapper_000.gs. */
+export const NROM_WINDOW = {
+    PRG_RAM_START: 0x6000,
+    PRG_ROM_START: 0x8000,
+    TRAINER_BYTES: 512,
+    TRAINER_PRG_RAM_OFFSET: 0x1000,
+    FULL_BYTE_MASK: 255,
+} as const;
+
+/**
+ * Mirror of reading one Scratch list position through `to_number`: a position past the end of the
+ * list is empty, and `to_number` turns that into the zero the reference's copied image holds there.
+ */
+function list_byte(list: readonly number[], index: number): number {
+    const value = list[index];
+    return value === undefined ? 0 : to_number(value);
+}
+
 /**
  * Mirror of scratch/src/mapper.gs. Selection routes an exact mapper and submapper pair, so a known
  * mapper with an unregistered submapper reports a different code than an unknown mapper.
@@ -949,11 +970,34 @@ export class GoboscriptNromMapper {
     chr_nvram_bytes = 0;
     has_trainer = 0;
 
+    prg_rom_offset = 0;
+    chr_rom_offset = 0;
+    trainer_offset = 0;
+
     ok = 0;
     error_code: number = NROM_ERROR.NONE;
     kind: number = MAPPER_KIND.NONE;
     mapped_prg_ram_bytes = 0;
     mapped_chr_ram_bytes = 0;
+
+    /**
+     * Mirror of the Stage-owned `cartridge_bytes` list that `nrom_load_payload` copies from. Tests
+     * load the image a record describes; the project loads the generated ROM list.
+     */
+    cartridge_bytes: readonly number[] = [];
+
+    /** Mirrors of the board's four memory lists, each sized to the bytes the board declares. */
+    readonly prg_rom: number[] = [];
+    readonly chr_rom: number[] = [];
+    readonly prg_ram: number[] = new Array<number>(NROM_LIMIT.PRG_RAM_BYTES).fill(0);
+    readonly chr_ram: number[] = new Array<number>(NROM_LIMIT.PATTERN_BYTES).fill(0);
+
+    cpu_mapped = 0;
+    cpu_value = 0;
+    cpu_driven_mask = 0;
+    cpu_write_accepted = 0;
+    pattern_value = 0;
+    pattern_write_accepted = 0;
 
     readonly selection = new GoboscriptMapperSelection();
 
@@ -1035,6 +1079,136 @@ export class GoboscriptNromMapper {
                 this.mapped_chr_ram_bytes = chr_ram_bytes;
             }
         }
+    }
+
+    /** Mirror of `nrom_reset_memory`. */
+    reset_memory(): void {
+        this.prg_rom.length = 0;
+        this.chr_rom.length = 0;
+
+        for (let index = 0; index < this.prg_rom_bytes; index += 1) {
+            this.prg_rom.push(0);
+        }
+
+        for (let index = 0; index < this.chr_rom_bytes; index += 1) {
+            this.chr_rom.push(0);
+        }
+
+        this.prg_ram.fill(0);
+        this.chr_ram.fill(0);
+    }
+
+    /** Mirror of `nrom_copy_prg_rom`. */
+    copy_prg_rom(): void {
+        for (let index = 0; index < this.prg_rom_bytes; index += 1) {
+            this.prg_rom[index] = list_byte(this.cartridge_bytes, this.prg_rom_offset + index);
+        }
+    }
+
+    /** Mirror of `nrom_copy_chr_rom`. */
+    copy_chr_rom(): void {
+        for (let index = 0; index < this.chr_rom_bytes; index += 1) {
+            this.chr_rom[index] = list_byte(this.cartridge_bytes, this.chr_rom_offset + index);
+        }
+    }
+
+    /** Mirror of `nrom_copy_trainer`. */
+    copy_trainer(): void {
+        if (this.has_trainer !== 1 || this.mapped_prg_ram_bytes <= 0) {
+            return;
+        }
+
+        for (let index = 0; index < NROM_WINDOW.TRAINER_BYTES; index += 1) {
+            const ram_index = (NROM_WINDOW.TRAINER_PRG_RAM_OFFSET + index) % this.mapped_prg_ram_bytes;
+            this.prg_ram[ram_index] = list_byte(this.cartridge_bytes, this.trainer_offset + index);
+        }
+    }
+
+    /** Mirror of `nrom_load_payload`. */
+    load_payload(): void {
+        this.reset_memory();
+        this.copy_prg_rom();
+        this.copy_chr_rom();
+        this.copy_trainer();
+    }
+
+    /** Mirror of `nrom_read_cpu address`. */
+    read_cpu(address: number): void {
+        this.cpu_mapped = 0;
+        this.cpu_value = 0;
+        this.cpu_driven_mask = 0;
+
+        if (address >= NROM_WINDOW.PRG_ROM_START) {
+            this.cpu_mapped = 1;
+            this.cpu_value = list_byte(this.prg_rom, (address - NROM_WINDOW.PRG_ROM_START) % this.prg_rom_bytes);
+            this.cpu_driven_mask = NROM_WINDOW.FULL_BYTE_MASK;
+        } else if (address >= NROM_WINDOW.PRG_RAM_START && this.mapped_prg_ram_bytes > 0) {
+            this.cpu_mapped = 1;
+            this.cpu_value = list_byte(this.prg_ram, (address - NROM_WINDOW.PRG_RAM_START) % this.mapped_prg_ram_bytes);
+            this.cpu_driven_mask = NROM_WINDOW.FULL_BYTE_MASK;
+        }
+    }
+
+    /** Mirror of `nrom_write_cpu address, value`. */
+    write_cpu(address: number, value: number): void {
+        this.cpu_write_accepted = 0;
+
+        if (address >= NROM_WINDOW.PRG_RAM_START && address < NROM_WINDOW.PRG_ROM_START) {
+            if (this.mapped_prg_ram_bytes > 0) {
+                const index = (address - NROM_WINDOW.PRG_RAM_START) % this.mapped_prg_ram_bytes;
+                this.prg_ram[index] = normalize_byte(value);
+                this.cpu_write_accepted = 1;
+            }
+        }
+    }
+
+    /** Mirror of `nrom_read_pattern address`. */
+    read_pattern(address: number): void {
+        this.pattern_value = 0;
+
+        if (this.chr_rom_bytes > 0) {
+            this.pattern_value = list_byte(this.chr_rom, address);
+        } else if (this.mapped_chr_ram_bytes > 0) {
+            this.pattern_value = list_byte(this.chr_ram, address % this.mapped_chr_ram_bytes);
+        }
+    }
+
+    /** Mirror of `nrom_write_pattern address, value`. */
+    write_pattern(address: number, value: number): void {
+        this.pattern_write_accepted = 0;
+
+        if (this.chr_rom_bytes === 0 && this.mapped_chr_ram_bytes > 0) {
+            this.chr_ram[address % this.mapped_chr_ram_bytes] = normalize_byte(value);
+            this.pattern_write_accepted = 1;
+        }
+    }
+
+    /**
+     * Mirror of the suite-16 handler's operation loop: runs each (kind, address, value) triple
+     * against the board and returns the four board values followed by three values per operation.
+     */
+    run_memory_operations(ops: readonly (readonly [number, number, number])[]): number[] {
+        const values = [this.ok, this.error_code, this.mapped_prg_ram_bytes, this.mapped_chr_ram_bytes];
+
+        for (const [kind, address, value] of ops) {
+            if (kind === NROM_MEMORY_OP.CPU_READ) {
+                this.read_cpu(address);
+                values.push(this.cpu_mapped, this.cpu_value, this.cpu_driven_mask);
+            } else if (kind === NROM_MEMORY_OP.CPU_WRITE) {
+                this.write_cpu(address, value);
+                values.push(this.cpu_write_accepted, 0, 0);
+            } else if (kind === NROM_MEMORY_OP.PATTERN_READ) {
+                this.read_pattern(address);
+                values.push(1, this.pattern_value, 0);
+            } else if (kind === NROM_MEMORY_OP.PATTERN_WRITE) {
+                this.write_pattern(address, value);
+                values.push(this.pattern_write_accepted, 0, 0);
+            } else {
+                values.push(0, 0, 0);
+            }
+        }
+
+        return values;
     }
 
     /** The seven values suite 15 reports for one board validation. */

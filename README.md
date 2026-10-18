@@ -56,8 +56,10 @@ loading, persistence, and known-limitations statement.
   relative-branch cycle sequences, the generated opcode decode, one whole instruction for all 151 official
   opcodes, the control loop that selects jam, NMI, IRQ, or an instruction, including the jam vector reads
   and the one-instruction IRQ poll mask CLI, SEI, and PLP leave behind, exact mapper and submapper selection,
-  and the NROM board checks with the memory sizes an accepted board would map.
-  Its Stage runs a self test over the 513 generated parity vectors and reports a summary; the CPU state,
+  the NROM board checks with the memory sizes an accepted board would map, and the NROM memory windows with
+  the payload copy, the trainer at PRG RAM offset `$1000`, PRG ROM mirroring, and the writable PRG RAM and CHR
+  RAM regions.
+  Its Stage runs a self test over the 529 generated parity vectors and reports a summary; the CPU state,
   mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
   been compiled, because the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
@@ -105,9 +107,10 @@ sample-rate/channel output, register/frame-sequencer/mixer behavior, PPU registe
 output, pinned MIT SquarePlayer and NoisePlayer controller-to-APU smoke tests, browser keyboard mapping,
 Web Audio filtering and sink scheduling, canvas conversion/scaling and frame scheduling,
 optional instruction-level traces, byte-exact build-time Scratch ROM asset generation with source-overwrite
-protection, a 513-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
+protection, a 529-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
 APU, controller, ALU, cartridge-header, CPU addressing, CPU cycle-sequence, opcode-decode, instruction,
-control-loop, and NROM board-validation behavior, and 1,026 selected MIT-licensed NES 2A03 reference vectors
+control-loop, NROM board-validation, and NROM memory-window behavior, and 1,026 selected MIT-licensed NES
+2A03 reference vectors
 covering all 256 opcode bytes. The respective fixture details are documented in
 [`docs/GOBOSCRIPT_PORT_VECTORS.md`](docs/GOBOSCRIPT_PORT_VECTORS.md) and
 [`tests/fixtures/nes6502/README.md`](tests/fixtures/nes6502/README.md).

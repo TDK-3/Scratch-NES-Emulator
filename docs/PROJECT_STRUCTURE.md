@@ -164,7 +164,7 @@
             cpu_sequence.gs  reset, BRK, JSR, RTI, RTS, interrupt, and branch cycle sequences
             cpu_status.gs  status normalization and flag updates
             mapper.gs  exact mapper and submapper routing with numeric error codes
-            mapper_000.gs  NROM board validation and the memory sizes it would map
+            mapper_000.gs  NROM validation, payload copy, and the CPU and pattern windows
             numeric.gs  bit-free byte, word, and bitwise helpers
             rom_loader.gs  generated ROM list, header load, and signature check
             shared_vectors.gs  generated port-vector list
@@ -273,8 +273,12 @@ toolchain needs Cargo and rustc, which are unavailable here.
   family, 16 KiB or 32 KiB of PRG ROM, at most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG
   RAM, and either exactly 8 KiB of CHR ROM with no CHR RAM or up to 8 KiB of CHR RAM with no CHR ROM. It
   reports the two memory sizes an accepted board would map. The reference's 512-byte trainer length check is
-  not ported, because the parser only ever reports a 512-byte trainer. PRG/CHR storage, the CPU and pattern
-  address windows, the trainer copy, and the NVRAM snapshots are not ported.
+  not ported, because the parser only ever reports a 512-byte trainer. The same header holds the board's
+  memory: both ROM lists are sized to the declared payload and zero-filled, both RAM regions are allocated at
+  their full window and alias modulo the mapped size, `nrom_load_payload` copies PRG ROM, CHR ROM, and the
+  trainer into PRG RAM at offset `$1000`, and the CPU and pattern windows report a mapped flag, a byte, and
+  the driven bits instead of returning a null read. The NVRAM snapshots and the `cpu_bus.gs` hookup are not
+  ported.
 - `src/cpu_opcode.gs` decodes one opcode byte through the generated `data/opcode_table.txt`: the 76-name
   mnemonic enum whose ids come from the canonical fixture, the record offset `3 + opcode * 6`, a length and
   header check that reports a table which failed to load, and the six decoded fields. Dispatch and

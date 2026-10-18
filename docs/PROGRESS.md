@@ -262,6 +262,30 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Ported the NROM board's memory and address windows. `scratch/src/mapper_000.gs` now holds the board's
+      four regions: both ROM lists are sized to the declared payload and zero-filled, both RAM regions are
+      allocated at their full window and alias modulo the mapped size the validation computed, and
+      `nrom_load_payload` copies PRG ROM, CHR ROM, and the trainer into PRG RAM at offset `$1000` out of the
+      generated cartridge list. `nrom_read_cpu` answers `$8000-$FFFF` from PRG ROM modulo its size, so a 16 KiB
+      board mirrors twice, and `$6000-$7FFF` from PRG RAM when the board has any, reporting a mapped flag, the
+      byte, and the driven bits where the reference returns a null read; `nrom_write_cpu` only lands in PRG
+      RAM. `nrom_read_pattern` and `nrom_write_pattern` serve CHR ROM when the board has it and CHR RAM
+      otherwise, and a CHR ROM board drops pattern writes. Suite 16 (`nrom_memory`, 16 records) prepares the
+      payload bytes a record names and then runs CPU and pattern operations against the board, pinning PRG ROM
+      mirroring at both the ends and the middle of a 16 KiB image, PRG RAM writes and overwrites at both ends
+      of the window, aliasing inside 2 KiB and 4 KiB of PRG RAM, a board with no PRG RAM, the address below the
+      window, CHR ROM reads with a dropped write, CHR RAM writes at both ends, 2 KiB CHR RAM aliasing, and a
+      byte nobody prepared reading as zero. The mapped sizes come from a second board built over the same
+      image, because measuring them writes probe bytes. A differential test loads a synthetic trainer image
+      into the mirror and compares every PRG ROM, PRG RAM, trainer, and pattern byte with a reference
+      `NromMapper`, which is what pins the copies; the source lint now also compares the ported `nrom_limit`
+      and `nrom_window` enum values with the mirror's constants, and that check caught a trainer offset written
+      as 1024 instead of `$1000` before it reached a fixture. Mutations that dropped the PRG ROM mirroring
+      modulo, drove no bits on a mapped read, let CPU writes reach PRG ROM, ignored CHR ROM on a pattern read,
+      let pattern writes land on a CHR ROM board, or copied the trainer to the start of PRG RAM were all
+      caught. The fixture is now sixteen suites and 529 records, and the generated list is 11,826 values. Not
+      ported: wiring the board into `cpu_bus.gs`, whose cartridge window still behaves as an absent device, the
+      NVRAM snapshots, and the MMC3 board; compile validation stays blocked by the missing toolchain.
 - [x] Ported mapper selection and NROM board validation. `scratch/src/mapper.gs` routes a cartridge by an
       exact mapper and submapper pair the way `resolve_mapper` does, so a registered mapper with an
       unregistered submapper reports a different code than an unregistered mapper, and it sums two declared
@@ -404,13 +428,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 1,154 tests in about 15 seconds, including 257 grouped single-step
-  corpus tests (1,026 vectors), 514 shared port-vector tests (513 records), 64 GoboScript port-algorithm
-  tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
+- `npm test` on 2026-10-18: passed all 1,174 tests in about 15 seconds, including 257 grouped single-step
+  corpus tests (1,026 vectors), 530 shared port-vector tests (529 records), 67 GoboScript port-algorithm
+  tests, 17 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream
   scenarios passed across 256 opcode files in about 20 seconds. The corpus is a local MIT clone and is not
   checked in.
-- `npm run scratch:vectors` on 2026-10-18: generated 11,040 decimal values for 513 vectors.
+- `npm run scratch:vectors` on 2026-10-18: generated 11,826 decimal values for 529 vectors.
 - `npm test` on 2026-10-15: passed all 332 tests, including ROM/vector generator regressions, one browser-server HTTP smoke test,
   15 shared cross-domain vectors,
   six controller tests, forty-two APU tests, six DMC DMA tests, thirty-four opcode tests covering all 151 official
@@ -427,7 +451,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 - `npm run build:ts`: passed.
 - `npm run scratch:assets`: passed, verified byte-for-byte reconstruction, and generated 81,936 decimal
   ROM-list values. `npm run scratch:vectors`: passed and generated 202 decimal values for 15 vectors
-  (2026-10-15 figures; the fixture has since grown to 513 records and 11,040 values).
+  (2026-10-15 figures; the fixture has since grown to 529 records and 11,826 values).
 - The earlier `test_rom.nes` one-million-cycle smoke completed 1,000,000 CPU cycles in Node.js v22.22.3
   (33 PPU frames, 21 NMI sequences, one IRQ, and 20 DMA sequences) but ended before title initialization.
   The later bounded title-screen test reaches its expected pixel signature at frame 43; this confirms only

@@ -50,7 +50,15 @@ import {
     MAPPER_CREATION_VALUE_COUNT,
     MAPPER_KIND_IDS,
     MAPPER_SELECTION_ERROR_IDS,
+    NROM_MEMORY_CPU_READ,
+    NROM_MEMORY_CPU_WRITE,
+    NROM_MEMORY_FIXED_INPUT_COUNT,
+    NROM_MEMORY_FIXED_VALUE_COUNT,
+    NROM_MEMORY_PATTERN_READ,
+    NROM_MEMORY_PATTERN_WRITE,
+    NROM_MEMORY_VALUES_PER_OP,
 } from "./support/mapper_projection.js";
+import { NromMapper } from "../src/nes/cartridge/mapper_000.js";
 import { parse_ines_rom } from "../src/nes/cartridge/ines.js";
 import { resolve_mapper } from "../src/nes/cartridge/mapper.js";
 import * as ported from "./support/goboscript_port_algorithms.js";
@@ -1444,6 +1452,9 @@ function make_mirror_nrom(vector_inputs: readonly number[]): ported.GoboscriptNr
     mapper.prg_nvram_bytes = parsed[11] ?? 0;
     mapper.chr_ram_bytes = parsed[12] ?? 0;
     mapper.chr_nvram_bytes = parsed[13] ?? 0;
+    mapper.trainer_offset = parsed[14] ?? 0;
+    mapper.prg_rom_offset = parsed[15] ?? 0;
+    mapper.chr_rom_offset = parsed[16] ?? 0;
     return mapper;
 }
 
@@ -2004,4 +2015,141 @@ test("the mirrored board validation refuses what it cannot map", () => {
     // Resetting clears every reported field, so a second validation cannot inherit a result.
     trainer_and_oversize.reset_results();
     assert.deepEqual(trainer_and_oversize.reported_values().slice(0, 5), [0, 0, 0, 0, 0]);
+});
+
+test("the mirrored board memory replays every suite 16 vector", () => {
+    const vectors = get_shared_vector_suite("nrom_memory").vectors;
+    assert.ok(vectors.length >= 12, "suite 16 covers both windows, mirroring, and aliasing");
+
+    for (const vector of vectors) {
+        const input = [...vector.input];
+        const mapper = make_mirror_nrom(input);
+        mapper.validate();
+        assert.equal(mapper.ok, 1, `nrom_memory vector ${vector.id} runs on an accepted board`);
+
+        const prg_count = input[17] ?? 0;
+        const chr_count = input[18] ?? 0;
+        const op_count = input[19] ?? 0;
+        mapper.reset_memory();
+
+        for (let index = 0; index < prg_count; index += 1) {
+            const at = NROM_MEMORY_FIXED_INPUT_COUNT + index * 2;
+            mapper.prg_rom[input[at] ?? 0] = input[at + 1] ?? 0;
+        }
+
+        for (let index = 0; index < chr_count; index += 1) {
+            const at = NROM_MEMORY_FIXED_INPUT_COUNT + prg_count * 2 + index * 2;
+            mapper.chr_rom[input[at] ?? 0] = input[at + 1] ?? 0;
+        }
+
+        const operations: (readonly [number, number, number])[] = [];
+
+        for (let index = 0; index < op_count; index += 1) {
+            const at = NROM_MEMORY_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + index * 3;
+            operations.push([input[at] ?? 0, input[at + 1] ?? 0, input[at + 2] ?? 0]);
+        }
+
+        const reported = mapper.run_memory_operations(operations);
+        assert.deepEqual(reported, [...vector.expected], `nrom_memory vector ${vector.id}`);
+        assert.equal(
+            reported.length,
+            NROM_MEMORY_FIXED_VALUE_COUNT + op_count * NROM_MEMORY_VALUES_PER_OP,
+            "four board values and three per operation",
+        );
+    }
+});
+
+test("the mirrored board answers the windows the way the reference does", () => {
+    // A 16 KiB PRG ROM board mirrors twice, and an unmapped address reports no byte.
+    const mirror = new ported.GoboscriptNromMapper();
+    mirror.prg_rom_bytes = 16384;
+    mirror.chr_rom_bytes = 8192;
+    mirror.mapped_prg_ram_bytes = 0;
+    mirror.reset_memory();
+    mirror.prg_rom[0] = 0x44;
+    mirror.read_cpu(0x8000);
+    assert.deepEqual([mirror.cpu_mapped, mirror.cpu_value, mirror.cpu_driven_mask], [1, 0x44, 0xff]);
+    mirror.read_cpu(0xc000);
+    assert.equal(mirror.cpu_value, 0x44, "the second half mirrors the first");
+    mirror.read_cpu(0x5fff);
+    assert.deepEqual([mirror.cpu_mapped, mirror.cpu_value, mirror.cpu_driven_mask], [0, 0, 0]);
+
+    // Without mapped PRG RAM the window is closed for reads and writes alike.
+    mirror.write_cpu(0x6000, 0x5a);
+    assert.equal(mirror.cpu_write_accepted, 0);
+    mirror.read_cpu(0x6000);
+    assert.equal(mirror.cpu_mapped, 0);
+
+    // A CHR ROM board serves the pattern table and drops writes to it.
+    mirror.chr_rom[8191] = 0x22;
+    mirror.read_pattern(8191);
+    assert.equal(mirror.pattern_value, 0x22);
+    mirror.write_pattern(8191, 0x99);
+    assert.equal(mirror.pattern_write_accepted, 0);
+    mirror.read_pattern(8191);
+    assert.equal(mirror.pattern_value, 0x22, "a dropped write leaves the byte alone");
+
+    // An unknown memory operation reports that the board did not take it.
+    assert.deepEqual(mirror.run_memory_operations([[9, 0x8000, 0]]).slice(4), [0, 0, 0]);
+});
+
+test("the mirrored payload copy lands the bytes the reference board holds", () => {
+    const header = [0x4e, 0x45, 0x53, 0x1a, 2, 1, 0x06, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
+    const image_bytes = 16 + 512 + 32768 + 8192;
+    const image = make_cartridge_image(image_bytes, header);
+
+    for (let index = 16; index < image.length; index += 1) {
+        image[index] = (index * 7 + 3) % 251;
+    }
+
+    const parsed = parse_ines_rom(image);
+    assert.ok(parsed.ok, "the synthetic trainer image parses");
+    const rom = parsed.value;
+    assert.ok(rom.trainer !== null, "the image carries a trainer");
+    const created = NromMapper.create(rom);
+    assert.ok(created.ok, "the synthetic image is an acceptable NROM board");
+    const reference = created.value;
+
+    const mirror = make_mirror_nrom([image_bytes, ...header]);
+    mirror.cartridge_bytes = [...image];
+    mirror.validate();
+    assert.equal(mirror.ok, 1);
+    mirror.load_payload();
+
+    assert.equal(mirror.prg_rom.length, 32768, "PRG ROM is copied to its declared size");
+    assert.equal(mirror.chr_rom.length, 8192, "CHR ROM is copied to its declared size");
+
+    for (let address = 0x8000; address <= 0xffff; address += 7) {
+        const expected = reference.read_cpu(address, 0);
+        mirror.read_cpu(address);
+        assert.equal(mirror.cpu_mapped, 1, `$${address.toString(16)} is PRG ROM`);
+        assert.equal(mirror.cpu_value, expected?.value, `PRG ROM at $${address.toString(16)}`);
+    }
+
+    for (let address = 0x6000; address < 0x8000; address += 5) {
+        const expected = reference.read_cpu(address, 0);
+        mirror.read_cpu(address);
+        assert.equal(mirror.cpu_value, expected?.value ?? 0, `PRG RAM at $${address.toString(16)}`);
+    }
+
+    // The trainer copy is the interesting part: the reference constructor puts those 512 bytes at
+    // PRG RAM offset $1000, which is $7000 on the CPU bus.
+    for (let offset = 0; offset < 512; offset += 1) {
+        const expected = reference.read_cpu(0x7000 + offset, 0);
+        mirror.read_cpu(0x7000 + offset);
+        assert.equal(mirror.cpu_value, expected?.value, `trainer byte ${offset} lands at $7000`);
+    }
+
+    for (let address = 0; address < 0x2000; address += 3) {
+        mirror.read_pattern(address);
+        assert.equal(mirror.pattern_value, reference.read_pattern(address), `pattern byte ${address}`);
+    }
+
+    // Resetting the board puts every region back to zeroes without changing the declared sizes.
+    mirror.reset_memory();
+    mirror.read_cpu(0x8000);
+    assert.equal(mirror.cpu_value, 0);
+    mirror.read_cpu(0x7000);
+    assert.equal(mirror.cpu_value, 0, "the trainer copy is gone");
+    assert.equal(mirror.prg_rom.length, 32768, "the ROM lists keep their declared size");
 });

@@ -82,9 +82,10 @@ warnings. TurboWarp persistence and full-console save/load states are not implem
 ## Scratch/TurboWarp ROM deployment
 
 The GoboScript scaffold embeds one selected ROM at build time as a decimal list (`test_rom.nes` by default;
-`--rom` selects another file). The generated project checks the iNES signature and parses the header, but it
-does not yet copy the ROM payload or run the game. It has no runtime ROM file picker, controls, rendering, audio, NVRAM persistence, or console
-save states. A GoboScript compiler and successful `.sb3`/TurboWarp validation are still outstanding.
+`--rom` selects another file). The generated project checks the iNES signature, parses the header, validates
+the board, and copies and maps an NROM payload, but it does not yet run the game. It has no runtime ROM file
+picker, controls, rendering, audio, NVRAM persistence, or console save states. A GoboScript compiler and
+successful `.sb3`/TurboWarp validation are still outstanding.
 
 What the project does contain today: bit-free numeric and status helpers, thirteen ALU operations, both serial
 controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`), iNES 1.0
@@ -94,8 +95,9 @@ fetch and stack operations, all thirteen addressing modes including dummy reads 
 wrap, the reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, the generated opcode
 decode, one whole instruction for all 151 official opcodes, the control loop that selects jam, NMI, IRQ, or an
 instruction with the jam vector reads and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection,
-the NROM board checks with the memory sizes an accepted board would map, and a Stage-run self test
-that replays 513 shared vectors from
+the NROM board checks with the memory sizes an accepted board would map, the NROM payload and trainer copies,
+and the NROM CPU and pattern address windows with PRG ROM mirroring and aliasing RAM, and a Stage-run self test
+that replays 529 shared vectors from
 `scratch/data/shared_port_vectors.txt`, counting the CPU state, MMC3, PPU, and APU suites as skipped. The green flag broadcasts a summary that the display sprite reports.
 Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
 obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared

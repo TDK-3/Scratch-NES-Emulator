@@ -52,6 +52,16 @@ import {
 import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
 import {
     MAPPER_CREATION_INPUT_COUNT,
+    NROM_MEMORY_CPU_READ,
+    NROM_MEMORY_CPU_WRITE,
+    NROM_MEMORY_FIXED_INPUT_COUNT,
+    NROM_MEMORY_FIXED_VALUE_COUNT,
+    NROM_MEMORY_OPS,
+    NROM_MEMORY_PATTERN_READ,
+    NROM_MEMORY_VALUES_PER_OP,
+    project_nrom_memory,
+    type NromMemoryOp,
+    type NromMemoryPrepare,
     MAPPER_CREATION_VALUE_COUNT,
     MAPPER_KIND_IDS,
     MAPPER_SELECTION_ERROR_IDS,
@@ -793,6 +803,80 @@ for_each_vector("nrom", (vector) => {
                     : NROM_ERROR_IDS["unsupported-submapper"],
                 "a failed selection is reported unchanged",
             );
+        }
+    }
+});
+
+for_each_vector("nrom_memory", (vector) => {
+    assert.equal(vector.operation, 1, "Board memory vectors have a single operation.");
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
+    const prg_count = vector.input[17] ?? 0;
+    const chr_count = vector.input[18] ?? 0;
+    const op_count = vector.input[19] ?? 0;
+    assert.equal(
+        vector.input.length,
+        NROM_MEMORY_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + op_count * NROM_MEMORY_VALUES_PER_OP,
+    );
+
+    const prg_prepare: NromMemoryPrepare[] = [];
+    const chr_prepare: NromMemoryPrepare[] = [];
+    const operations: NromMemoryOp[] = [];
+
+    for (let index = 0; index < prg_count; index += 1) {
+        const at = NROM_MEMORY_FIXED_INPUT_COUNT + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `PRG prepare ${index} is a pair.`);
+        prg_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < chr_count; index += 1) {
+        const at = NROM_MEMORY_FIXED_INPUT_COUNT + prg_count * 2 + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `CHR prepare ${index} is a pair.`);
+        chr_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const at = NROM_MEMORY_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + index * 3;
+        const kind = vector.input[at];
+        const address = vector.input[at + 1];
+        const value = vector.input[at + 2];
+        assert.ok(kind !== undefined && address !== undefined && value !== undefined, `Operation ${index}.`);
+        assert.ok(
+            NROM_MEMORY_OPS.some((entry) => entry.id === kind),
+            `Operation kind ${kind} is one the port dispatches.`,
+        );
+        operations.push({ kind, address, value });
+    }
+
+    const actual = project_nrom_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, NROM_MEMORY_FIXED_VALUE_COUNT + op_count * NROM_MEMORY_VALUES_PER_OP);
+    assert.equal(actual[0], 1, "A memory record runs on a board the validation accepted.");
+    assert.equal(actual[1], 0);
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = NROM_MEMORY_FIXED_VALUE_COUNT + index * NROM_MEMORY_VALUES_PER_OP;
+        const taken = actual[at] ?? 0;
+        const value = actual[at + 1] ?? 0;
+        const driven = actual[at + 2] ?? 0;
+        assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
+        assert.ok(value >= 0 && value <= 0xff, `Operation ${index} reports a byte.`);
+
+        if (op?.kind === NROM_MEMORY_CPU_READ) {
+            assert.equal(driven, taken === 1 ? 0xff : 0, "a mapped CPU read drives every bit");
+        } else if (op?.kind === NROM_MEMORY_CPU_WRITE) {
+            assert.equal(value, 0, "a write reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_PATTERN_READ) {
+            assert.equal(taken, 1, "an accepted board always answers a pattern read");
+        } else {
+            assert.equal(value, 0, "a pattern write reports no byte");
+            assert.equal(driven, 0);
         }
     }
 });

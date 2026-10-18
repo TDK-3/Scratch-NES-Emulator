@@ -132,3 +132,155 @@ export function project_mapper_creation(image_bytes: number, header: readonly nu
         selection_error,
     ];
 }
+
+/**
+ * Suite 16 ("nrom_memory") runs a board's address windows instead of only validating it. A record
+ * carries the same header as suite 15, the payload bytes it wants in PRG ROM and CHR ROM, and a
+ * list of CPU and pattern operations; it reports whether the board was accepted, the two memory
+ * sizes it maps, and three values per operation.
+ */
+
+/** Operation kinds a suite-16 record can run, in the order the ported handler dispatches them. */
+export const NROM_MEMORY_OPS: readonly { readonly id: number; readonly name: string }[] = [
+    { id: 1, name: "cpu-read" },
+    { id: 2, name: "cpu-write" },
+    { id: 3, name: "pattern-read" },
+    { id: 4, name: "pattern-write" },
+];
+
+export const NROM_MEMORY_CPU_READ = 1;
+export const NROM_MEMORY_CPU_WRITE = 2;
+export const NROM_MEMORY_PATTERN_READ = 3;
+export const NROM_MEMORY_PATTERN_WRITE = 4;
+
+/**
+ * Number of fixed inputs before a record's payload pairs and operations: the declared image length,
+ * the sixteen header bytes, the PRG ROM prepare count, the CHR ROM prepare count, and the operation
+ * count.
+ */
+export const NROM_MEMORY_FIXED_INPUT_COUNT = 20;
+
+/** Values reported before the per-operation results: ok, error code, PRG RAM bytes, CHR RAM bytes. */
+export const NROM_MEMORY_FIXED_VALUE_COUNT = 4;
+
+/**
+ * Values reported per operation: whether the board took it, the byte a read returned, and the bits
+ * a CPU read drove. A write reports its acceptance and two zeroes.
+ */
+export const NROM_MEMORY_VALUES_PER_OP = 3;
+
+export interface NromMemoryPrepare {
+    readonly index: number;
+    readonly value: number;
+}
+
+export interface NromMemoryOp {
+    readonly kind: number;
+    readonly address: number;
+    readonly value: number;
+}
+
+/**
+ * Builds one board over an image whose payload carries the record's prepared bytes. The header is
+ * parsed once to learn where the payload starts and how long it is, the prepared bytes are written
+ * into a fresh image, and that image is parsed again, because the mapper copies the payload the
+ * parser hands it and a later write to a separate image would not reach it.
+ */
+function create_board(
+    image_bytes: number,
+    header: readonly number[],
+    prg_prepare: readonly NromMemoryPrepare[],
+    chr_prepare: readonly NromMemoryPrepare[],
+): NromMapper {
+    const plain = parse_ines_rom(make_cartridge_image(image_bytes, header));
+
+    if (!plain.ok) {
+        throw new RangeError(`Suite 16 needs a header that parses; this one reported ${plain.error.code}.`);
+    }
+
+    const prg_rom_offset = 16 + (plain.value.trainer === null ? 0 : 512);
+    const chr_rom_offset = prg_rom_offset + plain.value.prg_rom.byteLength;
+    const image = make_cartridge_image(image_bytes, header);
+
+    for (const entry of prg_prepare) {
+        if (entry.index < 0 || entry.index >= plain.value.prg_rom.byteLength) {
+            throw new RangeError(`PRG ROM prepare index ${entry.index} is outside the declared payload.`);
+        }
+
+        image[prg_rom_offset + entry.index] = entry.value;
+    }
+
+    for (const entry of chr_prepare) {
+        if (entry.index < 0 || entry.index >= plain.value.chr_rom.byteLength) {
+            throw new RangeError(`CHR ROM prepare index ${entry.index} is outside the declared payload.`);
+        }
+
+        image[chr_rom_offset + entry.index] = entry.value;
+    }
+
+    const parsed = parse_ines_rom(image);
+
+    if (!parsed.ok) {
+        throw new RangeError(`The prepared image stopped parsing as ${parsed.error.code}.`);
+    }
+
+    const created = NromMapper.create(parsed.value);
+
+    if (!created.ok) {
+        throw new RangeError(`Suite 16 needs a board that validates; this one reported ${created.error.code}.`);
+    }
+
+    return created.value;
+}
+
+/**
+ * Runs one suite-16 record. The mapped sizes come from a second board built over the same image,
+ * because measuring them writes probe bytes into the memory the operations have to see untouched.
+ */
+export function project_nrom_memory(
+    image_bytes: number,
+    header: readonly number[],
+    prg_prepare: readonly NromMemoryPrepare[],
+    chr_prepare: readonly NromMemoryPrepare[],
+    ops: readonly NromMemoryOp[],
+): number[] {
+    const probed = create_board(image_bytes, header, prg_prepare, chr_prepare);
+    const prg_ram_bytes = probe_prg_ram_bytes(probed);
+    const chr_ram_bytes = probe_chr_ram_bytes(probed);
+    const mapper = create_board(image_bytes, header, prg_prepare, chr_prepare);
+    const values: number[] = [1, 0, prg_ram_bytes, chr_ram_bytes];
+
+    for (const op of ops) {
+        if (op.value < 0 || op.value > 0xff) {
+            throw new RangeError(`Operation value ${op.value} is outside the byte range the reference accepts.`);
+        }
+
+        if (op.kind === NROM_MEMORY_CPU_READ) {
+            const read = mapper.read_cpu(op.address, 0);
+            values.push(read === null ? 0 : 1, read?.value ?? 0, read?.driven_mask ?? 0);
+        } else if (op.kind === NROM_MEMORY_CPU_WRITE) {
+            const before = mapper.read_cpu(op.address, 0);
+
+            if (before !== null && before.value === op.value) {
+                throw new RangeError("A write record has to change the byte, or acceptance is not observable.");
+            }
+
+            mapper.write_cpu(op.address, op.value);
+            const after = mapper.read_cpu(op.address, 0);
+            values.push(after !== null && after.value === op.value ? 1 : 0, 0, 0);
+        } else if (op.kind === NROM_MEMORY_PATTERN_READ) {
+            values.push(1, mapper.read_pattern(op.address), 0);
+        } else if (op.kind === NROM_MEMORY_PATTERN_WRITE) {
+            if (mapper.read_pattern(op.address) === op.value) {
+                throw new RangeError("A pattern write record has to change the byte it writes.");
+            }
+
+            mapper.write_pattern(op.address, op.value);
+            values.push(mapper.read_pattern(op.address) === op.value ? 1 : 0, 0, 0);
+        } else {
+            throw new RangeError(`Unknown memory operation kind ${op.kind}.`);
+        }
+    }
+
+    return values;
+}

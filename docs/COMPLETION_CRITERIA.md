@@ -90,7 +90,7 @@ not mistaken for missing work.
       data/assets. All three generators run and are byte-checked (`npm run scratch:assets`,
       `npm run scratch:vectors`, `npm run scratch:opcode`); `goboscript build` itself has never run.
 - [ ] Run the same shared vectors through TypeScript and GoboScript for every ported subsystem.
-      The TypeScript side runs all 513 records. The GoboScript side is written
+      The TypeScript side runs all 529 records. The GoboScript side is written
       (`scratch/src/vector_selftest.gs` replays suites 1, 3, 7, 8, 9, 10, 11, 12, and 13 and counts the rest as
       skipped) but has
       never executed. Substitute evidence: an integer-only TypeScript mirror of every ported helper is
@@ -120,9 +120,9 @@ not mistaken for missing work.
 
 ## Completion reporting
 
-As of 2026-10-18, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,154 tests passed
-(including 1,026 pinned CPU corpus vectors as 257 grouped tests, 513 shared port-vector records, 64
-GoboScript port-algorithm comparisons, 4 opcode-table checks, and 16 GoboScript source-lint checks),
+As of 2026-10-18, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,174 tests passed
+(including 1,026 pinned CPU corpus vectors as 257 grouped tests, 529 shared port-vector records, 67
+GoboScript port-algorithm comparisons, 4 opcode-table checks, and 17 GoboScript source-lint checks),
 `npm run build:ts` and all three data
 generators passed, the opt-in runner matched all 2,560,000 upstream corpus scenarios, and the 46 ms
 synthetic-frame smoke measurement from 2026-10-15 (332 tests then) is still explicitly labeled

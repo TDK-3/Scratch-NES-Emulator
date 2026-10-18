@@ -3,7 +3,7 @@
 ## Source and generation
 
 `tests/fixtures/goboscript/shared_port_vectors.json` is the canonical, reviewable contract. It contains numeric
-inputs and expected outputs for fifteen suites and 513 records. TypeScript regression tests execute each vector
+inputs and expected outputs for sixteen suites and 529 records. TypeScript regression tests execute each vector
 against the production reference modules in `tests/shared-port-vectors.test.ts`, and the GoboScript self test in
 `scratch/src/vector_selftest.gs` executes the same records against the ported modules inside the Scratch
 project.
@@ -14,7 +14,7 @@ Generate the file-backed GoboScript list with:
 npm run scratch:vectors
 ```
 
-This writes the ignored file `scratch/data/shared_port_vectors.txt` (11,040 decimal values for the current
+This writes the ignored file `scratch/data/shared_port_vectors.txt` (11,826 decimal values for the current
 fixture). The generator accepts `--output PATH` for isolated validation, verifies the fixture schema and integer
 values, refuses to overwrite the canonical fixture even through a symlink or hardlink, and checks that its
 decimal output exactly reconstructs the flattened data. `scratch/src/shared_vectors.gs` loads the generated list
@@ -60,6 +60,7 @@ suite and operation IDs present in the fixture.
 | 13 | Instruction execution | 1: inputs are PC, A, X, Y, SP, status, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, then one `(kind, address, value)` triple per bus access. Recorded by executing `Cpu2A03.step()` behind a fresh decoder with no devices. |
 | 14 | Control loop | 1: inputs are PC, A, X, Y, SP, status, the pending-NMI flag, the IRQ line level, a step count, the step before which an NMI is requested, the step before which the IRQ line is asserted, a program byte count, a setup count, that many program bytes at PC, and that many `(address, value)` setup pairs. | Cycles, final PC, SP, status, A, X, Y, instruction error code, one sequence kind per step (1 instruction, 2 IRQ, 3 jam, 4 NMI, 5 reset), then one `(kind, address, value)` triple per bus access. Recorded by driving `Cpu2A03.clock_cycle()` step by step behind a fresh decoder with no devices, so the kinds come from the public cycle result. |
 | 15 | NROM board | 1: inputs are the declared image length in bytes followed by all 16 header bytes, as for suite 9. | Seven values: ok, board error code (1 unsupported mapper, 2 unsupported submapper, 3 wrong board family, 4 unsupported PRG ROM size, 5 unsupported PRG RAM size, 6 unsupported trainer, 7 unsupported CHR memory), board kind, mapped PRG RAM bytes, mapped CHR RAM bytes, selection kind, and selection error code. Recorded by running `resolve_mapper` and `NromMapper.create` in `src/nes/cartridge/mapper_000.ts`, with the two mapped sizes measured through the public CPU and pattern ports by aliasing. |
+| 16 | NROM memory | 1: inputs are the declared image length, all 16 header bytes, a PRG ROM prepare count, a CHR ROM prepare count, an operation count, that many `(index, value)` pairs for each ROM region, and that many `(kind, address, value)` operations where kind 1 reads the CPU window, 2 writes it, 3 reads the pattern table, and 4 writes it. | Ok, board error code, mapped PRG RAM bytes, mapped CHR RAM bytes, then three values per operation: whether the board took it, the byte a read returned, and the bits a CPU read drove. Recorded by running `NromMapper.read_cpu()`, `write_cpu()`, `read_pattern()`, and `write_pattern()` over an image carrying the prepared payload bytes. |
 
 Suite 9 encodes its enumerations as integers because a Scratch list holds only numbers: error codes are
 1 truncated header, 2 invalid magic, 3 unsupported version, 4 invalid ROM size, 5 image too large, and
@@ -165,7 +166,11 @@ stand in for that until the toolchain is available:
   record; the source lint also compares the ported `cpu_sequence_kind` enum with the projection's ids.
   Mapper selection and NROM board validation are mirrored in `GoboscriptMapperSelection` and
   `GoboscriptNromMapper`, which replay every suite 15 record and are swept against `resolve_mapper` for all
-  4,096 mapper and submapper pairs.
+  4,096 mapper and submapper pairs. The same mirror carries the board's memory and address windows, replays
+  every suite 16 record, and is compared byte for byte with a reference `NromMapper` built over a synthetic
+  trainer image, which is what pins the payload and trainer copies; the source lint also compares the ported
+  `nrom_limit` and `nrom_window` enum values with the mirror's constants, so a wrong literal in a `.gs` file
+  fails without a compiler.
 - `tests/goboscript-source.test.ts` lints the sources: ASCII only, four-space indentation, no tabs or trailing
   whitespace, 120-column limit, preprocessor directives at column one, `%include` paths that resolve, no
   `return` inside a `proc` (upstream codegen panics), every `func` ending in a `return`, no `local` declared
