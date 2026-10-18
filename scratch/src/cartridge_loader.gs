@@ -58,6 +58,7 @@ proc cartridge_attach_nrom {
     if nrom_ok == 1 {
         nrom_load_payload;
         cpu_bus_cartridge_kind = mapper_kind.nrom;
+        ppu_bus_attach_mapper mapper_kind.nrom;
         cartridge_board_attached = 1;
         cartridge_board_state_text = "nrom prg ram " & nrom_prg_ram_bytes;
     } else {
@@ -84,6 +85,7 @@ proc cartridge_attach_mmc3 {
     if mmc3_ok == 1 {
         mmc3_load_payload;
         cpu_bus_cartridge_kind = mapper_kind.mmc3;
+        ppu_bus_attach_mapper mapper_kind.mmc3;
         cartridge_board_attached = 1;
         cartridge_board_state_text = "mmc3 banks " & mmc3_prg_bank_count;
     } else {

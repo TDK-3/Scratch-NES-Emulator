@@ -14,6 +14,8 @@
 %include src/mapper
 %include src/mapper_000
 %include src/mapper_004
+%include src/ppu_bus
+%include src/ppu_2c02
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
@@ -26,6 +28,7 @@ var cpu_bus_cartridge_kind = 0;
 # Clears the bus latch like NesCpuBus.reset(); RAM contents survive a reset.
 proc cpu_bus_reset {
     cpu_open_bus = 0;
+    ppu_reset;
 }
 
 # Zeroes RAM. NesCpuBus starts every instance with cleared RAM, so a shared-vector record
@@ -60,7 +63,16 @@ func cpu_bus_read(address) {
     }
 
     if numeric_address < 16384 {
-        # $2000-$3FFF: PPU registers are not ported yet, so no data line is driven.
+        # $2000-$3FFF: PPU registers, mirrored every 8 bytes.
+        local ppu_register = numeric_address % 8;
+        ppu_read_cpu_register ppu_register;
+        local ppu_value = ppu_read_result;
+
+        if ppu_register == 2 or ppu_register == 4 or ppu_register == 7 {
+            return cpu_apply_driven_value(ppu_value, 255);
+        }
+
+        # Write-only registers and unimplemented ports return the retained latch.
         return cpu_open_bus;
     }
 
@@ -106,6 +118,12 @@ proc cpu_bus_write address, value {
     local numeric_value = normalize_byte($value);
     cpu_open_bus = numeric_value;
 
+    if numeric_address < 16384 {
+        # $2000-$3FFF: PPU registers, mirrored every 8 bytes.
+        local ppu_register = numeric_address % 8;
+        ppu_write_cpu_register ppu_register, numeric_value;
+    }
+
     if numeric_address < 8192 {
         cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
     }
@@ -120,5 +138,5 @@ proc cpu_bus_write address, value {
         mmc3_write_cpu numeric_address, numeric_value;
     }
 
-    # PPU, APU, and $4014 OAM DMA writes are not ported yet.
+    # APU and $4014 OAM DMA writes are not ported yet.
 }

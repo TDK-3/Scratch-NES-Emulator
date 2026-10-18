@@ -184,11 +184,13 @@ proc run_next_port_vector {
         run_cartridge_bus_vector input_start;
     } elif suite_id == port_suite.mmc3 {
         run_mmc3_vector input_start;
+    } elif suite_id == port_suite.ppu {
+        run_ppu_vector input_start;
     } elif suite_id == port_suite.mmc3_irq {
         # Suite 19 shares suite 18's record layout and its board; only the operations differ.
         run_mmc3_vector input_start;
     } else {
-        # Suite 2 (CPU core), 4 (mapper selection), 5 (PPU), and 6 (APU) are not ported yet.
+        # Suite 2 (CPU core), 4 (mapper selection), and 6 (APU) are not ported yet.
         skipped = 1;
     }
 
@@ -914,6 +916,25 @@ proc run_cartridge_bus_vector input_start {
         add cpu_bus_read(8192) to port_actual_values;
         index++;
     }
+}
+
+# Suite 5: one PPU timing record. Inputs are the PPUCTRL value and the number of dots to
+# clock from reset. Expected values are the PPUSTATUS flags, the first take_nmi_edge read,
+# and the second take_nmi_edge read. The handler resets the PPU, writes PPUCTRL, clocks
+# the dots, then reports the three values.
+proc run_ppu_vector input_start {
+    local control = to_number(shared_port_vectors[$input_start]);
+    local dots = to_number(shared_port_vectors[$input_start + 1]);
+    ppu_reset;
+    ppu_write_cpu_register 0, control;
+
+    repeat dots {
+        ppu_clock_ppu_dot;
+    }
+
+    add ppu_get_status_register() to port_actual_values;
+    add ppu_take_nmi_edge() to port_actual_values;
+    add ppu_take_nmi_edge() to port_actual_values;
 }
 
 # Suites 18 and 19: one MMC3 board. Inputs are the declared image length, the sixteen header bytes,

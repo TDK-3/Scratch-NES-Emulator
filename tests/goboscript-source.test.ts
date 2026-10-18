@@ -568,6 +568,59 @@ const MIRROR_CONTRACT: readonly {
         mirror: "GoboscriptNromMapper.apply_memory_limits",
     },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
+    { source: "src/vector_selftest.gs", declaration: "run_ppu_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_reset", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_clear_memory", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_attach_mapper", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_get_mirroring", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_normalize_address", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_map_nametable", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_map_palette", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_read_ppu", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_write_ppu", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_read_pattern", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_write_pattern", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_observe_ppu_address", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_clock_ppu_dot", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_read_oam", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_write_oam", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_reset", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_set_status_flag", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_nmi_output", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_take_nmi_edge", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_set_vblank_flag", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_set_sprite_zero_hit", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_set_sprite_overflow", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_refresh_nmi_output", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_read_cpu_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_read_status_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_read_data_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_read_oam_data_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_write_cpu_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_write_control_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_write_scroll_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_write_address_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_write_data_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_write_oam_data_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_increment_vram_address", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_clock_ppu_dot", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_clock_cpu_cycle", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_advance_dot", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_is_rendering_enabled", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_is_visible_or_pre_render_scanline", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_is_oam_cpu_access_during_rendering", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_scanline", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_dot", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_frame_number", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_is_odd_frame", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_control_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_mask_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_status_register", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_vram_address", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_temporary_vram_address", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_fine_x_scroll", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_oam_address", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_get_read_buffer", mirror: null, reason: "ppu pending mirror" },
 ];
 
 const sources = load_sources();
@@ -592,6 +645,8 @@ test("the GoboScript project contains the expected sources", () => {
         "src/mapper_000.gs",
         "src/mapper_004.gs",
         "src/numeric.gs",
+        "src/ppu_2c02.gs",
+        "src/ppu_bus.gs",
         "src/rom_loader.gs",
         "src/shared_vectors.gs",
         "src/vector_selftest.gs",
@@ -1077,6 +1132,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
             "nrom",
             "nrom_memory",
             "numeric",
+            "ppu",
         ],
     );
 
@@ -1084,7 +1140,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
         .filter((suite) => !handled.has(suite.name))
         .map((suite) => suite.name)
         .sort();
-    assert.deepEqual(skipped, ["apu", "cpu", "mapper", "ppu"], "unported suites must stay skipped, not passing");
+    assert.deepEqual(skipped, ["apu", "cpu", "mapper"], "unported suites must stay skipped, not passing");
 });
 
 test("the self-test operation ids match the shared vector fixture operations", () => {
