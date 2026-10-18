@@ -569,6 +569,31 @@ const MIRROR_CONTRACT: readonly {
     },
     { source: "src/vector_selftest.gs", declaration: "compare_vector_results", mirror: null, reason: "reporter" },
     { source: "src/vector_selftest.gs", declaration: "run_ppu_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/vector_selftest.gs", declaration: "run_apu_vector", mirror: null, reason: "dispatcher" },
+    { source: "src/apu_2a03.gs", declaration: "apu_reset", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_write_register", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_write_pulse", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_write_pulse_sweep", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_write_status", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_write_frame_counter", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_read_status", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_cpu_cycle", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_pulse_timer", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_frame_sequencer", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_quarter_frame", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_half_frame", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_pulse_envelope", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_pulse_half_frame", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_clock_pulse_sweep", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_get_pulse_output", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_pulse_output", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_get_pulse_length", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_is_frame_irq_asserted", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_is_irq_asserted", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_pulse_sweep_target", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_pulse_sweep_in_range", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_sweep_target_would_oor", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_power_of_two", mirror: null, reason: "apu pending mirror" },
     { source: "src/ppu_bus.gs", declaration: "ppu_bus_reset", mirror: null, reason: "ppu bus pending mirror" },
     { source: "src/ppu_bus.gs", declaration: "ppu_bus_clear_memory", mirror: null, reason: "ppu bus pending mirror" },
     { source: "src/ppu_bus.gs", declaration: "ppu_bus_attach_mapper", mirror: null, reason: "ppu bus pending mirror" },
@@ -629,6 +654,7 @@ test("the GoboScript project contains the expected sources", () => {
     const paths = sources.map((source) => source.path).sort();
     assert.deepEqual(paths, [
         "main.gs",
+        "src/apu_2a03.gs",
         "src/cartridge.gs",
         "src/cartridge_loader.gs",
         "src/controller.gs",
@@ -1118,6 +1144,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
         [...handled].sort(),
         [
             "alu",
+            "apu",
             "bus",
             "cartridge",
             "cartridge_bus",
@@ -1140,7 +1167,7 @@ test("the self-test suite ids match the shared vector fixture", () => {
         .filter((suite) => !handled.has(suite.name))
         .map((suite) => suite.name)
         .sort();
-    assert.deepEqual(skipped, ["apu", "cpu", "mapper"], "unported suites must stay skipped, not passing");
+    assert.deepEqual(skipped, ["cpu", "mapper"], "unported suites must stay skipped, not passing");
 });
 
 test("the self-test operation ids match the shared vector fixture operations", () => {

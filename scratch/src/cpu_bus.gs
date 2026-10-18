@@ -16,6 +16,7 @@
 %include src/mapper_004
 %include src/ppu_bus
 %include src/ppu_2c02
+%include src/apu_2a03
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
@@ -29,6 +30,7 @@ var cpu_bus_cartridge_kind = 0;
 proc cpu_bus_reset {
     cpu_open_bus = 0;
     ppu_reset;
+    apu_reset;
 }
 
 # Zeroes RAM. NesCpuBus starts every instance with cleared RAM, so a shared-vector record
@@ -101,6 +103,11 @@ func cpu_bus_read(address) {
 
 # Reads the $4000-$401F I/O window; unported devices drive no data lines.
 func cpu_bus_read_io(address) {
+    if $address == 16405 {
+        apu_read_status;
+        return cpu_apply_driven_value(apu_status_value, apu_status_driven_mask);
+    }
+
     if $address == 16406 {
         return cpu_apply_driven_value(controller_serial_read(0), 1);
     }
@@ -128,6 +135,11 @@ proc cpu_bus_write address, value {
         cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
     }
 
+    if numeric_address >= 16384 and numeric_address < 16416 {
+        # $4000-$401F: APU, PPU ($4014 OAM DMA), and controller registers.
+        apu_write_register numeric_address, numeric_value;
+    }
+
     if numeric_address == 16406 {
         controller_write_strobe numeric_value;
     }
@@ -138,5 +150,5 @@ proc cpu_bus_write address, value {
         mmc3_write_cpu numeric_address, numeric_value;
     }
 
-    # APU and $4014 OAM DMA writes are not ported yet.
+    # $4014 OAM DMA writes are not ported yet.
 }

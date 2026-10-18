@@ -186,6 +186,8 @@ proc run_next_port_vector {
         run_mmc3_vector input_start;
     } elif suite_id == port_suite.ppu {
         run_ppu_vector input_start;
+    } elif suite_id == port_suite.apu {
+        run_apu_vector input_start;
     } elif suite_id == port_suite.mmc3_irq {
         # Suite 19 shares suite 18's record layout and its board; only the operations differ.
         run_mmc3_vector input_start;
@@ -935,6 +937,30 @@ proc run_ppu_vector input_start {
     add ppu_get_status_register() to port_actual_values;
     add ppu_take_nmi_edge() to port_actual_values;
     add ppu_take_nmi_edge() to port_actual_values;
+}
+
+# Suite 6: one APU register-write record. Inputs are the write count followed by (address, value)
+# pairs. Expected values are the $4015 status byte, pulse channel 1 DAC output, and pulse channel 1
+# length counter. The handler resets the APU, applies each write, reads $4015 status, and reports
+# the three values.
+proc run_apu_vector input_start {
+    local write_count = to_number(shared_port_vectors[$input_start]);
+    local offset = 1;
+    local address = 0;
+    local value = 0;
+    apu_reset;
+
+    repeat write_count {
+        address = to_number(shared_port_vectors[$input_start + offset]);
+        value = to_number(shared_port_vectors[$input_start + offset + 1]);
+        apu_write_register address, value;
+        offset += 2;
+    }
+
+    apu_read_status;
+    add apu_status_value to port_actual_values;
+    add apu_get_pulse_output(1) to port_actual_values;
+    add apu_get_pulse_length(1) to port_actual_values;
 }
 
 # Suites 18 and 19: one MMC3 board. Inputs are the declared image length, the sixteen header bytes,
