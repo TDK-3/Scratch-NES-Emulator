@@ -262,6 +262,16 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       reference rejects with a `TypeError`, the page-crossing and dummy-address formulas, the fetch helpers,
       and the stack transactions of real PHA, PLA, JSR, RTS, BRK, and RTI instructions, plus the matching
       `run_cpu_addressing_vector` replay in the self test.
+- [x] Extracted the opcode decode table into a canonical, generated form for the port:
+      `tests/fixtures/goboscript/opcode_table.json` holds all 256 encodings as integers (mnemonic id,
+      addressing mode id, base cycles, operand access id, page-cross flag, official flag) plus the 76 mnemonic
+      names, `scripts/generate_goboscript_opcode_table.mjs` flattens it into the ignored
+      `scratch/data/opcode_table.txt` (1,538 values) with the same overwrite and reconstruction protections as
+      the vector generator, and `npm run scratch:opcode` runs it as part of `npm run build:scratch`.
+      `tests/goboscript-opcode-table.test.ts` (4 tests) keeps the fixture equal to `CPU_OPCODE_TABLE` for every
+      opcode, checks the flat list positions the ported decoder will index, mutation-checked by editing one
+      `base_cycles` value, and rejects six malformed fixtures. The table is reference data; no `.gs` decoder
+      reads it yet.
 - [x] Ported the CPU cycle sequences that do not need opcode decoding to `scratch/src/cpu_sequence.gs`:
       reset, BRK, JSR, RTI, RTS, the NMI and IRQ/BRK hardware interrupts, and a relative branch, each spending
       one logged cycle per bus access. Opcode fetch stays with the caller, matching the reference, which
@@ -306,7 +316,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
 ## Verified in this environment
 
 - `npm ci`: passed from the lockfile on 2026-10-15 and reported zero audit vulnerabilities.
-- `npm test` on 2026-10-18: passed all 973 tests in about 11 seconds, including 257 grouped single-step
+- `npm test` on 2026-10-18: passed all 977 tests in about 12 seconds, including 257 grouped single-step
   corpus tests (1,026 vectors), 351 shared port-vector tests (350 records), 50 GoboScript port-algorithm
   tests, 16 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
 - `npm run test:cpu-corpus -- --corpus /tmp/sst/nes6502/v1` on 2026-10-18: 2,560,000 of 2,560,000 upstream

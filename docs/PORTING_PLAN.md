@@ -128,6 +128,13 @@ reads, MMC3 PRG banks and filtered IRQ edges, scheduled PPU vblank/NMI, pulse AP
 reads, per-instruction ALU value/status results, iNES/NES 2.0 header decode with its error codes, and
 addressing-mode resolution with its bus access trace, and the CPU cycle sequences with theirs. Node tests run those vectors against the production
 TypeScript modules, the TypeScript mirror of the ported algorithms replays them as well, and
+`npm run scratch:opcode` generates the ignored one-value-per-line opcode decode table loaded by the ported
+decoder: `tests/fixtures/goboscript/opcode_table.json` is the canonical integer form of `CPU_OPCODE_TABLE`
+(mnemonic id, addressing mode id, base cycles, operand access id, page-cross flag, and official flag for all
+256 opcodes), a parity test keeps it equal to the production table, and the generator refuses to overwrite its
+own input. The table is reference data, not ported logic: dispatch, flag updates, and cycle accounting stay
+hand-written in the `.gs` sources.
+
 `npm run scratch:vectors` generates the ignored one-value-per-line list loaded by
 `scratch/src/shared_vectors.gs`.
 

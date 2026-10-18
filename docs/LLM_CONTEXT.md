@@ -118,7 +118,7 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 973 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+suite has 977 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
 test, 351 cross-domain parity cases, 50 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported helpers, 16 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
@@ -211,6 +211,7 @@ npm test
 npm run build:ts
 npm run scratch:assets
 npm run scratch:vectors
+npm run scratch:opcode
 npm run build:scratch
 ```
 
@@ -225,7 +226,8 @@ lints the sources for grammar shape, codegen-panic constructs, reserved block na
 resolution, mirror name/arity parity, and self-test enum IDs that match the fixture. The initial ROM
 path is build-time bundling: `npm run scratch:assets -- --rom /path/to/rom.nes` selects a different static
 list without replacing the fixture. `npm run scratch:vectors` generates the portable numeric vectors consumed
-by `scratch/src/shared_vectors.gs`; `npm run build:scratch` runs both data generators before compiling. No
+by `scratch/src/shared_vectors.gs`; `npm run build:scratch` runs all three data generators (ROM bytes, port vectors, opcode table) before
+compiling. No
 runtime ROM picker is planned for standard Scratch or TurboWarp in this initial path.
 
 ## Design constraints to keep in mind

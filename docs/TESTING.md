@@ -23,7 +23,7 @@ npm run scratch:vectors
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 973 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases to
+The 977 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases to
 source fixtures, 351 cross-domain shared-vector checks (350 records plus the generator regression), 257 pinned
 MIT single-step corpus checks covering all 256 opcode bytes, 50 GoboScript port-algorithm comparisons, 16
 GoboScript source-lint checks, six standard-controller tests, forty-two focused
@@ -425,7 +425,7 @@ current console frame smoke timing is about 46 ms, so the shell is not a 60 fps 
 ## P4 licensed APU/controller ROM and runtime validation
 
 On 2026-10-15, `npm test` passed all 332 tests (including type-checking), and `npm run build:ts` passed.
-On 2026-10-18, `npm test` passed all 973 tests in about 11 seconds, including the 1,026-vector CPU corpus
+On 2026-10-18, `npm test` passed all 977 tests in about 12 seconds, including the 1,026-vector CPU corpus
 subset, the two new PPU OAMADDR/OAMDATA quirk tests, the 25 shared cartridge-header vectors, the 39 shared
 CPU addressing vectors, the 12 shared CPU sequence vectors, and the 66 GoboScript port-algorithm and
 source-lint tests.
@@ -608,7 +608,13 @@ Current parity coverage, in three layers:
    NES 2.0 mapper and RAM byte, all 4,096 encoded NES 2.0 ROM sizes, every RAM shift nibble, and every image
    length from 0 to 16 bytes, projecting the reference through
    `tests/support/cartridge_projection.ts`.
-3. `tests/goboscript-source.test.ts` lints the `.gs` sources for the grammar shape the upstream parser accepts,
+3. `tests/goboscript-opcode-table.test.ts` (4 tests) compares every entry of
+   `tests/fixtures/goboscript/opcode_table.json` with `CPU_OPCODE_TABLE`, including the mnemonic, addressing
+   mode, base cycles, operand access, page-cross flag, and official flag for all 256 opcodes, checks that the
+   generator's flat list carries the same values at the positions the ported decoder will index, and checks
+   that the generator refuses to overwrite its canonical fixture directly, through a symlink, or through a
+   hardlink and rejects six malformed fixtures.
+4. `tests/goboscript-source.test.ts` lints the `.gs` sources for the grammar shape the upstream parser accepts,
    the constructs that panic upstream codegen (`return` inside a `proc`), reserved Scratch block and keyword
    names, indentation, ASCII, line length, directive placement, resolvable `%include` paths, per-target name
    resolution, mirror name/arity parity, call shapes (a `proc` is called without parentheses, a `func` with
