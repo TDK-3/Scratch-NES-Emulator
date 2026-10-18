@@ -449,6 +449,10 @@ const MIRROR_CONTRACT: readonly {
         declaration: "nrom_write_pattern",
         mirror: "GoboscriptNromMapper.write_pattern",
     },
+    { source: "src/mapper_000.gs", declaration: "nrom_get_prg_nvram_snapshot", mirror: "GoboscriptNromMapper.get_prg_nvram_snapshot" },
+    { source: "src/mapper_000.gs", declaration: "nrom_load_prg_nvram_snapshot", mirror: "GoboscriptNromMapper.load_prg_nvram_snapshot" },
+    { source: "src/mapper_000.gs", declaration: "nrom_get_chr_nvram_snapshot", mirror: "GoboscriptNromMapper.get_chr_nvram_snapshot" },
+    { source: "src/mapper_000.gs", declaration: "nrom_load_chr_nvram_snapshot", mirror: "GoboscriptNromMapper.load_chr_nvram_snapshot" },
     {
         source: "src/vector_selftest.gs",
         declaration: "run_nrom_memory_vector",
@@ -479,6 +483,26 @@ const MIRROR_CONTRACT: readonly {
         source: "src/mapper_004.gs",
         declaration: "mmc3_write_pattern",
         mirror: "GoboscriptMmc3Mapper.write_pattern",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_get_prg_nvram_snapshot",
+        mirror: "GoboscriptMmc3Mapper.get_prg_nvram_snapshot",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_load_prg_nvram_snapshot",
+        mirror: "GoboscriptMmc3Mapper.load_prg_nvram_snapshot",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_get_chr_nvram_snapshot",
+        mirror: "GoboscriptMmc3Mapper.get_chr_nvram_snapshot",
+    },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_load_chr_nvram_snapshot",
+        mirror: "GoboscriptMmc3Mapper.load_chr_nvram_snapshot",
     },
     {
         source: "src/mapper_004.gs",

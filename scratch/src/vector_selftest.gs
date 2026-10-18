@@ -732,12 +732,16 @@ proc run_nrom_vector input_start {
     add mapper_selection_error_code to port_actual_values;
 }
 
-# Suite 16: one board's address windows. Inputs are the declared image length, the sixteen header
-# bytes, the PRG ROM and CHR ROM prepare counts, the operation count, then the prepared
-# (index, value) pairs for each ROM region and the (kind, address, value) operations, where kind 1
-# reads the CPU window, 2 writes it, 3 reads the pattern table, and 4 writes it. Expected values
+# Suite 16: one board's address windows and its nonvolatile snapshots. Inputs are the declared image
+# length, the sixteen header bytes, the PRG ROM and CHR ROM prepare counts, the operation count, then
+# the prepared (index, value) pairs for each ROM region and the (kind, address, value) operations,
+# where kind 1 reads the CPU window, 2 writes it, 3 reads the pattern table, 4 writes it, 5 copies
+# the declared PRG NVRAM tail into the board's snapshot buffer, 6 restores from that buffer, 7 and 8
+# do the same for CHR NVRAM, and 9 and 10 report one buffered byte. Expected values
 # are ok, the error code, the mapped PRG RAM and CHR RAM bytes, then three values per operation:
-# whether the board took it, the byte a read returned, and the bits a CPU read drove.
+# whether the board took it, the byte a read returned, and the bits a CPU read drove. A get reports
+# the buffer's length in place of a byte, and a load reports whether the buffer held exactly the
+# declared size, which is the length the reference insists on before it restores anything.
 proc run_nrom_memory_vector input_start {
     local prg_count = to_number(shared_port_vectors[$input_start + 17]);
     local chr_count = to_number(shared_port_vectors[$input_start + 18]);
@@ -806,6 +810,34 @@ proc run_nrom_memory_vector input_start {
             nrom_write_pattern op_address, op_value;
             add nrom_pattern_write_accepted to port_actual_values;
             add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == nrom_memory_op.get_prg_nvram {
+            nrom_get_prg_nvram_snapshot;
+            add 1 to port_actual_values;
+            add length(nrom_prg_nvram_snapshot) to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == nrom_memory_op.load_prg_nvram {
+            nrom_load_prg_nvram_snapshot;
+            add nrom_nvram_loaded to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == nrom_memory_op.get_chr_nvram {
+            nrom_get_chr_nvram_snapshot;
+            add 1 to port_actual_values;
+            add length(nrom_chr_nvram_snapshot) to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == nrom_memory_op.load_chr_nvram {
+            nrom_load_chr_nvram_snapshot;
+            add nrom_nvram_loaded to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == nrom_memory_op.read_prg_nvram_byte {
+            add 1 to port_actual_values;
+            add to_number(nrom_prg_nvram_snapshot[op_address + 1]) to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == nrom_memory_op.read_chr_nvram_byte {
+            add 1 to port_actual_values;
+            add to_number(nrom_chr_nvram_snapshot[op_address + 1]) to port_actual_values;
             add 0 to port_actual_values;
         } else {
             # No record carries another kind; report an operation the board did not take.
@@ -889,10 +921,12 @@ proc run_cartridge_bus_vector input_start {
 # for each ROM region and the (kind, address, value) operations, where kind 1 reads the CPU window,
 # 2 writes it, 3 reads the pattern table, 4 writes it, 5 reports the mirroring mode the board would
 # give the PPU, 6 shows the board a PPU address with an access kind in the value, 7 clocks one PPU
-# dot, and 8 reports the IRQ line. Expected values are ok, the board error code, the mapped PRG RAM
-# bytes, then three values per operation: whether the board took it, the byte a read returned, and the
-# bits a CPU read drove. Suite 18 records exercise the memory windows and suite 19 records the scanline
-# IRQ, and both replay through this one handler because the board and its layout are the same.
+# dot, 8 reports the IRQ line, 9 through 12 copy and restore the declared PRG and CHR NVRAM tails the
+# way suite 16 does, and 13 and 14 report one buffered byte. Expected values are ok, the board error
+# code, the mapped PRG RAM bytes, then three values per operation: whether the board took it, the byte
+# a read returned, and the bits a CPU read drove. Suite 18 records exercise the memory windows,
+# suite 19 records the scanline IRQ, and both replay through this one handler because the board and
+# its layout are the same.
 # The mapped CHR RAM size is not reported, because a bank register decides which part of CHR RAM a
 # pattern address reaches, so no aliasing probe can measure it; the records that wrap a CHR bank pin
 # the bank count instead.
@@ -981,6 +1015,34 @@ proc run_mmc3_vector input_start {
         } elif op_kind == mmc3_op.report_irq {
             add 1 to port_actual_values;
             add mmc3_get_irq_line_asserted() to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.get_prg_nvram {
+            mmc3_get_prg_nvram_snapshot;
+            add 1 to port_actual_values;
+            add length(mmc3_prg_nvram_snapshot) to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.load_prg_nvram {
+            mmc3_load_prg_nvram_snapshot;
+            add mmc3_nvram_loaded to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.get_chr_nvram {
+            mmc3_get_chr_nvram_snapshot;
+            add 1 to port_actual_values;
+            add length(mmc3_chr_nvram_snapshot) to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.load_chr_nvram {
+            mmc3_load_chr_nvram_snapshot;
+            add mmc3_nvram_loaded to port_actual_values;
+            add 0 to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.read_prg_nvram_byte {
+            add 1 to port_actual_values;
+            add to_number(mmc3_prg_nvram_snapshot[op_address + 1]) to port_actual_values;
+            add 0 to port_actual_values;
+        } elif op_kind == mmc3_op.read_chr_nvram_byte {
+            add 1 to port_actual_values;
+            add to_number(mmc3_chr_nvram_snapshot[op_address + 1]) to port_actual_values;
             add 0 to port_actual_values;
         } else {
             # No record carries another kind; report an operation the board did not take.

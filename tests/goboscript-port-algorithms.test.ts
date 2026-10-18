@@ -2099,7 +2099,7 @@ test("the mirrored board answers the windows the way the reference does", () => 
     assert.equal(mirror.pattern_value, 0x22, "a dropped write leaves the byte alone");
 
     // An unknown memory operation reports that the board did not take it.
-    assert.deepEqual(mirror.run_memory_operations([[9, 0x8000, 0]]).slice(4), [0, 0, 0]);
+    assert.deepEqual(mirror.run_memory_operations([[99, 0x8000, 0]]).slice(4), [0, 0, 0]);
 });
 
 test("the mirrored payload copy lands the bytes the reference board holds", () => {
@@ -2481,7 +2481,7 @@ test("the mirrored MMC3 registers and windows follow the reference", () => {
     assert.equal(mirror.bank_select, 6);
 
     // An unknown memory operation reports that the board did not take it.
-    assert.deepEqual(mirror.run_memory_operations([[9, 0x8000, 0]]).slice(3), [0, 0, 0]);
+    assert.deepEqual(mirror.run_memory_operations([[99, 0x8000, 0]]).slice(3), [0, 0, 0]);
 });
 
 /** Builds one 64 KiB PRG, 8 KiB CHR ROM MMC3 board on both sides, ready for an IRQ script. */

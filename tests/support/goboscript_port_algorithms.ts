@@ -946,7 +946,18 @@ export function mapper_sum_memory_sizes(first: number, second: number): number {
 }
 
 /** Mirror of the `nrom_memory_op` enum in scratch/src/mapper_000.gs. */
-export const NROM_MEMORY_OP = { CPU_READ: 1, CPU_WRITE: 2, PATTERN_READ: 3, PATTERN_WRITE: 4 } as const;
+export const NROM_MEMORY_OP = {
+    CPU_READ: 1,
+    CPU_WRITE: 2,
+    PATTERN_READ: 3,
+    PATTERN_WRITE: 4,
+    GET_PRG_NVRAM: 5,
+    LOAD_PRG_NVRAM: 6,
+    GET_CHR_NVRAM: 7,
+    LOAD_CHR_NVRAM: 8,
+    READ_PRG_NVRAM_BYTE: 9,
+    READ_CHR_NVRAM_BYTE: 10,
+} as const;
 
 /** Mirror of the `nrom_window` enum in scratch/src/mapper_000.gs. */
 export const NROM_WINDOW = {
@@ -1040,6 +1051,11 @@ export class GoboscriptNromMapper {
     cpu_write_accepted = 0;
     pattern_value = 0;
     pattern_write_accepted = 0;
+    nvram_loaded = 0;
+
+    /** Mirrors of the two snapshot buffers the ported board copies its nonvolatile tails through. */
+    readonly prg_nvram_snapshot: number[] = [];
+    readonly chr_nvram_snapshot: number[] = [];
 
     readonly selection = new GoboscriptMapperSelection();
 
@@ -1229,6 +1245,58 @@ export class GoboscriptNromMapper {
      * Mirror of the suite-16 handler's operation loop: runs each (kind, address, value) triple
      * against the board and returns the four board values followed by three values per operation.
      */
+    /** Mirror of `nrom_get_prg_nvram_snapshot`. */
+    get_prg_nvram_snapshot(): void {
+        const start = this.mapped_prg_ram_bytes - this.prg_nvram_bytes;
+        this.prg_nvram_snapshot.length = 0;
+
+        for (let index = 0; index < this.prg_nvram_bytes; index += 1) {
+            this.prg_nvram_snapshot.push(to_number(this.prg_ram[start + index] ?? 0));
+        }
+    }
+
+    /** Mirror of `nrom_load_prg_nvram_snapshot`. */
+    load_prg_nvram_snapshot(): void {
+        const start = this.mapped_prg_ram_bytes - this.prg_nvram_bytes;
+        this.nvram_loaded = 0;
+
+        if (this.prg_nvram_snapshot.length !== this.prg_nvram_bytes) {
+            return;
+        }
+
+        this.nvram_loaded = 1;
+
+        for (let index = 0; index < this.prg_nvram_bytes; index += 1) {
+            this.prg_ram[start + index] = to_number(this.prg_nvram_snapshot[index] ?? 0);
+        }
+    }
+
+    /** Mirror of `nrom_get_chr_nvram_snapshot`. */
+    get_chr_nvram_snapshot(): void {
+        const start = this.mapped_chr_ram_bytes - this.chr_nvram_bytes;
+        this.chr_nvram_snapshot.length = 0;
+
+        for (let index = 0; index < this.chr_nvram_bytes; index += 1) {
+            this.chr_nvram_snapshot.push(to_number(this.chr_ram[start + index] ?? 0));
+        }
+    }
+
+    /** Mirror of `nrom_load_chr_nvram_snapshot`. */
+    load_chr_nvram_snapshot(): void {
+        const start = this.mapped_chr_ram_bytes - this.chr_nvram_bytes;
+        this.nvram_loaded = 0;
+
+        if (this.chr_nvram_snapshot.length !== this.chr_nvram_bytes) {
+            return;
+        }
+
+        this.nvram_loaded = 1;
+
+        for (let index = 0; index < this.chr_nvram_bytes; index += 1) {
+            this.chr_ram[start + index] = to_number(this.chr_nvram_snapshot[index] ?? 0);
+        }
+    }
+
     run_memory_operations(ops: readonly (readonly [number, number, number])[]): number[] {
         const values = [this.ok, this.error_code, this.mapped_prg_ram_bytes, this.mapped_chr_ram_bytes];
 
@@ -1245,6 +1313,22 @@ export class GoboscriptNromMapper {
             } else if (kind === NROM_MEMORY_OP.PATTERN_WRITE) {
                 this.write_pattern(address, value);
                 values.push(this.pattern_write_accepted, 0, 0);
+            } else if (kind === NROM_MEMORY_OP.GET_PRG_NVRAM) {
+                this.get_prg_nvram_snapshot();
+                values.push(1, this.prg_nvram_snapshot.length, 0);
+            } else if (kind === NROM_MEMORY_OP.LOAD_PRG_NVRAM) {
+                this.load_prg_nvram_snapshot();
+                values.push(this.nvram_loaded, 0, 0);
+            } else if (kind === NROM_MEMORY_OP.GET_CHR_NVRAM) {
+                this.get_chr_nvram_snapshot();
+                values.push(1, this.chr_nvram_snapshot.length, 0);
+            } else if (kind === NROM_MEMORY_OP.LOAD_CHR_NVRAM) {
+                this.load_chr_nvram_snapshot();
+                values.push(this.nvram_loaded, 0, 0);
+            } else if (kind === NROM_MEMORY_OP.READ_PRG_NVRAM_BYTE) {
+                values.push(1, to_number(this.prg_nvram_snapshot[address] ?? 0), 0);
+            } else if (kind === NROM_MEMORY_OP.READ_CHR_NVRAM_BYTE) {
+                values.push(1, to_number(this.chr_nvram_snapshot[address] ?? 0), 0);
             } else {
                 values.push(0, 0, 0);
             }
@@ -1399,6 +1483,12 @@ export const MMC3_OP = {
     OBSERVE_PPU_ACCESS: 6,
     CLOCK_PPU_DOT: 7,
     REPORT_IRQ: 8,
+    GET_PRG_NVRAM: 9,
+    LOAD_PRG_NVRAM: 10,
+    GET_CHR_NVRAM: 11,
+    LOAD_CHR_NVRAM: 12,
+    READ_PRG_NVRAM_BYTE: 13,
+    READ_CHR_NVRAM_BYTE: 14,
 } as const;
 
 /** Mirror of the `mmc3_ppu_access` enum in scratch/src/mapper_004.gs. */
@@ -1475,6 +1565,11 @@ export class GoboscriptMmc3Mapper {
     pattern_value = 0;
     pattern_write_accepted = 0;
     ppu_observed = 0;
+    nvram_loaded = 0;
+
+    /** Mirrors of the two snapshot buffers the ported board copies its nonvolatile tails through. */
+    readonly prg_nvram_snapshot: number[] = [];
+    readonly chr_nvram_snapshot: number[] = [];
 
     /** Mirror of `mmc3_reset`. */
     reset(): void {
@@ -1854,6 +1949,58 @@ export class GoboscriptMmc3Mapper {
         }
     }
 
+    /** Mirror of `mmc3_get_prg_nvram_snapshot`. */
+    get_prg_nvram_snapshot(): void {
+        const start = this.mapped_prg_ram_bytes - this.prg_nvram_bytes;
+        this.prg_nvram_snapshot.length = 0;
+
+        for (let index = 0; index < this.prg_nvram_bytes; index += 1) {
+            this.prg_nvram_snapshot.push(to_number(this.prg_ram[start + index] ?? 0));
+        }
+    }
+
+    /** Mirror of `mmc3_load_prg_nvram_snapshot`. */
+    load_prg_nvram_snapshot(): void {
+        const start = this.mapped_prg_ram_bytes - this.prg_nvram_bytes;
+        this.nvram_loaded = 0;
+
+        if (this.prg_nvram_snapshot.length !== this.prg_nvram_bytes) {
+            return;
+        }
+
+        this.nvram_loaded = 1;
+
+        for (let index = 0; index < this.prg_nvram_bytes; index += 1) {
+            this.prg_ram[start + index] = to_number(this.prg_nvram_snapshot[index] ?? 0);
+        }
+    }
+
+    /** Mirror of `mmc3_get_chr_nvram_snapshot`. */
+    get_chr_nvram_snapshot(): void {
+        const start = this.mapped_chr_ram_bytes - this.chr_nvram_bytes;
+        this.chr_nvram_snapshot.length = 0;
+
+        for (let index = 0; index < this.chr_nvram_bytes; index += 1) {
+            this.chr_nvram_snapshot.push(to_number(this.chr_ram[start + index] ?? 0));
+        }
+    }
+
+    /** Mirror of `mmc3_load_chr_nvram_snapshot`. */
+    load_chr_nvram_snapshot(): void {
+        const start = this.mapped_chr_ram_bytes - this.chr_nvram_bytes;
+        this.nvram_loaded = 0;
+
+        if (this.chr_nvram_snapshot.length !== this.chr_nvram_bytes) {
+            return;
+        }
+
+        this.nvram_loaded = 1;
+
+        for (let index = 0; index < this.chr_nvram_bytes; index += 1) {
+            this.chr_ram[start + index] = to_number(this.chr_nvram_snapshot[index] ?? 0);
+        }
+    }
+
     /**
      * Mirror of the suite-18 and suite-19 handler's operation loop: runs each (kind, address, value)
      * triple and returns the board values followed by three values per operation.
@@ -1884,6 +2031,22 @@ export class GoboscriptMmc3Mapper {
                 values.push(1, 0, 0);
             } else if (kind === MMC3_OP.REPORT_IRQ) {
                 values.push(1, this.get_irq_line_asserted(), 0);
+            } else if (kind === MMC3_OP.GET_PRG_NVRAM) {
+                this.get_prg_nvram_snapshot();
+                values.push(1, this.prg_nvram_snapshot.length, 0);
+            } else if (kind === MMC3_OP.LOAD_PRG_NVRAM) {
+                this.load_prg_nvram_snapshot();
+                values.push(this.nvram_loaded, 0, 0);
+            } else if (kind === MMC3_OP.GET_CHR_NVRAM) {
+                this.get_chr_nvram_snapshot();
+                values.push(1, this.chr_nvram_snapshot.length, 0);
+            } else if (kind === MMC3_OP.LOAD_CHR_NVRAM) {
+                this.load_chr_nvram_snapshot();
+                values.push(this.nvram_loaded, 0, 0);
+            } else if (kind === MMC3_OP.READ_PRG_NVRAM_BYTE) {
+                values.push(1, to_number(this.prg_nvram_snapshot[address] ?? 0), 0);
+            } else if (kind === MMC3_OP.READ_CHR_NVRAM_BYTE) {
+                values.push(1, to_number(this.chr_nvram_snapshot[address] ?? 0), 0);
             } else {
                 values.push(0, 0, 0);
             }

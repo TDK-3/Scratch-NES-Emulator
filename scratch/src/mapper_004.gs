@@ -6,8 +6,11 @@
 # and pattern address windows, the four IRQ registers, and the PPU A12 observation with the ten-dot
 # low filter that decides when a rising edge clocks the IRQ counter.
 #
-# What is not ported yet: the NVRAM snapshots, so a battery-backed board still reports its sizes but
-# offers no way to save or restore them.
+# The declared nonvolatile memory is ported as well, as the tail of each RAM region: a snapshot
+# copies it out and a restore copies it back only when the buffer holds exactly the declared size. A
+# restore leaves the banking registers, the protection bits, and the IRQ state alone, because the
+# reference restores memory without changing any register. With that, everything Mmc3Mapper does is
+# ported.
 #
 # Scratch has no bitwise operators, so this header uses the numeric helpers the other modules use:
 # bitwise_and for masks, bit_at for one bit, and floor division for a bank index. The register an
@@ -63,7 +66,13 @@ enum mmc3_op {
     report_mirroring = 5,
     observe_ppu_access = 6,
     clock_ppu_dot = 7,
-    report_irq = 8
+    report_irq = 8,
+    get_prg_nvram = 9,
+    load_prg_nvram = 10,
+    get_chr_nvram = 11,
+    load_chr_nvram = 12,
+    read_prg_nvram_byte = 13,
+    read_chr_nvram_byte = 14
 }
 
 # The PPU bus operations a mapper can observe. The reference's MapperPpuBusAccess carries a kind and
@@ -113,6 +122,13 @@ list mmc3_prg_ram = [0; 8192];
 list mmc3_chr_ram = [0; 8192];
 list mmc3_bank_registers = [0; 8];
 
+# The board's nonvolatile memory, copied out by a snapshot and copied back by a restore. The
+# reference slices the tail of each RAM region, so the bank registers decide which part of CHR RAM a
+# pattern address reaches but never which bytes belong to the snapshot: the tail is measured against
+# the whole declared region. A board that declares no NVRAM has an empty buffer.
+list mmc3_prg_nvram_snapshot;
+list mmc3_chr_nvram_snapshot;
+
 # The last CPU read: whether the address was mapped, the byte, and the bits the board drives.
 var mmc3_cpu_mapped = 0;
 var mmc3_cpu_value = 0;
@@ -126,6 +142,11 @@ var mmc3_cpu_write_accepted = 0;
 # outside it raises a range error there; the port reports the refusal instead, as it does everywhere
 # else, and leaves the A12 state and the IRQ counter untouched.
 var mmc3_ppu_observed = 0;
+
+# Whether the last restore was accepted. The reference raises a range error for a snapshot whose
+# length is not exactly the declared NVRAM size; the port reports the refusal instead and copies
+# nothing, so a mismatched save state cannot half-restore a board.
+var mmc3_nvram_loaded = 0;
 
 # The last pattern byte read, and whether the last pattern write landed in CHR RAM.
 var mmc3_pattern_value = 0;
@@ -574,5 +595,68 @@ proc mmc3_clock_irq_counter {
 
     if mmc3_irq_counter == 0 and mmc3_irq_enabled == 1 {
         mmc3_irq_line_asserted = 1;
+    }
+}
+
+# Copies the declared nonvolatile tail of PRG RAM into the snapshot buffer, leaving the volatile part
+# of the same window out, exactly as get_prg_nvram_snapshot slices it. The PRG RAM window is not
+# banked, so the tail is the same bytes whichever PRG mode and bank registers are set.
+proc mmc3_get_prg_nvram_snapshot {
+    local start = mmc3_prg_ram_bytes - mmc3_prg_nvram_bytes;
+    local index = 0;
+    delete mmc3_prg_nvram_snapshot;
+
+    repeat mmc3_prg_nvram_bytes {
+        add to_number(mmc3_prg_ram[start + index + 1]) to mmc3_prg_nvram_snapshot;
+        index++;
+    }
+}
+
+# Restores the nonvolatile tail of PRG RAM from the snapshot buffer. Neither the enable bit nor the
+# write-protect bit is consulted, because the reference restores declared nonvolatile memory without
+# changing any register, and the banking registers and the IRQ state are left alone too.
+proc mmc3_load_prg_nvram_snapshot {
+    local start = mmc3_prg_ram_bytes - mmc3_prg_nvram_bytes;
+    local index = 0;
+    mmc3_nvram_loaded = 0;
+
+    if length(mmc3_prg_nvram_snapshot) == mmc3_prg_nvram_bytes {
+        mmc3_nvram_loaded = 1;
+
+        repeat mmc3_prg_nvram_bytes {
+            mmc3_prg_ram[start + index + 1] = to_number(mmc3_prg_nvram_snapshot[index + 1]);
+            index++;
+        }
+    }
+}
+
+# Copies the declared nonvolatile tail of CHR RAM into the snapshot buffer. A CHR ROM board declares
+# no CHR NVRAM, because the validation rejects CHR ROM beside declared CHR RAM, so its buffer is
+# empty and its CHR ROM is never touched.
+proc mmc3_get_chr_nvram_snapshot {
+    local start = mmc3_chr_ram_bytes - mmc3_chr_nvram_bytes;
+    local index = 0;
+    delete mmc3_chr_nvram_snapshot;
+
+    repeat mmc3_chr_nvram_bytes {
+        add to_number(mmc3_chr_ram[start + index + 1]) to mmc3_chr_nvram_snapshot;
+        index++;
+    }
+}
+
+# Restores the nonvolatile tail of CHR RAM from the snapshot buffer, without modifying CHR ROM, the
+# volatile part of CHR RAM, or the bank registers that decide which of them a pattern address sees.
+proc mmc3_load_chr_nvram_snapshot {
+    local start = mmc3_chr_ram_bytes - mmc3_chr_nvram_bytes;
+    local index = 0;
+    mmc3_nvram_loaded = 0;
+
+    if length(mmc3_chr_nvram_snapshot) == mmc3_chr_nvram_bytes {
+        mmc3_nvram_loaded = 1;
+
+        repeat mmc3_chr_nvram_bytes {
+            mmc3_chr_ram[start + index + 1] = to_number(mmc3_chr_nvram_snapshot[index + 1]);
+            index++;
+        }
     }
 }

@@ -17,9 +17,12 @@
 # address outside both windows is reported unmapped instead of stopping the project, where the
 # reference returns a null read.
 #
-# What is not ported yet: the NVRAM snapshots, the PPU-side nametable mirroring consumer, and the
-# MMC3 board. Nametable mirroring needs no mapper state, because NROM reports the mirroring the
-# header declared.
+# The declared nonvolatile memory is ported too, as the tail of each RAM region: a snapshot copies it
+# out and a restore copies it back only when the buffer holds exactly the declared size, which is the
+# length the reference insists on before it restores anything.
+#
+# What is not ported yet: the PPU-side nametable mirroring consumer, and the MMC3 board. Nametable
+# mirroring needs no mapper state, because NROM reports the mirroring the header declared.
 
 %include src/cartridge
 %include src/mapper
@@ -40,7 +43,13 @@ enum nrom_memory_op {
     cpu_read = 1,
     cpu_write = 2,
     pattern_read = 3,
-    pattern_write = 4
+    pattern_write = 4,
+    get_prg_nvram = 5,
+    load_prg_nvram = 6,
+    get_chr_nvram = 7,
+    load_chr_nvram = 8,
+    read_prg_nvram_byte = 9,
+    read_chr_nvram_byte = 10
 }
 
 enum nrom_window {
@@ -61,6 +70,14 @@ list nrom_prg_rom;
 list nrom_chr_rom;
 list nrom_prg_ram = [0; 8192];
 list nrom_chr_ram = [0; 8192];
+
+# The board's nonvolatile memory, copied out by a snapshot and copied back by a restore. The
+# reference slices the tail of each RAM region: the last declared NVRAM bytes of the mapped window,
+# leaving the volatile part of the same region alone. These two lists are the port's serialization
+# buffer, so a save path would fill them from stored data before a restore, the way the generated
+# data lists fill the ROM. A board that declares no NVRAM has an empty buffer.
+list nrom_prg_nvram_snapshot;
+list nrom_chr_nvram_snapshot;
 
 # The last CPU read: whether the address was mapped, the byte, and the bits the board drives.
 var nrom_cpu_mapped = 0;
@@ -89,6 +106,11 @@ var nrom_prg_ram_bytes = 0;
 
 # The CHR RAM bytes the board would map, zero when CHR ROM is present or validation failed.
 var nrom_chr_ram_bytes = 0;
+
+# Whether the last restore was accepted. The reference raises a range error for a snapshot whose
+# length is not exactly the declared NVRAM size; the port reports the refusal instead and copies
+# nothing, so a mismatched save state cannot half-restore a board.
+var nrom_nvram_loaded = 0;
 
 # Clears every result the validation reports.
 proc nrom_reset_results {
@@ -294,5 +316,67 @@ proc nrom_write_pattern address, value {
     if cartridge_chr_rom_bytes == 0 and nrom_chr_ram_bytes > 0 {
         nrom_chr_ram[($address % nrom_chr_ram_bytes) + 1] = normalize_byte($value);
         nrom_pattern_write_accepted = 1;
+    }
+}
+
+# Copies the declared nonvolatile tail of PRG RAM into the snapshot buffer, leaving the volatile part
+# of the same window out, exactly as get_prg_nvram_snapshot slices it.
+proc nrom_get_prg_nvram_snapshot {
+    local start = nrom_prg_ram_bytes - cartridge_prg_nvram_bytes;
+    local index = 0;
+    delete nrom_prg_nvram_snapshot;
+
+    repeat cartridge_prg_nvram_bytes {
+        add to_number(nrom_prg_ram[start + index + 1]) to nrom_prg_nvram_snapshot;
+        index++;
+    }
+}
+
+# Restores the nonvolatile tail of PRG RAM from the snapshot buffer. The board's write protection is
+# not consulted, because the reference restores declared nonvolatile memory without changing any
+# enable or protection register: a save state is not a CPU write.
+proc nrom_load_prg_nvram_snapshot {
+    local start = nrom_prg_ram_bytes - cartridge_prg_nvram_bytes;
+    local index = 0;
+    nrom_nvram_loaded = 0;
+
+    if length(nrom_prg_nvram_snapshot) == cartridge_prg_nvram_bytes {
+        nrom_nvram_loaded = 1;
+
+        repeat cartridge_prg_nvram_bytes {
+            nrom_prg_ram[start + index + 1] = to_number(nrom_prg_nvram_snapshot[index + 1]);
+            index++;
+        }
+    }
+}
+
+# Copies the declared nonvolatile tail of CHR RAM into the snapshot buffer. A CHR ROM board declares
+# no CHR NVRAM, because the validation rejects CHR ROM beside declared CHR RAM, so its buffer is empty
+# and its CHR ROM is never touched.
+proc nrom_get_chr_nvram_snapshot {
+    local start = nrom_chr_ram_bytes - cartridge_chr_nvram_bytes;
+    local index = 0;
+    delete nrom_chr_nvram_snapshot;
+
+    repeat cartridge_chr_nvram_bytes {
+        add to_number(nrom_chr_ram[start + index + 1]) to nrom_chr_nvram_snapshot;
+        index++;
+    }
+}
+
+# Restores the nonvolatile tail of CHR RAM from the snapshot buffer, without modifying CHR ROM or the
+# volatile part of CHR RAM.
+proc nrom_load_chr_nvram_snapshot {
+    local start = nrom_chr_ram_bytes - cartridge_chr_nvram_bytes;
+    local index = 0;
+    nrom_nvram_loaded = 0;
+
+    if length(nrom_chr_nvram_snapshot) == cartridge_chr_nvram_bytes {
+        nrom_nvram_loaded = 1;
+
+        repeat cartridge_chr_nvram_bytes {
+            nrom_chr_ram[start + index + 1] = to_number(nrom_chr_nvram_snapshot[index + 1]);
+            index++;
+        }
     }
 }

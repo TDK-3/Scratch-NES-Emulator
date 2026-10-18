@@ -150,8 +150,11 @@ export function project_mapper_creation(image_bytes: number, header: readonly nu
 /**
  * Suite 16 ("nrom_memory") runs a board's address windows instead of only validating it. A record
  * carries the same header as suite 15, the payload bytes it wants in PRG ROM and CHR ROM, and a
- * list of CPU and pattern operations; it reports whether the board was accepted, the two memory
- * sizes it maps, and three values per operation.
+ * list of CPU, pattern, and NVRAM operations; it reports whether the board was accepted, the two
+ * memory sizes it maps, and three values per operation. The NVRAM operations drive the board's
+ * snapshot buffer: a get copies the declared nonvolatile tail out and reports its length, a load
+ * restores it and reports whether the buffer held exactly that length, and a read reports one
+ * buffered byte so a record can pin where the tail starts.
  */
 
 /** Operation kinds a suite-16 record can run, in the order the ported handler dispatches them. */
@@ -160,12 +163,24 @@ export const NROM_MEMORY_OPS: readonly { readonly id: number; readonly name: str
     { id: 2, name: "cpu-write" },
     { id: 3, name: "pattern-read" },
     { id: 4, name: "pattern-write" },
+    { id: 5, name: "get-prg-nvram" },
+    { id: 6, name: "load-prg-nvram" },
+    { id: 7, name: "get-chr-nvram" },
+    { id: 8, name: "load-chr-nvram" },
+    { id: 9, name: "read-prg-nvram-byte" },
+    { id: 10, name: "read-chr-nvram-byte" },
 ];
 
 export const NROM_MEMORY_CPU_READ = 1;
 export const NROM_MEMORY_CPU_WRITE = 2;
 export const NROM_MEMORY_PATTERN_READ = 3;
 export const NROM_MEMORY_PATTERN_WRITE = 4;
+export const NROM_MEMORY_GET_PRG_NVRAM = 5;
+export const NROM_MEMORY_LOAD_PRG_NVRAM = 6;
+export const NROM_MEMORY_GET_CHR_NVRAM = 7;
+export const NROM_MEMORY_LOAD_CHR_NVRAM = 8;
+export const NROM_MEMORY_READ_PRG_NVRAM_BYTE = 9;
+export const NROM_MEMORY_READ_CHR_NVRAM_BYTE = 10;
 
 /**
  * Number of fixed inputs before a record's payload pairs and operations: the declared image length,
@@ -281,6 +296,11 @@ export function project_nrom_memory(
     const mapper = create_board(image_bytes, header, prg_prepare, chr_prepare);
     const values: number[] = [1, 0, prg_ram_bytes, chr_ram_bytes];
 
+    // The board's snapshot buffer, as the ported lists hold it: a get refills it from the board and
+    // a load restores from whatever it holds, so a length that does not match is a refused restore.
+    let prg_snapshot: number[] = [];
+    let chr_snapshot: number[] = [];
+
     for (const op of ops) {
         if (op.value < 0 || op.value > 0xff) {
             throw new RangeError(`Operation value ${op.value} is outside the byte range the reference accepts.`);
@@ -308,6 +328,20 @@ export function project_nrom_memory(
 
             mapper.write_pattern(op.address, op.value);
             values.push(mapper.read_pattern(op.address) === op.value ? 1 : 0, 0, 0);
+        } else if (op.kind === NROM_MEMORY_GET_PRG_NVRAM) {
+            prg_snapshot = [...mapper.get_prg_nvram_snapshot()];
+            values.push(1, prg_snapshot.length, 0);
+        } else if (op.kind === NROM_MEMORY_LOAD_PRG_NVRAM) {
+            values.push(load_snapshot(mapper.load_prg_nvram_snapshot.bind(mapper), prg_snapshot), 0, 0);
+        } else if (op.kind === NROM_MEMORY_GET_CHR_NVRAM) {
+            chr_snapshot = [...mapper.get_chr_nvram_snapshot()];
+            values.push(1, chr_snapshot.length, 0);
+        } else if (op.kind === NROM_MEMORY_LOAD_CHR_NVRAM) {
+            values.push(load_snapshot(mapper.load_chr_nvram_snapshot.bind(mapper), chr_snapshot), 0, 0);
+        } else if (op.kind === NROM_MEMORY_READ_PRG_NVRAM_BYTE) {
+            values.push(1, prg_snapshot[op.address] ?? 0, 0);
+        } else if (op.kind === NROM_MEMORY_READ_CHR_NVRAM_BYTE) {
+            values.push(1, chr_snapshot[op.address] ?? 0, 0);
         } else {
             throw new RangeError(`Unknown memory operation kind ${op.kind}.`);
         }
@@ -390,6 +424,24 @@ export function project_cartridge_bus(
     return values;
 }
 
+/**
+ * Restores one snapshot buffer into a board and reports whether the reference accepted it. A buffer
+ * whose length is not exactly the declared NVRAM size raises a range error there; the ported boards
+ * report the refusal in their `*_nvram_loaded` flag instead and copy nothing.
+ */
+function load_snapshot(load: (snapshot: Uint8Array) => void, snapshot: readonly number[]): number {
+    try {
+        load(Uint8Array.from(snapshot));
+        return 1;
+    } catch (error) {
+        if (!(error instanceof RangeError)) {
+            throw error;
+        }
+
+        return 0;
+    }
+}
+
 /** Values reported before the per-operation results: ok, board error code, and mapped PRG RAM bytes. */
 export const MMC3_FIXED_VALUE_COUNT = 3;
 
@@ -418,6 +470,12 @@ export const MMC3_OPS: readonly { readonly id: number; readonly name: string }[]
     { id: 6, name: "observe-ppu-access" },
     { id: 7, name: "clock-ppu-dot" },
     { id: 8, name: "report-irq" },
+    { id: 9, name: "get-prg-nvram" },
+    { id: 10, name: "load-prg-nvram" },
+    { id: 11, name: "get-chr-nvram" },
+    { id: 12, name: "load-chr-nvram" },
+    { id: 13, name: "read-prg-nvram-byte" },
+    { id: 14, name: "read-chr-nvram-byte" },
 ];
 
 export const MMC3_CPU_READ = 1;
@@ -428,6 +486,12 @@ export const MMC3_REPORT_MIRRORING = 5;
 export const MMC3_OBSERVE_PPU_ACCESS = 6;
 export const MMC3_CLOCK_PPU_DOT = 7;
 export const MMC3_REPORT_IRQ = 8;
+export const MMC3_GET_PRG_NVRAM = 9;
+export const MMC3_LOAD_PRG_NVRAM = 10;
+export const MMC3_GET_CHR_NVRAM = 11;
+export const MMC3_LOAD_CHR_NVRAM = 12;
+export const MMC3_READ_PRG_NVRAM_BYTE = 13;
+export const MMC3_READ_CHR_NVRAM_BYTE = 14;
 
 /** The PPU access kinds a suite-19 record can name, matching the ported `mmc3_ppu_access` enum. */
 export const MMC3_PPU_ACCESSES: readonly { readonly id: number; readonly name: string }[] = [
@@ -520,6 +584,11 @@ export function project_mmc3_memory(
     // records that wrap a CHR bank pin it.
     const values: number[] = [1, 0, probe_prg_ram_bytes(probe_mapper)];
 
+    // The board's snapshot buffer, as the ported lists hold it: a get refills it from the board and
+    // a load restores from whatever it holds, so a length that does not match is a refused restore.
+    let prg_snapshot: number[] = [];
+    let chr_snapshot: number[] = [];
+
     for (const op of ops) {
         if (op.value < 0 || op.value > 0xff) {
             throw new RangeError(`Operation value ${op.value} is outside the byte range the reference accepts.`);
@@ -576,6 +645,20 @@ export function project_mmc3_memory(
             values.push(1, 0, 0);
         } else if (op.kind === MMC3_REPORT_IRQ) {
             values.push(1, mapper.get_irq_line_asserted() ? 1 : 0, 0);
+        } else if (op.kind === MMC3_GET_PRG_NVRAM) {
+            prg_snapshot = [...mapper.get_prg_nvram_snapshot()];
+            values.push(1, prg_snapshot.length, 0);
+        } else if (op.kind === MMC3_LOAD_PRG_NVRAM) {
+            values.push(load_snapshot(mapper.load_prg_nvram_snapshot.bind(mapper), prg_snapshot), 0, 0);
+        } else if (op.kind === MMC3_GET_CHR_NVRAM) {
+            chr_snapshot = [...mapper.get_chr_nvram_snapshot()];
+            values.push(1, chr_snapshot.length, 0);
+        } else if (op.kind === MMC3_LOAD_CHR_NVRAM) {
+            values.push(load_snapshot(mapper.load_chr_nvram_snapshot.bind(mapper), chr_snapshot), 0, 0);
+        } else if (op.kind === MMC3_READ_PRG_NVRAM_BYTE) {
+            values.push(1, prg_snapshot[op.address] ?? 0, 0);
+        } else if (op.kind === MMC3_READ_CHR_NVRAM_BYTE) {
+            values.push(1, chr_snapshot[op.address] ?? 0, 0);
         } else {
             throw new RangeError(`Unknown MMC3 operation kind ${op.kind}.`);
         }

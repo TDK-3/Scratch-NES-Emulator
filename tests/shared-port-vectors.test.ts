@@ -56,10 +56,16 @@ import {
     MMC3_CPU_WRITE,
     MMC3_FIXED_INPUT_COUNT,
     MMC3_FIXED_VALUE_COUNT,
+    MMC3_GET_CHR_NVRAM,
+    MMC3_GET_PRG_NVRAM,
+    MMC3_LOAD_CHR_NVRAM,
+    MMC3_LOAD_PRG_NVRAM,
     MMC3_OBSERVE_PPU_ACCESS,
     MMC3_OPS,
     MMC3_PATTERN_READ,
     MMC3_PPU_ACCESSES,
+    MMC3_READ_CHR_NVRAM_BYTE,
+    MMC3_READ_PRG_NVRAM_BYTE,
     MMC3_REPORT_IRQ,
     MMC3_REPORT_MIRRORING,
     MMC3_VALUES_PER_OP,
@@ -76,8 +82,15 @@ import {
     NROM_MEMORY_CPU_WRITE,
     NROM_MEMORY_FIXED_INPUT_COUNT,
     NROM_MEMORY_FIXED_VALUE_COUNT,
+    NROM_MEMORY_GET_CHR_NVRAM,
+    NROM_MEMORY_GET_PRG_NVRAM,
+    NROM_MEMORY_LOAD_CHR_NVRAM,
+    NROM_MEMORY_LOAD_PRG_NVRAM,
     NROM_MEMORY_OPS,
     NROM_MEMORY_PATTERN_READ,
+    NROM_MEMORY_PATTERN_WRITE,
+    NROM_MEMORY_READ_CHR_NVRAM_BYTE,
+    NROM_MEMORY_READ_PRG_NVRAM_BYTE,
     NROM_MEMORY_VALUES_PER_OP,
     project_nrom_memory,
     type NromMemoryOp,
@@ -886,7 +899,6 @@ for_each_vector("nrom_memory", (vector) => {
         const value = actual[at + 1] ?? 0;
         const driven = actual[at + 2] ?? 0;
         assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
-        assert.ok(value >= 0 && value <= 0xff, `Operation ${index} reports a byte.`);
 
         if (op?.kind === NROM_MEMORY_CPU_READ) {
             assert.equal(driven, taken === 1 ? 0xff : 0, "a mapped CPU read drives every bit");
@@ -895,8 +907,20 @@ for_each_vector("nrom_memory", (vector) => {
             assert.equal(driven, 0);
         } else if (op?.kind === NROM_MEMORY_PATTERN_READ) {
             assert.equal(taken, 1, "an accepted board always answers a pattern read");
-        } else {
+        } else if (op?.kind === NROM_MEMORY_PATTERN_WRITE) {
             assert.equal(value, 0, "a pattern write reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_GET_PRG_NVRAM || op?.kind === NROM_MEMORY_GET_CHR_NVRAM) {
+            assert.equal(taken, 1, "a snapshot always succeeds");
+            assert.ok(value >= 0, "a snapshot reports its length");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_LOAD_PRG_NVRAM || op?.kind === NROM_MEMORY_LOAD_CHR_NVRAM) {
+            assert.ok(taken === 0 || taken === 1, "a restore reports whether it ran");
+            assert.equal(value, 0, "a restore reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_READ_PRG_NVRAM_BYTE || op?.kind === NROM_MEMORY_READ_CHR_NVRAM_BYTE) {
+            assert.equal(taken, 1, "a snapshot read always succeeds");
+            assert.ok(value >= 0 && value <= 0xff, "a snapshot byte is in range");
             assert.equal(driven, 0);
         }
     }
@@ -1037,7 +1061,7 @@ for_each_vector("mmc3", (vector) => {
         const value = actual[at + 1] ?? 0;
         const driven = actual[at + 2] ?? 0;
         assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
-        assert.ok(value >= 0 && value <= 0xff, `Operation ${index} reports a byte.`);
+        assert.ok(value >= 0, `Operation ${index} reports a non-negative value.`);
 
         if (op?.kind === MMC3_CPU_READ) {
             assert.equal(driven, taken === 1 ? 0xff : 0, "a mapped CPU read drives every bit");
@@ -1054,6 +1078,30 @@ for_each_vector("mmc3", (vector) => {
         } else if (op?.kind === MMC3_REPORT_MIRRORING) {
             assert.equal(taken, 1);
             assert.ok(value >= 1 && value <= 3, `Operation ${index} reports a mirroring id.`);
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_OBSERVE_PPU_ACCESS) {
+            assert.ok(taken === 0 || taken === 1, "an observation reports whether it was in range");
+            assert.equal(value, 0, "an observation reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_CLOCK_PPU_DOT) {
+            assert.equal(taken, 1, "a dot clock always succeeds");
+            assert.equal(value, 0, "a dot clock reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_REPORT_IRQ) {
+            assert.equal(taken, 1, "an IRQ report always succeeds");
+            assert.ok(value === 0 || value === 1, `Operation ${index} reports the IRQ line.`);
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_GET_PRG_NVRAM || op?.kind === MMC3_GET_CHR_NVRAM) {
+            assert.equal(taken, 1, "a snapshot always succeeds");
+            assert.ok(value >= 0, "a snapshot reports its length");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_LOAD_PRG_NVRAM || op?.kind === MMC3_LOAD_CHR_NVRAM) {
+            assert.ok(taken === 0 || taken === 1, "a restore reports whether it ran");
+            assert.equal(value, 0, "a restore reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_READ_PRG_NVRAM_BYTE || op?.kind === MMC3_READ_CHR_NVRAM_BYTE) {
+            assert.equal(taken, 1, "a snapshot read always succeeds");
+            assert.ok(value >= 0 && value <= 0xff, "a snapshot byte is in range");
             assert.equal(driven, 0);
         } else {
             assert.equal(value, 0, "a pattern write reports no byte");
