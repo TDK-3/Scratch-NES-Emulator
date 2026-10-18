@@ -1053,6 +1053,9 @@ export class GoboscriptNromMapper {
     pattern_write_accepted = 0;
     nvram_loaded = 0;
 
+    /** Mirrors the cartridge_mirroring global the PPU bus reads for NROM nametable routing. */
+    mirroring = 1;
+
     /** Mirrors of the two snapshot buffers the ported board copies its nonvolatile tails through. */
     readonly prg_nvram_snapshot: number[] = [];
     readonly chr_nvram_snapshot: number[] = [];
@@ -3060,5 +3063,391 @@ export class GoboscriptCpuOpcodeDecoder {
             this.official,
             this.error,
         ];
+    }
+}
+
+// ---- PPU bus mirror ----
+
+const PPU_ADDRESS_SPACE = 0x4000;
+const PPU_PATTERN_END = 0x2000;
+const PPU_PALETTE_START = 0x3f00;
+const PPU_NAMETABLE_MIRROR_START = 0x3000;
+const PPU_NAMETABLE_PAGE = 0x400;
+const PPU_PALETTE_MASK = 0x1f;
+const PPU_PALETTE_COLOR_MASK = 0x3f;
+
+/**
+ * Mirror of `scratch/src/ppu_bus.gs` in integer-only TypeScript. Uses arithmetic instead of
+ * bitwise operators, matching GoboScript's floored modulo and floor-division semantics.
+ */
+export class GoboscriptPpuBus {
+    readonly nametable_ram = new Uint8Array(4096);
+    readonly palette_ram = new Uint8Array(32);
+    readonly oam = new Uint8Array(256);
+    mapper_kind = 0;
+    nrom_mirror: GoboscriptNromMapper | null = null;
+    mmc3_mirror: GoboscriptMmc3Mapper | null = null;
+    read_value = 0;
+    oam_read_value = 0;
+
+    attach_nrom(mirror: GoboscriptNromMapper): void {
+        this.mapper_kind = 1;
+        this.nrom_mirror = mirror;
+        this.mmc3_mirror = null;
+    }
+
+    attach_mmc3(mirror: GoboscriptMmc3Mapper): void {
+        this.mapper_kind = 2;
+        this.mmc3_mirror = mirror;
+        this.nrom_mirror = null;
+    }
+
+    detach(): void {
+        this.mapper_kind = 0;
+        this.nrom_mirror = null;
+        this.mmc3_mirror = null;
+    }
+
+    get_mirroring(): number {
+        if (this.mapper_kind === 1 && this.nrom_mirror) {
+            return this.nrom_mirror.mirroring;
+        }
+
+        if (this.mapper_kind === 2 && this.mmc3_mirror) {
+            return this.mmc3_mirror.mirroring;
+        }
+
+        return 1;
+    }
+
+    normalize_address(address: number): number {
+        return ((address % PPU_ADDRESS_SPACE) + PPU_ADDRESS_SPACE) % PPU_ADDRESS_SPACE;
+    }
+
+    map_nametable(address: number): number {
+        let base = address;
+
+        if (base >= PPU_NAMETABLE_MIRROR_START) {
+            base -= 0x1000;
+        }
+
+        const logical_table = Math.floor((base - PPU_PATTERN_END) / PPU_NAMETABLE_PAGE);
+        const page_offset = (base - PPU_PATTERN_END) % PPU_NAMETABLE_PAGE;
+        const mirroring = this.get_mirroring();
+        let physical_table: number;
+
+        if (mirroring === 2) {
+            physical_table = ((logical_table % 2) + 2) % 2;
+        } else if (mirroring === 1) {
+            physical_table = Math.floor(logical_table / 2);
+        } else if (mirroring === 3) {
+            physical_table = logical_table;
+        } else {
+            physical_table = Math.floor(logical_table / 2);
+        }
+
+        return physical_table * PPU_NAMETABLE_PAGE + page_offset;
+    }
+
+    map_palette(address: number): number {
+        let index = address & PPU_PALETTE_MASK;
+
+        if (index >= 0x10 && index % 4 === 0) {
+            index -= 0x10;
+        }
+
+        return index;
+    }
+
+    read_ppu(address: number): number {
+        const ppu_address = this.normalize_address(address);
+        this.read_value = 0;
+
+        if (ppu_address < PPU_PATTERN_END) {
+            if (this.mapper_kind === 1 && this.nrom_mirror) {
+                this.nrom_mirror.read_pattern(ppu_address);
+                this.read_value = this.nrom_mirror.pattern_value;
+            } else if (this.mapper_kind === 2 && this.mmc3_mirror) {
+                this.mmc3_mirror.read_pattern(ppu_address);
+                this.read_value = this.mmc3_mirror.pattern_value;
+            }
+
+            return this.read_value;
+        }
+
+        if (ppu_address < PPU_PALETTE_START) {
+            const nt_index = this.map_nametable(ppu_address);
+            this.read_value = this.nametable_ram[nt_index] ?? 0;
+
+            return this.read_value;
+        }
+
+        const pal_index = this.map_palette(ppu_address);
+        this.read_value = this.palette_ram[pal_index] ?? 0;
+
+        return this.read_value;
+    }
+
+    write_ppu(address: number, value: number): void {
+        const ppu_address = this.normalize_address(address);
+        const byte_value = normalize_byte(value);
+
+        if (ppu_address < PPU_PATTERN_END) {
+            if (this.mapper_kind === 1 && this.nrom_mirror) {
+                this.nrom_mirror.write_pattern(ppu_address, byte_value);
+            } else if (this.mapper_kind === 2 && this.mmc3_mirror) {
+                this.mmc3_mirror.write_pattern(ppu_address, byte_value);
+            }
+
+            return;
+        }
+
+        if (ppu_address < PPU_PALETTE_START) {
+            const nt_index = this.map_nametable(ppu_address);
+            this.nametable_ram[nt_index] = byte_value;
+
+            return;
+        }
+
+        const pal_index = this.map_palette(ppu_address);
+        this.palette_ram[pal_index] = byte_value & PPU_PALETTE_COLOR_MASK;
+    }
+
+    read_oam(address: number): number {
+        const numeric = normalize_byte(address);
+        this.oam_read_value = this.oam[numeric] ?? 0;
+
+        return this.oam_read_value;
+    }
+
+    write_oam(address: number, value: number): void {
+        const numeric = normalize_byte(address);
+        this.oam[numeric] = normalize_byte(value);
+    }
+
+    observe_ppu_address(address: number): void {
+        const ppu_address = this.normalize_address(address);
+
+        if (this.mapper_kind === 2 && this.mmc3_mirror) {
+            this.mmc3_mirror.observe_ppu_address(ppu_address);
+        }
+    }
+
+    clock_ppu_dot(): void {
+        if (this.mapper_kind === 2 && this.mmc3_mirror) {
+            this.mmc3_mirror.clock_ppu_dot();
+        }
+    }
+}
+
+// ---- PPU 2C02 mirror ----
+
+const PPU_DOTS_PER_SCANLINE = 341;
+const PPU_PRE_RENDER_SCANLINE = 261;
+const PPU_VBLANK_FIRST_SCANLINE = 241;
+const PPU_VBLANK_START_DOT = 1;
+const PPU_STATUS_FLAGS_MASK = 0xe0;
+const PPU_VBLANK_FLAG = 0x80;
+const PPU_CONTROL_NMI_ENABLE = 0x80;
+
+/**
+ * Mirror of `scratch/src/ppu_2c02.gs` timing and register I/O in integer-only TypeScript.
+ * Covers the subset that the shared suite-5 vectors exercise: PPUCTRL, PPUSTATUS, timing,
+ * and NMI edge detection.
+ */
+export class GoboscriptPpu2C02 {
+    readonly bus: GoboscriptPpuBus;
+    control_register = 0;
+    mask_register = 0;
+    status_register = 0;
+    oam_address = 0;
+    vram_address = 0;
+    temporary_vram_address = 0;
+    fine_x_scroll = 0;
+    write_toggle = 0;
+    read_buffer = 0;
+    io_latch = 0;
+    suppress_vblank_start = 0;
+    scanline = PPU_PRE_RENDER_SCANLINE;
+    dot = 0;
+    frame_number = 0;
+    odd_frame = 0;
+    nmi_output = 0;
+    nmi_edge_pending = 0;
+
+    constructor(bus: GoboscriptPpuBus) {
+        this.bus = bus;
+    }
+
+    reset(): void {
+        this.control_register = 0;
+        this.mask_register = 0;
+        this.status_register = 0;
+        this.oam_address = 0;
+        this.vram_address = 0;
+        this.temporary_vram_address = 0;
+        this.fine_x_scroll = 0;
+        this.write_toggle = 0;
+        this.read_buffer = 0;
+        this.io_latch = 0;
+        this.suppress_vblank_start = 0;
+        this.scanline = PPU_PRE_RENDER_SCANLINE;
+        this.dot = 0;
+        this.frame_number = 0;
+        this.odd_frame = 0;
+        this.nmi_output = 0;
+        this.nmi_edge_pending = 0;
+    }
+
+    set_vblank_flag(active: boolean): void {
+        if (active) {
+            this.status_register |= PPU_VBLANK_FLAG;
+        } else {
+            this.status_register &= ~PPU_VBLANK_FLAG;
+        }
+
+        this.status_register &= PPU_STATUS_FLAGS_MASK;
+        this.refresh_nmi_output();
+    }
+
+    refresh_nmi_output(): void {
+        const next =
+            (this.control_register & PPU_CONTROL_NMI_ENABLE) !== 0 &&
+            (this.status_register & PPU_VBLANK_FLAG) !== 0;
+
+        if (next && !this.nmi_output) {
+            this.nmi_edge_pending = 1;
+        }
+
+        this.nmi_output = next ? 1 : 0;
+    }
+
+    write_cpu_register(register_index: number, value: number): void {
+        const byte_value = normalize_byte(value);
+        this.io_latch = byte_value;
+
+        if (register_index === 0) {
+            this.control_register = byte_value;
+            const nt_bits = (byte_value & 0x03) << 10;
+            this.temporary_vram_address = (this.temporary_vram_address & 0x73ff) | nt_bits;
+            this.refresh_nmi_output();
+        } else if (register_index === 1) {
+            this.mask_register = byte_value;
+        } else if (register_index === 3) {
+            this.oam_address = byte_value;
+        } else if (register_index === 5) {
+            if (this.write_toggle === 0) {
+                this.fine_x_scroll = byte_value & 0x07;
+                this.temporary_vram_address = (this.temporary_vram_address & ~0x1f) | ((byte_value >>> 3) & 0x1f);
+                this.write_toggle = 1;
+            } else {
+                const fine_y = (byte_value & 0x07) << 12;
+                const coarse_y = ((byte_value & 0xf8) >>> 3) << 5;
+                this.temporary_vram_address = (this.temporary_vram_address & 0x0c1f) | fine_y | coarse_y;
+                this.write_toggle = 0;
+            }
+        } else if (register_index === 6) {
+            if (this.write_toggle === 0) {
+                this.temporary_vram_address = (this.temporary_vram_address & 0x00ff) | ((byte_value & 0x3f) << 8);
+                this.write_toggle = 1;
+            } else {
+                this.temporary_vram_address = (this.temporary_vram_address & 0x7f00) | byte_value;
+                this.vram_address = this.temporary_vram_address;
+                this.write_toggle = 0;
+                this.bus.observe_ppu_address(this.vram_address & 0x3fff);
+            }
+        } else if (register_index === 7) {
+            this.bus.write_ppu(this.vram_address & 0x3fff, byte_value);
+            const increment = (this.control_register & 0x04) === 0 ? 1 : 32;
+            this.vram_address = (this.vram_address + increment) & 0x7fff;
+            this.bus.observe_ppu_address(this.vram_address & 0x3fff);
+        }
+    }
+
+    read_status_register(): number {
+        if (this.scanline === PPU_VBLANK_FIRST_SCANLINE && this.dot <= PPU_VBLANK_START_DOT) {
+            this.suppress_vblank_start = 1;
+        }
+
+        const value = (this.status_register & PPU_STATUS_FLAGS_MASK) | (this.io_latch & 0x1f);
+        this.status_register &= ~PPU_VBLANK_FLAG;
+        this.write_toggle = 0;
+        this.io_latch = value;
+        this.refresh_nmi_output();
+
+        return value;
+    }
+
+    get_status_register(): number {
+        return this.status_register & PPU_STATUS_FLAGS_MASK;
+    }
+
+    take_nmi_edge(): number {
+        const edge = this.nmi_edge_pending;
+        this.nmi_edge_pending = 0;
+
+        return edge;
+    }
+
+    is_rendering_enabled(): boolean {
+        return (this.mask_register & 0x18) !== 0;
+    }
+
+    clock_ppu_dot(): void {
+        this.bus.clock_ppu_dot();
+
+        if (this.scanline === PPU_VBLANK_FIRST_SCANLINE && this.dot === PPU_VBLANK_START_DOT) {
+            if (this.suppress_vblank_start) {
+                this.suppress_vblank_start = 0;
+            } else {
+                this.set_vblank_flag(true);
+            }
+        }
+
+        if (this.scanline === PPU_PRE_RENDER_SCANLINE && this.dot === 1) {
+            this.set_vblank_flag(false);
+        }
+
+        this.advance_dot();
+    }
+
+    private advance_dot(): void {
+        const rendering = this.is_rendering_enabled();
+
+        if (
+            this.scanline === PPU_PRE_RENDER_SCANLINE &&
+            this.dot === 339 &&
+            this.odd_frame === 1 &&
+            rendering
+        ) {
+            this.scanline = 0;
+            this.dot = 0;
+
+            return;
+        }
+
+        if (this.dot < PPU_DOTS_PER_SCANLINE - 1) {
+            this.dot += 1;
+
+            return;
+        }
+
+        this.dot = 0;
+
+        if (this.scanline === 260) {
+            this.scanline = PPU_PRE_RENDER_SCANLINE;
+            this.frame_number += 1;
+            this.odd_frame = this.frame_number & 1;
+
+            return;
+        }
+
+        if (this.scanline === PPU_PRE_RENDER_SCANLINE) {
+            this.scanline = 0;
+
+            return;
+        }
+
+        this.scanline += 1;
     }
 }

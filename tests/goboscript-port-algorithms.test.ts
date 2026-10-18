@@ -49,6 +49,8 @@ import {
 import { make_absent_bus_devices } from "./support/recording_cpu_bus.js";
 import { Mmc3Mapper } from "../src/nes/cartridge/mapper_004.js";
 import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
+import { Ppu2C02 } from "../src/nes/ppu/ppu_2c02.js";
+import type { PpuMapperPort } from "../src/nes/ppu/ppu_bus.js";
 import {
     MMC3_FIXED_INPUT_COUNT,
     MMC3_FIXED_VALUE_COUNT,
@@ -3042,4 +3044,137 @@ test("the mirrored cartridge IRQ line stays quiet without an MMC3 board", () => 
     const unattached = new ported.GoboscriptCpuBus();
     unattached.cartridge_kind = ported.MAPPER_KIND.MMC3;
     assert.equal(unattached.board_irq_line(), 0, "an MMC3 window with no board drives nothing");
+});
+
+function make_empty_ppu_mapper_port(): PpuMapperPort {
+    return {
+        read_pattern: () => 0,
+        write_pattern: () => {},
+        observe_ppu_access: () => {},
+        clock_ppu_dot: () => {},
+        get_nametable_mirroring: () => "horizontal" as const,
+    };
+}
+
+test("the mirrored PPU bus routes nametable, palette, and OAM the same way as the reference", () => {
+    const mirror_bus = new ported.GoboscriptPpuBus();
+    const reference_mapper = make_empty_ppu_mapper_port();
+    const reference_bus = new PpuMemoryBus(reference_mapper);
+
+    // Nametable write/read with horizontal mirroring (default)
+    mirror_bus.write_ppu(0x2000, 0x42);
+    reference_bus.write_ppu(0x2000, 0x42);
+    assert.equal(mirror_bus.read_ppu(0x2000), reference_bus.read_ppu(0x2000));
+    // Horizontal mirroring: $2400 maps to the same physical byte as $2000
+    assert.equal(mirror_bus.read_ppu(0x2400), reference_bus.read_ppu(0x2400));
+
+    // Palette write/read with universal background alias
+    mirror_bus.write_ppu(0x3f00, 0x3f);
+    reference_bus.write_ppu(0x3f00, 0x3f);
+    assert.equal(mirror_bus.read_ppu(0x3f00), reference_bus.read_ppu(0x3f00));
+    // $3f10 aliases $3f00 (universal background)
+    assert.equal(mirror_bus.read_ppu(0x3f10), reference_bus.read_ppu(0x3f10));
+
+    // Palette write mask (6-bit)
+    mirror_bus.write_ppu(0x3f01, 0xff);
+    reference_bus.write_ppu(0x3f01, 0xff);
+    assert.equal(mirror_bus.read_ppu(0x3f01), reference_bus.read_ppu(0x3f01));
+
+    // OAM write/read
+    mirror_bus.write_oam(0x00, 0xab);
+    reference_bus.write_oam(0x00, 0xab);
+    assert.equal(mirror_bus.read_oam(0x00), reference_bus.read_oam(0x00));
+
+    // Address wrapping (14-bit mask)
+    mirror_bus.write_ppu(0x6000, 0x12);
+    reference_bus.write_ppu(0x6000, 0x12);
+    assert.equal(mirror_bus.read_ppu(0x2000), reference_bus.read_ppu(0x2000));
+});
+
+test("the mirrored PPU bus routes pattern access through the attached NROM mirror", () => {
+    const nrom = new ported.GoboscriptNromMapper();
+    nrom.mapper_id = 0;
+    nrom.prg_rom_bytes = 16384;
+    nrom.chr_rom_bytes = 0;
+    nrom.chr_ram_bytes = 8192;
+    nrom.mirroring = 1;
+    nrom.validate();
+    assert.equal(nrom.ok, 1);
+
+    const bus = new ported.GoboscriptPpuBus();
+    bus.attach_nrom(nrom);
+    assert.equal(bus.get_mirroring(), 1);
+
+    // Pattern read through NROM mirror (CHR RAM is initially zero)
+    bus.read_ppu(0x0000);
+    assert.equal(bus.read_value, 0, "CHR RAM is initially zero");
+
+    // Write to CHR RAM and read back
+    bus.write_ppu(0x1000, 0xaa);
+    bus.read_ppu(0x1000);
+    assert.equal(bus.read_value, 0xaa);
+});
+
+test("the mirrored PPU 2C02 clocks vblank and NMI edges like the reference", () => {
+    const mirror_bus = new ported.GoboscriptPpuBus();
+    const mirror_ppu = new ported.GoboscriptPpu2C02(mirror_bus);
+    const reference_bus = new PpuMemoryBus(make_empty_ppu_mapper_port());
+    const reference_ppu = new Ppu2C02(reference_bus);
+
+    // Write PPUCTRL with NMI enable
+    mirror_ppu.write_cpu_register(0, 0x80);
+    reference_ppu.write_cpu_register(0, 0x80);
+
+    // Clock to vblank (scanline 241, dot 1):
+    // Pre-render: 341 dots, scanlines 0-240: 241*341=82181 dots
+    // Total to dot 1 of scanline 241: 341 + 82181 + 1 = 82523
+    const dots_to_vblank = 82523;
+
+    for (let i = 0; i < dots_to_vblank; i++) {
+        mirror_ppu.clock_ppu_dot();
+        reference_ppu.clock_ppu_dot();
+    }
+
+    // One more dot puts us at the vblank event
+    mirror_ppu.clock_ppu_dot();
+    reference_ppu.clock_ppu_dot();
+
+    assert.equal(mirror_ppu.get_status_register(), reference_ppu.get_status_register());
+    assert.equal(mirror_ppu.get_status_register() & 0x80, 0x80, "vblank flag is set");
+    assert.equal(mirror_ppu.take_nmi_edge(), 1, "NMI edge consumed");
+    assert.equal(reference_ppu.take_nmi_edge(), true);
+    assert.equal(mirror_ppu.take_nmi_edge(), 0, "edge already consumed");
+});
+
+test("the mirrored PPU 2C02 suppresses vblank when PPUSTATUS is read early", () => {
+    const mirror_bus = new ported.GoboscriptPpuBus();
+    const mirror_ppu = new ported.GoboscriptPpu2C02(mirror_bus);
+    const reference_bus = new PpuMemoryBus(make_empty_ppu_mapper_port());
+    const reference_ppu = new Ppu2C02(reference_bus);
+
+    mirror_ppu.write_cpu_register(0, 0x80);
+    reference_ppu.write_cpu_register(0, 0x80);
+
+    // Clock to scanline 241 dot 0 (one dot before vblank)
+    const dots_to_241_0 = 341 + 241 * 341;
+
+    for (let i = 0; i < dots_to_241_0; i++) {
+        mirror_ppu.clock_ppu_dot();
+        reference_ppu.clock_ppu_dot();
+    }
+
+    // Read PPUSTATUS at dot 0 of scanline 241 (before vblank event at dot 1)
+    const mirror_status = mirror_ppu.read_status_register();
+    const reference_status = reference_ppu.read_cpu_register(2, 0);
+
+    // Both should suppress the vblank flag
+    assert.equal(mirror_ppu.suppress_vblank_start, 1);
+
+    // Clock one more dot (the vblank event dot)
+    mirror_ppu.clock_ppu_dot();
+    reference_ppu.clock_ppu_dot();
+
+    // Vblank should be suppressed
+    assert.equal(mirror_ppu.get_status_register() & 0x80, 0, "vblank suppressed");
+    assert.equal(mirror_ppu.take_nmi_edge(), 0, "no NMI edge");
 });
