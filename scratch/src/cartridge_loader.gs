@@ -7,8 +7,9 @@
 # nrom_error_code global the validation reports.
 #
 # Both ported boards attach: an NROM image and an MMC3 image, and an attached MMC3 image raises a
-# scanline IRQ through cartridge_board_irq_line. The NVRAM snapshots are not ported yet, so a
-# battery-backed image keeps its RAM for the session only.
+# scanline IRQ through cartridge_board_irq_line. The NVRAM snapshot procs route through the
+# attached board, so battery-backed images persist their PRG and CHR NVRAM when the caller
+# saves and restores through the four snapshot procs.
 
 %include src/rom_loader
 %include src/mapper_000

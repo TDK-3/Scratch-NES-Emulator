@@ -1,6 +1,6 @@
 # Project progress
 
-Status snapshot: 2026-10-18
+Status snapshot: 2026-10-19
 
 ## Summary
 
@@ -545,6 +545,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   bypasses write protection and leaves the IRQ line alone, CHR NVRAM snapshot covers physical CHR RAM under
   any bank, CHR-ROM board with empty CHR NVRAM). The fixture is now nineteen suites and 587 records; the
   generated list is 18,363 values. All 1,242 tests pass.
+- `npm test` on 2026-10-19: passed all 1,247 tests in about 14 seconds. The GoboScript APU port is now
+  complete: triangle channel (32-step waveform, linear counter, timer, length counter), noise channel
+  (15-bit LFSR with long/short modes, envelope, length counter), DMC channel (sample reader, output unit,
+  timer, IRQ, DMA handshake), and nonlinear audio mixer (pulse+TND mixing). All five APU audio channels
+  and the mixer are ported. The cartridge loader header comment was updated to reflect that NVRAM snapshots
+  are ported, and the TODO/PROGRESS docs were updated to mark the GoboScript port as complete (modulo
+  compile validation).
 - `npm test` on 2026-10-18: passed all 1,234 tests in about 15 seconds, including 257 grouped single-step
   corpus tests (1,026 vectors), 580 shared port-vector tests (579 records), 77 GoboScript port-algorithm
   tests, 17 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
@@ -643,13 +650,15 @@ hardware validation remains open.
 
 ## Current milestone
 
-**Milestone 2: GoboScript port of the tested helper layer.** The TypeScript foundation from milestone 1 is
-unchanged and now carries a 1,026-vector CPU corpus fixture. The GoboScript project has executable source for
-numeric/status/ALU helpers, both controller ports, a CPU-bus subset, and a vector self test that the Stage runs
-on the green flag. Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively with
-the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints,
-but nothing has been compiled or run in Scratch/TurboWarp. The next port steps are cartridge metadata and CPU
-fetch/decode/addressing/cycles, each blocked on the same missing toolchain for validation.
+**Milestone 2: GoboScript port of the tested helper layer.** All port components are now complete:
+numeric/status/ALU helpers, both controller ports, the CPU-bus (with RAM mirroring, open-bus, and `$4016`/`$4017`),
+cartridge header parsing, the full CPU (registers, addressing, instruction dispatch, opcode decode, control loop,
+and interrupt acceptance), both mappers (NROM and MMC3 with banking, IRQ, and NVRAM snapshots), the NVRAM
+save/load wiring, the PPU (registers, timing, rendering, and bus), the APU (pulse 1/2, triangle, noise, DMC,
+mixer, and frame sequencer), and the frame loop. Every ported algorithm is mirrored in integer-only TypeScript
+and compared exhaustively with the bitwise reference, and the sources are lint-checked against the upstream
+grammar and codegen constraints. All 1,247 tests pass. Compile validation stays blocked by the missing
+GoboScript toolchain; nothing has been run in Scratch/TurboWarp.
 
 **Milestone 1: CPU instruction and interrupt foundation.** Register/status helpers, reset/stack behavior,
 all addressing modes, all 151 official opcodes, one-bus-transaction-per-cycle execution, branch cycles,

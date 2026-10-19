@@ -392,11 +392,11 @@ separate from TypeScript success.
       checks, banking registers, both bank modes, PRG RAM protection, mirroring control, payload copy, CPU
       and pattern windows, IRQ registers, and PPU A12 observation with its ten-dot low filter
       (`mapper_004.gs`), which the loader attaches and whose IRQ line it reports, so the embedded MMC3 image
-      drives the bus and can raise a scanline IRQ; PPU, APU, and OAM DMA still behave as absent devices on
-      the bus. Not started: the save/load wiring that would actually drive the snapshot buffers from outside
-      the board (the procs themselves are ported), PPU rendering, which is also what would report PPU
-      addresses and clock PPU dots to the ported A12 filter, APU channels, DMA stalls, and the frame-loop
-      yield policy.
+      drives the bus and can raise a scanline IRQ. All port components are complete: the CPU, bus,
+      both mappers (NROM and MMC3), PPU (registers, timing, rendering, bus), APU (pulse 1/2, triangle,
+      noise, DMC, mixer, frame sequencer), both controller ports, OAM DMA, the frame loop, and the
+      NVRAM save/load wiring that routes snapshot procs through the attached board. Compile validation
+      stays blocked by the missing GoboScript toolchain.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,
