@@ -236,8 +236,9 @@ button-state setters, strobe/latch behavior, NES button order, and D0-only reads
 clocks and connects APU IRQs to the CPU. `src/nes/browser/` adapts those inputs and APU samples to browser
 keyboard, filtered audio blocks, and Web Audio APIs, and its `rom_string_page.ts` drives the ROM string
 converter page (`web/rom_string.html`) from `src/nes/cartridge/rom_text.ts`, the host-independent encoder and
-decoder for the decimal byte text the GoboScript port loads at runtime. ROM-level timing validation, calibrated analog behavior,
-live browser playback, and the separate TurboWarp adapters remain future work. Four Score and Zapper are deferred
+decoder for the packed hexadecimal byte text the GoboScript port loads at runtime. ROM-level timing
+validation, calibrated analog behavior, live browser playback, and the separate TurboWarp adapters remain
+future work. Four Score and Zapper are deferred
 but planned for full NES support; mapper
 expansion audio will be added with each compatible mapper. Famicom-only expansion-port devices are outside the
 NES target.
@@ -267,7 +268,7 @@ toolchain needs Cargo and rustc, which are unavailable here.
   driven from, and the sampler that turns the keys held down into the two button masks `controller.gs`
   reports. The run loop calls it once per chunk of emulated cycles.
 - `src/rom_input.gs` holds the runtime ROM load path: the load-key edge sample, the ask/answer exchange, the
-  character-by-character decode of a pasted decimal byte string into a staging list, the iNES signature and
+  character-by-character decode of a pasted hexadecimal byte string into a staging list, the iNES signature and
   declared-payload check that gates the swap, and the copy that replaces `cartridge_bytes`. Its decode is
   mirrored in `tests/support/goboscript_port_algorithms.ts` and compared with
   `src/nes/cartridge/rom_text.ts`, which defines the format.

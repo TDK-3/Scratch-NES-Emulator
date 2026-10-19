@@ -3,20 +3,23 @@
 # The port embeds one selected image as a decimal list the build generates, so changing the
 # cartridge means regenerating that data and rebuilding the project. This header rebuilds the
 # same list at runtime instead: the run loop samples a load key, the Stage asks the host for a
-# string of decimal byte values, and cartridge_bytes is replaced with what the string
+# string of hexadecimal byte values, and cartridge_bytes is replaced with what the string
 # describes. src/nes/cartridge/rom_text.ts in the TypeScript reference defines the format, the
 # ROM string converter page encodes a .nes file into it, and
 # tests/support/goboscript_port_algorithms.ts mirrors the decode below so the automated suite
 # compares the two sides instead of trusting either one.
 #
-# Any character that is not a decimal digit separates two values, so spaces, commas, and
-# newlines all work: a pasted copy of scratch/data/test_rom_bytes.txt, which
-# scripts/generate_goboscript_rom_data.mjs writes one decimal value per line, needs no
-# editing. The scan walks one character at a time because Scratch has no split block. It folds
-# digits into the byte under construction and lets the next separator finish it, and one step
-# past the end of the text reads the empty string, which is the separator that flushes the
-# final value. A single character casts to its digit value, so the scan tests the cast rather
-# than a table of ten digit characters.
+# Every byte is exactly two hexadecimal digits, most significant nibble first, so a 40 KiB
+# image is 80,000 characters rather than the 135,000 or so the old decimal format needed.
+# Any character that is not a hexadecimal digit separates two digits, so spaces, commas, and
+# newlines all work and a separator may even fall between the two digits of a byte. The scan
+# walks one character at a time because Scratch has no split block.
+#
+# Scratch's string-to-number cast follows JavaScript's Number(): "0x" joined with one
+# hexadecimal digit reads as that nibble, while every other character reads as zero. The digit
+# "0" also reads as zero, so the scan tests that character separately before trusting the
+# cast. Two nibbles then make one byte, and a leftover nibble at the end is a reported error
+# rather than a silently truncated byte.
 #
 # The bytes land in a staging list first. Only an image that carries the iNES signature and at
 # least the payload its header declares replaces cartridge_bytes, so a mistyped or truncated
@@ -31,7 +34,8 @@
 #
 # Limits: a Scratch list holds 200,000 items and silently drops the adds past that, so an image
 # beyond the limit would load truncated rather than fail; the decode rejects it instead. The
-# character bound only rejects text that could not describe an acceptable image at all.
+# character bound only rejects text that could not describe an acceptable image at all: the
+# continuous form needs 400,000 characters for the largest acceptable image.
 
 %include src/numeric
 %include src/rom_loader
@@ -40,7 +44,7 @@
 enum rom_input_error {
     none = 0,
     empty = 1,
-    invalid_byte = 2,
+    odd_digits = 2,
     too_many_bytes = 3,
     too_long = 4,
     signature = 5,
@@ -87,10 +91,10 @@ proc rom_input_poll_key {
     }
 }
 
-# Asks the host for the byte text and keeps the answer. An empty answer is the host's way of
-# cancelling, which the caller reports without touching the running image.
+# Asks the host for the hex byte text and keeps the answer. An empty answer is the host's way
+# of cancelling, which the caller reports without touching the running image.
 proc rom_input_ask_for_text {
-    ask "Paste the ROM byte values, then press Enter. Leave this empty to keep the current ROM.";
+    ask "Paste the ROM hex byte string, then press Enter. Leave it empty to keep the current ROM.";
 
     rom_input_text = answer();
 }
@@ -102,9 +106,9 @@ proc rom_input_parse_text {
     local text_length = 0;
     local cursor = 1;
     local character = "";
-    local digit_value = 0;
-    local byte_value = 0;
-    local has_digits = 0;
+    local nibble_value = 0;
+    local pending_nibble = 0;
+    local has_pending_nibble = 0;
 
     rom_input_error_code = rom_input_error.none;
     rom_input_byte_count = 0;
@@ -116,37 +120,42 @@ proc rom_input_parse_text {
     if text_length > rom_input_limit.max_text_chars {
         rom_input_error_code = rom_input_error.too_long;
     } else {
-        # The extra step reads the empty string past the last character, which takes the
-        # separator branch and flushes a value the text did not end with a separator after.
-        until cursor > text_length + 1 or rom_input_error_code != rom_input_error.none {
+        until cursor > text_length or rom_input_error_code != rom_input_error.none {
             character = rom_input_text[cursor];
-            digit_value = character + "";
 
-            if digit_value > 0 {
-                byte_value = (byte_value * 10) + digit_value;
-                has_digits = 1;
-            } elif character == "0" {
-                byte_value = byte_value * 10;
-                has_digits = 1;
-            } elif has_digits == 1 {
-                has_digits = 0;
+            # "0" casts to 0 like a separator, so it takes the first branch. Every other
+            # hexadecimal digit casts to 1-15 through the "0x" prefix, and every other
+            # character casts to 0 and is therefore ignored. The cast is written inline
+            # because a to_number() call would be one custom block per character.
+            if character == "0" {
+                nibble_value = 0;
+            } else {
+                nibble_value = ("0x" & character) + "";
+            }
 
-                if byte_value > 255 {
-                    rom_input_error_code = rom_input_error.invalid_byte;
+            if nibble_value > 0 or character == "0" {
+                if has_pending_nibble == 0 {
+                    pending_nibble = nibble_value;
+                    has_pending_nibble = 1;
                 } elif length rom_input_bytes >= rom_input_limit.max_bytes {
                     rom_input_error_code = rom_input_error.too_many_bytes;
                 } else {
-                    add byte_value to rom_input_bytes;
+                    add ((pending_nibble * 16) + nibble_value) to rom_input_bytes;
                     rom_input_byte_count = rom_input_byte_count + 1;
-                    byte_value = 0;
+                    pending_nibble = 0;
+                    has_pending_nibble = 0;
                 }
             }
 
             cursor = cursor + 1;
         }
 
-        if rom_input_error_code == rom_input_error.none and rom_input_byte_count == 0 {
-            rom_input_error_code = rom_input_error.empty;
+        if rom_input_error_code == rom_input_error.none {
+            if has_pending_nibble == 1 {
+                rom_input_error_code = rom_input_error.odd_digits;
+            } elif rom_input_byte_count == 0 {
+                rom_input_error_code = rom_input_error.empty;
+            }
         }
     }
 }
@@ -227,8 +236,8 @@ func rom_input_error_text() {
         return "no byte values";
     }
 
-    if rom_input_error_code == rom_input_error.invalid_byte {
-        return "a byte value outside 0-255";
+    if rom_input_error_code == rom_input_error.odd_digits {
+        return "an odd number of hexadecimal digits";
     }
 
     if rom_input_error_code == rom_input_error.too_many_bytes {

@@ -530,6 +530,13 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
       a `func` takes parentheses. `tests/goboscript-source.test.ts` gained a call-shape and argument-count
       lint (14 tests), mutation-checked for a parenthesized proc call, a func used as a statement, and a
       wrong argument count on each kind.
+- [x] Replaced the runtime ROM string format with packed hexadecimal (2026-10-19). `src/nes/cartridge/rom_text.ts`
+      now writes two lowercase hexadecimal digits per byte, continuous by default (the 81,936-byte supplied
+      image becomes 163,872 characters), with optional space-separated and 16-bytes-per-line layouts. The
+      decoder pairs nibbles, ignores any character that is not a hexadecimal digit, and reports `odd-digits`
+      instead of the now-impossible `invalid-byte`. `scratch/src/rom_input.gs` performs the same decode with
+      Scratch's number cast (`("0x" & character) + ""`), and its mirror, enum, converter page, select
+      control, documentation, and tests follow. All 1,303 tests pass.
 
 ## Verified in this environment
 
@@ -588,14 +595,14 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   setting derives; setting it to 0 still returns to native 1x. Eleven new tests in
   `tests/goboscript-keyboard-input.test.ts` pin the parsed key table against the mirrored table and the
   browser adapter, the button weights against `CONTROLLER_BUTTON_MASKS`, a polled mask against the
-  reference controller's serial report, and the sampler's single call site in the run loop. All 1,286
+  reference controller's serial report, and the sampler's single call site in the run loop. All 1,303
   tests pass. Compiling, opening, or timing the project is still unverified, no compiled project has seen
   a real key event, and Shift needs TurboWarp because the Scratch website's keyboard device drops modifier
   keys.
 - Runtime ROM string slice (2026-10-19): the port can replace its cartridge at runtime. `scratch/src/rom_input.gs`
-  samples the Q key in the run loop, asks the host for a string of decimal byte values with the built-in ask
-  block, decodes it one character at a time (any non-digit character separates two values, so a paste of
-  `scratch/data/test_rom_bytes.txt` needs no editing), stages the bytes in its own list, and only replaces
+  samples the Q key in the run loop, asks the host for a string of hexadecimal byte values with the built-in
+  ask block, decodes it two digits at a time (any non-hexadecimal character separates digits), stages the
+  bytes in its own list, and only replaces
   `cartridge_bytes` once the staged image carries the iNES signature and at least the payload its header
   declares; `rom_run.gs` then boots the new image through the same path the embedded one uses and broadcasts
   the outcome for the display sprite to report. Servicing the request inside the run loop instead of from a
@@ -607,7 +614,7 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   iNES header report, a round-trip check, and a refusal for images past the 200,000-item Scratch list cap.
   New tests: `tests/rom-text.test.ts` (format, separators, error codes, generator agreement), two page tests
   in `tests/browser-rom-string-page.test.ts` driving the module through a fake DOM, three mirror-parity tests,
-  and a run-loop wiring lint. `npm test` passes 1,302 tests, up from 1,287. Not verified: a real paste in a
+  and a run-loop wiring lint. `npm test` passes 1,303 tests. Not verified: a real paste in a
   compiled project,
   and the decode's wall-clock cost for a large image, since no compiled project exists to time.
 - Pen display slice (2026-10-19): ported the PPU rendering pipeline and the pen presentation. `ppu_2c02.gs`
@@ -762,7 +769,7 @@ the console boot that runs the embedded image, the pen display that draws each f
 host keyboard input that polls the built-in key sensors into both pads.
 Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively
 with the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints.
-All 1,286 tests pass. The compiled project was brought in line with the earlier sources and now reports
+All 1,303 tests pass. The compiled project was brought in line with the earlier sources and now reports
 `port vectors 582/582 passed, 5 skipped` from its own in-project self test, and its console run reads the reset
 vector from the embedded MMC3 image and executes the game's code with a bus trace byte-identical to the
 TypeScript reference's. Compile validation stays blocked by the missing GoboScript toolchain; the renderer

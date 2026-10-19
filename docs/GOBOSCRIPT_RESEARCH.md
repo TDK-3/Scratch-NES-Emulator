@@ -126,6 +126,10 @@ GoboScript uses C-, Rust-, and Python-inspired syntax. Indentation is not signif
 semicolons. `#` begins a single-line comment. Strings use double quotes. It supports decimal, binary,
 hexadecimal, octal, and floating-point literals. `true` and `false` compile to `1` and `0`.
 
+Scratch's number cast follows JavaScript's `Number()` and maps NaN to zero, so a `0x`-prefixed string reads
+numerically. `scratch/src/rom_input.gs` relies on that: `("0x" & digit) + ""` reads one hexadecimal digit,
+and the separate `"0"` test resolves the only value that would otherwise look like a separator.
+
 ```goboscript
 var start_address = 0x8000;
 

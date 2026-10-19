@@ -14,8 +14,9 @@
                     <p class="eyebrow">Scratch project input</p>
                     <h1>ROM String Converter</h1>
                     <p class="intro">
-                        Turn a .nes file into the decimal byte text the GoboScript project loads at
-                        runtime. Nothing leaves your browser.
+                        Turn a .nes file into the hexadecimal byte text the GoboScript project loads at
+                        runtime: two digits per byte, 0a0b0e013b for five bytes. Nothing leaves your
+                        browser.
                     </p>
                 </div>
                 <p id="convert-status" class="status" role="status" aria-live="polite">No ROM file loaded.</p>
@@ -28,13 +29,13 @@
                         <p class="drop-zone-note">or use the file picker on the right</p>
                     </div>
 
-                    <label class="text-output-label" for="rom-text-output">Byte text</label>
+                    <label class="text-output-label" for="rom-text-output">Hex byte text</label>
                     <textarea
                         id="rom-text-output"
                         class="text-output"
                         readonly
                         spellcheck="false"
-                        aria-label="Decimal byte text for the Scratch project"></textarea>
+                        aria-label="Hexadecimal byte text for the Scratch project"></textarea>
 
                     <div class="button-grid">
                         <button id="copy-rom-text" class="button button-primary" type="button" disabled>Copy text</button>
@@ -47,13 +48,13 @@
                         <h2>Cartridge</h2>
                         <input id="rom-file" class="file-input" type="file" accept=".nes,application/octet-stream">
                         <label class="file-picker" for="rom-file">Choose an iNES ROM</label>
-                        <label class="select-label" for="separator-select">Separator</label>
-                        <select id="separator-select" class="select-input">
-                            <option value="space" selected>Space</option>
-                            <option value="newline">Newline</option>
-                            <option value="comma">Comma</option>
+                        <label class="select-label" for="format-select">Text layout</label>
+                        <select id="format-select" class="select-input">
+                            <option value="continuous" selected>Continuous (shortest)</option>
+                            <option value="spaced">Space between bytes</option>
+                            <option value="lines">16 bytes per line</option>
                         </select>
-                        <p id="separator-note" class="control-note"></p>
+                        <p id="format-note" class="control-note"></p>
                         <div class="button-stack">
                             <button id="clear-rom" class="button button-secondary" type="button" disabled>Clear</button>
                         </div>
@@ -85,15 +86,16 @@
                     <section class="control-section input-section">
                         <h2>Loading it in Scratch</h2>
                         <ol class="hint-list">
-                            <li>Copy the byte text, or save it and open it in a text editor.</li>
+                            <li>Copy the hex text, or save it and open it in a text editor.</li>
                             <li>Start the Scratch project and wait for a game to run.</li>
-                            <li>Press <kbd>Q</kbd>. The stage asks for the ROM byte values.</li>
+                            <li>Press <kbd>Q</kbd>. The stage asks for the ROM hex byte string.</li>
                             <li>Paste the text, press Enter, and the console reboots from it.</li>
                         </ol>
                         <p>
-                            An empty answer cancels and keeps the running game. Only an image with the
-                            iNES signature and its full declared payload replaces the current one, and a
-                            Scratch list holds 200,000 items, so larger images are rejected.
+                            Copy the digits exactly as shown, without 0x prefixes. An empty answer cancels
+                            and keeps the running game. Only an image with the iNES signature and its full
+                            declared payload replaces the current one, and a Scratch list holds 200,000
+                            items, so larger images are rejected.
                         </p>
                         <p><a class="page-link" href="/">Open the TypeScript emulator preview</a></p>
                     </section>
@@ -102,10 +104,9 @@
 
             <footer class="app-footer">
                 <p>
-                    The text is decimal byte values, separated by any run of characters that is not a
-                    digit; the port decodes the same format
-                    <code>scripts/generate_goboscript_rom_data.mjs</code> writes. Convert only images you
-                    have the rights to share.
+                    The text is hexadecimal byte values: two lowercase digits per byte, most significant
+                    first. Any character that is not a hexadecimal digit separates two digits, so spaces
+                    and newlines are optional. Convert only images you have the rights to share.
                 </p>
             </footer>
         </main>

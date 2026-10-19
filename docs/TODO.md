@@ -437,8 +437,8 @@ separate from TypeScript success.
       and the sampler's single call site in the run loop. Not verified: real key events in a compiled
       project; Shift needs TurboWarp, because the Scratch website's keyboard device drops modifier keys.
 - [x] Load a cartridge at runtime from a pasted ROM string, and publish the tool that produces it.
-      `scratch/src/rom_input.gs` samples the Q key in the run loop, asks the host for a string of decimal
-      byte values, decodes it one character at a time into a staging list, and only replaces
+      `scratch/src/rom_input.gs` samples the Q key in the run loop, asks the host for a string of hexadecimal
+      byte values, decodes it two digits at a time into a staging list, and only replaces
       `cartridge_bytes` when the staged bytes carry the iNES signature and the payload their header
       declares, so a bad paste leaves the running game alone; `rom_run.gs` then reboots the console through
       the same boot path the embedded image uses and the display sprite reports the outcome. The format is
