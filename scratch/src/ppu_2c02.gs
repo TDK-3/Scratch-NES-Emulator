@@ -984,7 +984,12 @@ proc ppu_render_pixel {
 
         if ppu_sprite_pixel_found == 1 and ppu_sprite_pixel_oam_index == 0 {
             if background_pixel != 0 and pixel_x < PPU_FRAME_WIDTH - 1 {
-                ppu_set_sprite_zero_hit 1;
+                # The hit flag latches until the pre-render clear, so the setter only has work
+                # to do on the first hit of a frame; the test keeps the call off every later
+                # hit, and the set is the plain addition ppu_set_sprite_zero_hit would make.
+                if ppu_status_register // PPU_SPRITE_ZERO_HIT_FLAG % 2 == 0 {
+                    ppu_status_register = ppu_status_register + PPU_SPRITE_ZERO_HIT_FLAG;
+                }
             }
         }
 
@@ -1107,7 +1112,11 @@ proc ppu_clock_rendering_pipeline {
         }
 
         if ppu_dot == ppu_sprite_overflow_set_dot {
-            ppu_set_sprite_overflow 1;
+            # Same latch as the sprite-zero hit: only the first overflow of a frame needs the
+            # setter, and the plain add is the change it would make.
+            if ppu_status_register // PPU_SPRITE_OVERFLOW_FLAG % 2 == 0 {
+                ppu_status_register = ppu_status_register + PPU_SPRITE_OVERFLOW_FLAG;
+            }
         }
 
         if (ppu_dot >= 1 and ppu_dot <= 256) or (ppu_dot >= 321 and ppu_dot <= 336) {

@@ -59,7 +59,9 @@ proc cpu_fetch_and_decode_opcode {
 }
 
 # Branches are exactly the official opcodes whose decoded mode is relative, so the dispatch tests
-# the mode and this proc picks the condition from the mnemonic. The operand resolution and the
+# the mode and this proc picks the condition from the mnemonic. cpu_status is normalized by
+# every writer, so each condition reads its flag bit directly instead of through
+# has_status_flag; the branches are ordered by how often compiled code takes them. The operand resolution and the
 # taken, page-crossing, and not-taken cycle counts are the ported relative-branch sequence.
 proc cpu_execute_branch {
     local taken = 0;
@@ -68,21 +70,21 @@ proc cpu_execute_branch {
     if cpu_resolved_error != cpu_operand_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.unresolved_operand;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcc {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.carry);
+        taken = 1 - (cpu_status % 2);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcs {
-        taken = has_status_flag(cpu_status, cpu_flag.carry);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_beq {
-        taken = has_status_flag(cpu_status, cpu_flag.zero);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bmi {
-        taken = has_status_flag(cpu_status, cpu_flag.negative);
+        taken = cpu_status % 2;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bne {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.zero);
+        taken = 1 - ((cpu_status // 2) % 2);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_beq {
+        taken = (cpu_status // 2) % 2;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bpl {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.negative);
+        taken = 1 - (cpu_status // 128);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bmi {
+        taken = cpu_status // 128;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvc {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.overflow);
+        taken = 1 - ((cpu_status // 64) % 2);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvs {
-        taken = has_status_flag(cpu_status, cpu_flag.overflow);
+        taken = (cpu_status // 64) % 2;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
     }
@@ -114,8 +116,14 @@ proc cpu_execute_jump {
 proc cpu_execute_regular_instruction {
     cpu_resolve_operand cpu_opcode_mode, cpu_opcode_access;
 
+    # The operand kinds are tested immediate first and memory second because those are the two
+    # a running game reaches most often; the branches themselves are unchanged.
     if cpu_resolved_error != cpu_operand_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.unresolved_operand;
+    } elif cpu_resolved_kind == cpu_operand_kind.immediate {
+        cpu_apply_read_instruction cpu_opcode_mnemonic, cpu_resolved_value;
+    } elif cpu_resolved_kind == cpu_operand_kind.memory {
+        cpu_execute_memory_instruction;
     } elif cpu_resolved_kind == cpu_operand_kind.implied {
         cpu_read_cycle cpu_program_counter;
         cpu_apply_implied_instruction;
@@ -127,10 +135,6 @@ proc cpu_execute_regular_instruction {
             cpu_a = alu_value;
             cpu_status = alu_status;
         }
-    } elif cpu_resolved_kind == cpu_operand_kind.immediate {
-        cpu_apply_read_instruction cpu_opcode_mnemonic, cpu_resolved_value;
-    } elif cpu_resolved_kind == cpu_operand_kind.memory {
-        cpu_execute_memory_instruction;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_operand;
     }
