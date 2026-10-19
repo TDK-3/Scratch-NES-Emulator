@@ -966,7 +966,7 @@ proc apu_clock_triangle_timer {
 proc apu_clock_triangle_linear_counter {
     if triangle_linear_reload_flag == 1 {
         triangle_linear_counter = triangle_linear_reload_value;
-    } else if triangle_linear_counter > 0 {
+    } elif triangle_linear_counter > 0 {
         triangle_linear_counter = triangle_linear_counter - 1;
     }
 

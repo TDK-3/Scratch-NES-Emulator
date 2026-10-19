@@ -5,8 +5,6 @@ coverage/
 scratch/data/test_rom_bytes.txt
 scratch/data/shared_port_vectors.txt
 scratch/data/opcode_table.txt
-scratch/*.sb3
-scratch/*.sb3.tmp
 
 # Goboscript local compiler output and scratch files
 .goboscript/
