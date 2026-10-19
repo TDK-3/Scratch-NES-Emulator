@@ -48,11 +48,13 @@ const SPECIAL_SCRATCH_KEYS: readonly string[] = [
 
 /**
  * The `if key_pressed("...")` rows of keyboard_poll_controllers, in source order. The
- * backreference keeps a row from claiming the other pad's mask as the value it extends.
+ * backreference keeps a row from claiming the other pad's mask as the value it extends. A
+ * binding adds its button bit to the mask because every binding owns a distinct bit, which
+ * builds the same mask a bitwise OR would, without a helper call per held key.
  */
 const BINDING_PATTERN = new RegExp(
     String.raw`if key_pressed\("([^"]+)"\) \{\s*\n\s*(player_one_mask|player_two_mask) = ` +
-        String.raw`bitwise_or\(\2, keyboard_button\.(\w+)\);`,
+        String.raw`\2 \+ keyboard_button\.(\w+);`,
     "g",
 );
 

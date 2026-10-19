@@ -113,7 +113,11 @@ proc cpu_finish_instruction interrupt_disabled_before {
 # instruction. Cycle accounting is left running, so a caller that wants per-step counts resets it
 # between steps.
 proc cpu_begin_next_sequence {
-    local interrupt_disabled_before = has_status_flag(cpu_status, cpu_flag.interrupt_disable);
+    # has_status_flag(cpu_status, cpu_flag.interrupt_disable) inlined: cpu_status is normalized
+    # by every writer, so the interrupt-disable bit is the bit with weight four read directly.
+    # This runs once per emulated sequence, and the two custom-block calls the helper made were
+    # a measurable share of an instruction's cost.
+    local interrupt_disabled_before = (cpu_status // cpu_flag.interrupt_disable) % 2;
     local interrupt_disabled_for_poll = interrupt_disabled_before;
 
     if cpu_irq_poll_mask_override_active == 1 {

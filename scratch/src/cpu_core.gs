@@ -85,7 +85,7 @@ proc cpu_reset_registers {
 # func call to a statement placed before the enclosing statement, which would move the access
 # in the trace. Callers read the result from the documented global on the next line.
 proc cpu_read_cycle address {
-    local numeric_address = normalize_word($address);
+    local numeric_address = $address % 65536;
     cpu_cycle_value = cpu_bus_read(numeric_address);
 
     if cpu_access_log_enabled == 1 {
@@ -99,8 +99,8 @@ proc cpu_read_cycle address {
 
 # One write cycle: logs the access, spends one cycle, and writes through the bus decoder.
 proc cpu_write_cycle address, value {
-    local numeric_address = normalize_word($address);
-    local numeric_value = normalize_byte($value);
+    local numeric_address = $address % 65536;
+    local numeric_value = $value % 256;
     cpu_bus_write numeric_address, numeric_value;
 
     if cpu_access_log_enabled == 1 {
@@ -119,45 +119,50 @@ proc cpu_dummy_read_cycle address {
 }
 
 # Reads the byte at the program counter, advances the counter, and leaves the byte in
-# `cpu_fetched_byte`, mirroring fetch_byte_cycle().
+# `cpu_fetched_byte`, mirroring fetch_byte_cycle(). The counter is normalized by every write
+# to it, so it is already an address: the advance is one modulo instead of a normalize call,
+# and the read cycle normalizes the address it logs.
 proc cpu_fetch_byte {
-    local address = normalize_word(cpu_program_counter);
+    local address = cpu_program_counter;
     cpu_read_cycle address;
     cpu_fetched_byte = cpu_cycle_value;
-    cpu_program_counter = normalize_word(address + 1);
+    cpu_program_counter = (address + 1) % 65536;
 }
 
 # Reads a little-endian word at the program counter into `cpu_fetched_word`, mirroring
-# fetch_word_cycle().
+# fetch_word_cycle(). Both bytes are already in the byte range, so the word is assembled
+# with two operators instead of a join_bytes call.
 proc cpu_fetch_word {
     local low_byte = 0;
     cpu_fetch_byte;
-    low_byte = cpu_fetched_byte;
+    low_byte = cpu_fetched_byte % 256;
     cpu_fetch_byte;
-    cpu_fetched_word = join_bytes(cpu_fetched_byte, low_byte);
+    cpu_fetched_word = ((cpu_fetched_byte % 256) * 256) + low_byte;
 }
 
-# Pushes one byte and decrements the stack pointer, mirroring push_byte_cycle().
+# Pushes one byte and decrements the stack pointer, mirroring push_byte_cycle(). Scratch's
+# modulo is floored, so the wrap from $00 to $FF is one operator.
 proc cpu_push_byte value {
     local stack_address = cpu_stack_page.base + cpu_stack_pointer;
     cpu_write_cycle stack_address, $value;
-    cpu_stack_pointer = normalize_byte(cpu_stack_pointer - 1);
+    cpu_stack_pointer = (cpu_stack_pointer - 1) % 256;
 }
 
 # Pops one byte and increments the stack pointer, mirroring pop_byte_cycle(); the byte is left
 # in `cpu_popped_byte`.
 proc cpu_pop_byte {
-    local next_stack_pointer = normalize_byte(cpu_stack_pointer + 1);
+    local next_stack_pointer = (cpu_stack_pointer + 1) % 256;
     cpu_read_cycle cpu_stack_page.base + next_stack_pointer;
     cpu_stack_pointer = next_stack_pointer;
     cpu_popped_byte = cpu_cycle_value;
 }
 
-# Pushes a word high byte first, mirroring push_word_cycle().
+# Pushes a word high byte first, mirroring push_word_cycle(). The two bytes are split with
+# operators rather than two byte_high/byte_low calls.
 proc cpu_push_word value {
-    local word = normalize_word($value);
-    cpu_push_byte byte_high(word);
-    cpu_push_byte byte_low(word);
+    local word = $value % 65536;
+    cpu_push_byte word // 256;
+    cpu_push_byte word % 256;
 }
 
 # Pops a word low byte first, mirroring pop_word_cycle(); the word is left in
@@ -165,9 +170,9 @@ proc cpu_push_word value {
 proc cpu_pop_word {
     local low_byte = 0;
     cpu_pop_byte;
-    low_byte = cpu_popped_byte;
+    low_byte = cpu_popped_byte % 256;
     cpu_pop_byte;
-    cpu_popped_word = join_bytes(cpu_popped_byte, low_byte);
+    cpu_popped_word = ((cpu_popped_byte % 256) * 256) + low_byte;
 }
 
 # Pushes the status byte, mirroring push_status_cycle(); `break_enabled` is 1 only for BRK,

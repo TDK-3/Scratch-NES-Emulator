@@ -134,7 +134,9 @@ enum ppu_bus_address_status {
 func ppu_bus_normalize_address(address) {
     local numeric = to_number($address);
 
-    if numeric != numeric // 1 or numeric < 0 or numeric > 65535 {
+    # The range test runs first because every rendering and register path arrives inside it;
+    # the integer test only has to run for a value that could otherwise be accepted.
+    if numeric < 0 or numeric > 65535 or numeric != numeric // 1 {
         ppu_bus_address_error = ppu_bus_address_status.out_of_range;
 
         return 0;
@@ -241,6 +243,64 @@ proc ppu_bus_write_ppu address, value {
     }
 }
 
+# Reads one nametable byte for the rendering pipeline. The address is already
+# the $2000-$3EFF window the PPU computes, so the generic read's address
+# normalization and region decode would only repeat work: this proc folds
+# $3000-$3EFF back by hand, reports the access to the board exactly as
+# ppu_bus_read_ppu does, and maps the four logical tables through the
+# attached board's mirroring mode inline. The pipeline calls this several
+# dozen times per scanline, which makes the two saved custom-block calls
+# worth the duplicated arithmetic. CPU reads still take ppu_bus_read_ppu.
+proc ppu_bus_read_nametable address {
+    local base_address = $address;
+    local logical_table = 0;
+    local mirroring = 1;
+    local physical_table = 0;
+
+    if base_address >= 12288 {
+        base_address = base_address - 4096;
+    }
+
+    # ppu_bus_observe_access() inlined: this read runs several dozen times per scanline, the
+    # observation is one comparison on NROM, and the mirroring query is the same board check.
+    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        mmc3_observe_ppu_access ppu_bus_access.read, $address;
+        mirroring = mmc3_mirroring;
+    } elif ppu_bus_mapper_kind == mapper_kind.nrom {
+        mirroring = cartridge_mirroring;
+    }
+
+    logical_table = (base_address - 8192) // 1024;
+
+    if mirroring == 2 {
+        physical_table = logical_table % 2;
+    } elif mirroring == 3 {
+        physical_table = logical_table;
+    } else {
+        physical_table = logical_table // 2;
+    }
+
+    ppu_bus_read_value = ppu_nametable_ram[(physical_table * 1024) + (base_address % 1024) + 1];
+}
+
+# Reads one pattern-table byte for the rendering pipeline: the address is
+# already in $0000-$1FFF, so the only work besides the read itself is the
+# board observation that clocks the MMC3 A12 filter.
+proc ppu_bus_read_pattern_window address {
+    if ppu_bus_mapper_kind == mapper_kind.nrom {
+        # NROM has no observer and its read_pattern takes no bank lookup, so the two hops
+        # through ppu_bus_observe_access and ppu_bus_read_pattern are pure call overhead on
+        # the board the embedded image uses. The fields the generic path would set are set
+        # here directly.
+        ppu_bus_pattern_mapped = 1;
+        nrom_read_pattern $address;
+        ppu_bus_read_value = nrom_pattern_value;
+    } else {
+        ppu_bus_observe_access ppu_bus_access.read, $address;
+        ppu_bus_read_pattern $address;
+    }
+}
+
 # Reads pattern memory through the attached mapper. An absent mapper leaves
 # ppu_bus_read_value at zero and ppu_bus_pattern_mapped at 0.
 proc ppu_bus_read_pattern address {
@@ -295,10 +355,14 @@ proc ppu_bus_observe_ppu_address address {
 }
 
 # Advances the attached mapper by one PPU dot. NROM ignores the tick; MMC3
-# saturates its A12 filter counter.
+# saturates its A12 filter counter. The MMC3 body is written out rather than
+# calling mmc3_clock_ppu_dot, because this proc runs once per PPU dot, and a
+# custom-block call for two comparisons is not worth its cost there.
 proc ppu_bus_clock_ppu_dot {
     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-        mmc3_clock_ppu_dot;
+        if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
+            mmc3_a12_low_dots = mmc3_a12_low_dots + 1;
+        }
     }
 }
 

@@ -61,7 +61,8 @@ var cpu_resolved_error = 0;
 
 # Reports whether two addresses sit in different pages; mirrors page_crossed().
 func cpu_page_crossed(base_address, address) {
-    if byte_high($base_address) == byte_high($address) {
+    # Two divisions instead of two byte_high calls: the high byte is all the decision needs.
+    if ($base_address % 65536) // 256 == ($address % 65536) // 256 {
         return 0;
     }
 
@@ -71,7 +72,7 @@ func cpu_page_crossed(base_address, address) {
 # Builds the dummy address an indexed access uses: the base page and the effective low byte.
 # Mirrors indexed_dummy_address().
 func cpu_indexed_dummy_address(base_address, address) {
-    return join_bytes(byte_high($base_address), byte_low($address));
+    return (((($base_address % 65536) // 256) * 256) + ($address % 256)) % 65536;
 }
 
 # Clears every operand global so a rejected or unknown mode stays a deterministic zero record.
@@ -89,13 +90,18 @@ proc cpu_reset_operand {
 # Records a memory operand; the mode and access are already stored by the caller.
 proc cpu_set_memory_operand base_address, address, page_crossed {
     cpu_resolved_kind = cpu_operand_kind.memory;
-    cpu_resolved_base_address = normalize_word($base_address);
-    cpu_resolved_address = normalize_word($address);
-    cpu_resolved_page_crossed = to_number($page_crossed);
+    cpu_resolved_base_address = $base_address % 65536;
+    cpu_resolved_address = $address % 65536;
+    cpu_resolved_page_crossed = $page_crossed;
 }
 
 # Resolves one addressing mode. Mirrors the reference switch, including which accesses spend
 # a cycle and which address each dummy read uses.
+#
+# The branches are ordered by how often a running game reaches them, not by enum order: an
+# if / elif chain is a sequence of comparisons, and immediate, zero-page, indexed-absolute,
+# and relative operands cover most of the instructions a game executes. The dummy-read and
+# cycle rules inside each branch are unchanged.
 proc cpu_resolve_operand mode, access {
     local numeric_mode = to_number($mode);
     local numeric_access = to_number($access);
@@ -112,19 +118,7 @@ proc cpu_resolve_operand mode, access {
     cpu_resolved_mode = numeric_mode;
     cpu_resolved_access = numeric_access;
 
-    if numeric_mode == cpu_addressing_mode.implied {
-        if numeric_access != cpu_operand_access.read {
-            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
-        } else {
-            cpu_resolved_kind = cpu_operand_kind.implied;
-        }
-    } elif numeric_mode == cpu_addressing_mode.accumulator {
-        if numeric_access == cpu_operand_access.write {
-            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
-        } else {
-            cpu_resolved_kind = cpu_operand_kind.accumulator;
-        }
-    } elif numeric_mode == cpu_addressing_mode.immediate {
+    if numeric_mode == cpu_addressing_mode.immediate {
         if numeric_access != cpu_operand_access.read {
             cpu_resolved_error = cpu_operand_error_code.unsupported_access;
         } else {
@@ -132,52 +126,21 @@ proc cpu_resolve_operand mode, access {
             cpu_fetch_byte;
             cpu_resolved_value = cpu_fetched_byte;
         }
-    } elif numeric_mode == cpu_addressing_mode.relative {
-        if numeric_access != cpu_operand_access.read {
-            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
-        } else {
-            cpu_fetch_byte;
-            offset = to_signed_byte(cpu_fetched_byte);
-            base_address = cpu_program_counter;
-            address = normalize_word(base_address + offset);
-            cpu_resolved_kind = cpu_operand_kind.relative;
-            cpu_resolved_value = offset;
-            cpu_resolved_base_address = base_address;
-            cpu_resolved_address = address;
-            cpu_resolved_page_crossed = cpu_page_crossed(base_address, address);
-        }
     } elif numeric_mode == cpu_addressing_mode.zero_page {
         cpu_fetch_byte;
         base_address = cpu_fetched_byte;
         cpu_set_memory_operand base_address, base_address, 0;
-    } elif (numeric_mode == cpu_addressing_mode.zero_page_x) or (numeric_mode == cpu_addressing_mode.zero_page_y) {
-        cpu_fetch_byte;
-        base_address = cpu_fetched_byte;
-
-        if numeric_mode == cpu_addressing_mode.zero_page_x {
-            index_register = normalize_byte(cpu_x);
-        } else {
-            index_register = normalize_byte(cpu_y);
-        }
-
-        cpu_dummy_read_cycle base_address;
-        address = normalize_byte(base_address + index_register);
-        cpu_set_memory_operand base_address, address, 0;
-    } elif numeric_mode == cpu_addressing_mode.absolute {
-        cpu_fetch_word;
-        address = cpu_fetched_word;
-        cpu_set_memory_operand address, address, 0;
     } elif (numeric_mode == cpu_addressing_mode.absolute_x) or (numeric_mode == cpu_addressing_mode.absolute_y) {
         cpu_fetch_word;
         base_address = cpu_fetched_word;
 
         if numeric_mode == cpu_addressing_mode.absolute_x {
-            index_register = normalize_byte(cpu_x);
+            index_register = cpu_x;
         } else {
-            index_register = normalize_byte(cpu_y);
+            index_register = cpu_y;
         }
 
-        address = normalize_word(base_address + index_register);
+        address = (base_address + index_register) % 65536;
         crossed = cpu_page_crossed(base_address, address);
 
         if (numeric_access != cpu_operand_access.read) or (crossed == 1) {
@@ -185,13 +148,74 @@ proc cpu_resolve_operand mode, access {
         }
 
         cpu_set_memory_operand base_address, address, crossed;
+    } elif numeric_mode == cpu_addressing_mode.relative {
+        if numeric_access != cpu_operand_access.read {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_fetch_byte;
+            offset = to_signed_byte(cpu_fetched_byte);
+            base_address = cpu_program_counter;
+            address = (base_address + offset) % 65536;
+            cpu_resolved_kind = cpu_operand_kind.relative;
+            cpu_resolved_value = offset;
+            cpu_resolved_base_address = base_address;
+            cpu_resolved_address = address;
+            cpu_resolved_page_crossed = cpu_page_crossed(base_address, address);
+        }
+    } elif numeric_mode == cpu_addressing_mode.absolute {
+        cpu_fetch_word;
+        address = cpu_fetched_word;
+        cpu_set_memory_operand address, address, 0;
+    } elif numeric_mode == cpu_addressing_mode.indirect_indexed {
+        cpu_fetch_byte;
+        pointer_address = cpu_fetched_byte;
+        cpu_read_cycle pointer_address;
+        target_low = cpu_cycle_value;
+        pointer_high_address = (pointer_address + 1) % 256;
+        cpu_read_cycle pointer_high_address;
+        target_high = cpu_cycle_value;
+        base_address = join_bytes(target_high, target_low);
+        address = (base_address + cpu_y) % 65536;
+        crossed = cpu_page_crossed(base_address, address);
+
+        if (numeric_access != cpu_operand_access.read) or (crossed == 1) {
+            cpu_dummy_read_cycle cpu_indexed_dummy_address(base_address, address);
+        }
+
+        cpu_set_memory_operand base_address, address, crossed;
+    } elif numeric_mode == cpu_addressing_mode.implied {
+        if numeric_access != cpu_operand_access.read {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_resolved_kind = cpu_operand_kind.implied;
+        }
+    } elif (numeric_mode == cpu_addressing_mode.zero_page_x) or (numeric_mode == cpu_addressing_mode.zero_page_y) {
+        cpu_fetch_byte;
+        base_address = cpu_fetched_byte;
+
+        # The index registers are bytes by construction, so they are read directly.
+        if numeric_mode == cpu_addressing_mode.zero_page_x {
+            index_register = cpu_x;
+        } else {
+            index_register = cpu_y;
+        }
+
+        cpu_dummy_read_cycle base_address;
+        address = (base_address + index_register) % 256;
+        cpu_set_memory_operand base_address, address, 0;
+    } elif numeric_mode == cpu_addressing_mode.accumulator {
+        if numeric_access == cpu_operand_access.write {
+            cpu_resolved_error = cpu_operand_error_code.unsupported_access;
+        } else {
+            cpu_resolved_kind = cpu_operand_kind.accumulator;
+        }
     } elif numeric_mode == cpu_addressing_mode.indirect {
         if numeric_access != cpu_operand_access.read {
             cpu_resolved_error = cpu_operand_error_code.unsupported_access;
         } else {
             cpu_fetch_word;
             pointer_address = cpu_fetched_word;
-            pointer_high_address = join_bytes(byte_high(pointer_address), normalize_byte(pointer_address + 1));
+            pointer_high_address = ((pointer_address - (pointer_address % 256)) + ((pointer_address + 1) % 256));
             cpu_read_cycle pointer_address;
             target_low = cpu_cycle_value;
             cpu_read_cycle pointer_high_address;
@@ -204,28 +228,13 @@ proc cpu_resolve_operand mode, access {
         cpu_fetch_byte;
         base_address = cpu_fetched_byte;
         cpu_dummy_read_cycle base_address;
-        pointer_address = normalize_byte(base_address + normalize_byte(cpu_x));
+        pointer_address = (base_address + cpu_x) % 256;
         cpu_read_cycle pointer_address;
         target_low = cpu_cycle_value;
-        cpu_read_cycle normalize_byte(pointer_address + 1);
+        pointer_high_address = (pointer_address + 1) % 256;
+        cpu_read_cycle pointer_high_address;
         target_high = cpu_cycle_value;
         cpu_set_memory_operand base_address, join_bytes(target_high, target_low), 0;
-    } elif numeric_mode == cpu_addressing_mode.indirect_indexed {
-        cpu_fetch_byte;
-        pointer_address = cpu_fetched_byte;
-        cpu_read_cycle pointer_address;
-        target_low = cpu_cycle_value;
-        cpu_read_cycle normalize_byte(pointer_address + 1);
-        target_high = cpu_cycle_value;
-        base_address = join_bytes(target_high, target_low);
-        address = normalize_word(base_address + normalize_byte(cpu_y));
-        crossed = cpu_page_crossed(base_address, address);
-
-        if (numeric_access != cpu_operand_access.read) or (crossed == 1) {
-            cpu_dummy_read_cycle cpu_indexed_dummy_address(base_address, address);
-        }
-
-        cpu_set_memory_operand base_address, address, crossed;
     } else {
         cpu_resolved_error = cpu_operand_error_code.unknown_mode;
     }

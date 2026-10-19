@@ -61,54 +61,67 @@ proc frame_loop_reset {
 # Runs one chunk of CPU cycles, advancing PPU and APU in sync.
 # Each chunk runs up to FRAME_LOOP_CYCLES_PER_CHUNK cycles, but stops at instruction
 # boundaries to avoid corrupting state.
+#
+# This is the innermost loop of the whole emulator, so it avoids custom-block calls wherever
+# a comparison will do: the DMA state is tested directly instead of through
+# frame_loop_check_dma, the PPU's three dots per CPU cycle are issued as three dot clocks
+# rather than through ppu_clock_cpu_cycle, the NMI latch is read directly rather than through
+# ppu_take_nmi_edge, and the IRQ line is composed from the APU and board state that
+# apu_is_irq_asserted and cartridge_board_irq_line would read. The standalone procs and
+# funcs stay for the self test and as the documented description of each step.
 proc frame_loop_run_chunk {
     frame_loop_chunk_cycles_run = 0;
 
     until frame_loop_chunk_cycles_run >= FRAME_LOOP_CYCLES_PER_CHUNK or frame_loop_frame_complete == 1 {
         if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
             frame_loop_frame_complete = 1;
-        } else {
-            # Check for OAM DMA stall
+        } elif cpu_dma_phase != 0 {
+            # An OAM DMA transfer stalls the CPU: the bus runs the whole transfer, and the
+            # cycles it spent are clocked on the PPU and APU below like any other cycle.
             frame_loop_check_dma;
+            frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_dma_cycles;
+            frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_dma_cycles;
 
-            if frame_loop_dma_cycles > 0 {
-                frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_dma_cycles;
-                frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_dma_cycles;
+            repeat frame_loop_dma_cycles {
+                ppu_clock_ppu_dot;
+                ppu_clock_ppu_dot;
+                ppu_clock_ppu_dot;
+                apu_clock_cpu_cycle;
+            }
+        } else {
+            # Run one CPU sequence (instruction, IRQ, NMI, or jam)
+            frame_loop_cycles_before = cpu_cycles;
+            cpu_begin_next_sequence;
+            frame_loop_cycles_after = cpu_cycles;
+            frame_loop_sequence_cycles = frame_loop_cycles_after - frame_loop_cycles_before;
 
-                # Advance PPU and APU for DMA cycles
-                repeat frame_loop_dma_cycles {
-                    ppu_clock_cpu_cycle;
-                    apu_clock_cpu_cycle;
-                }
+            frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_sequence_cycles;
+            frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_sequence_cycles;
+
+            # Advance the PPU by three dots and the APU by one cycle per CPU cycle.
+            repeat frame_loop_sequence_cycles {
+                ppu_clock_ppu_dot;
+                ppu_clock_ppu_dot;
+                ppu_clock_ppu_dot;
+                apu_clock_cpu_cycle;
+            }
+
+            # Check for PPU NMI and forward to CPU
+            if ppu_nmi_edge_pending == 1 {
+                ppu_nmi_edge_pending = 0;
+                cpu_request_nmi;
+            }
+
+            # The APU and the cartridge board drive one IRQ line, the way the console
+            # composes them: an MMC3 board raises a scanline IRQ and the APU raises a
+            # frame IRQ. The composition is written out here instead of through
+            # apu_is_irq_asserted and cartridge_board_irq_line.
+            if apu_frame_irq != 0 or dmc_irq != 0 {
+                cpu_irq_line_asserted = 1;
+            } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 and mmc3_irq_line_asserted == 1 {
+                cpu_irq_line_asserted = 1;
             } else {
-                # Run one CPU sequence (instruction, IRQ, NMI, or jam)
-                frame_loop_cycles_before = cpu_cycles;
-                cpu_begin_next_sequence;
-                frame_loop_cycles_after = cpu_cycles;
-                frame_loop_sequence_cycles = frame_loop_cycles_after - frame_loop_cycles_before;
-
-                frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_sequence_cycles;
-                frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_sequence_cycles;
-
-                # Advance PPU and APU for the CPU cycles
-                repeat frame_loop_sequence_cycles {
-                    ppu_clock_cpu_cycle;
-                    apu_clock_cpu_cycle;
-                }
-
-                # Check for PPU NMI and forward to CPU
-                if ppu_take_nmi_edge() == 1 {
-                    cpu_request_nmi;
-                }
-
-                # The APU and the cartridge board drive one IRQ line, the way the console
-                # composes them: an MMC3 board raises a scanline IRQ and the APU raises a
-                # frame IRQ.
-                if apu_is_irq_asserted() == 1 or cartridge_board_irq_line() == 1 {
-                    cpu_set_irq_line 1;
-                } else {
-                    cpu_set_irq_line 0;
-                }
+                cpu_irq_line_asserted = 0;
             }
         }
     }

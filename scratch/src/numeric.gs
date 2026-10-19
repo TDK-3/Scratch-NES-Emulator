@@ -6,6 +6,24 @@
 # which the automated suite compares exhaustively against the bitwise TypeScript reference
 # in src/nes/cpu/registers.ts and src/nes/cpu/alu.ts. Mirroring the algorithms is not the
 # same as compiling this file; the pinned GoboScript compiler is still unavailable.
+#
+# Performance notes for the Scratch runtime:
+#
+# - Scratch's "%" block is already a floored modulo, so it always lands in [0, divisor)
+#   even for negative inputs. The old double-modulo form "(n % 256 + 256) % 256" was
+#   therefore two blocks of pure overhead and is now a single "%".
+# - Every func call compiles to a Scratch custom block, which costs far more than the
+#   handful of operators it wraps. The helpers below therefore avoid calling each other
+#   and inline the arithmetic they need.
+# - A bitwise AND used to walk one bit per iteration (16 iterations of modulus, division,
+#   comparison and addition) for every masked bus read. It now looks up the low and high
+#   nibble pair in a 256-entry table of nibble ANDs, four table reads and a few operators.
+#   OR and XOR are derived from AND with the two identities a | b = a + b - (a & b) and
+#   a ^ b = a + b - 2 * (a & b), which hold for every non-negative pair, so only the AND
+#   table has to exist. src/bitwise_tables.gs fills it from the Stage's green flag before
+#   anything reads a bus byte.
+
+%include src/bitwise_tables
 
 # 2A03 status flags. Values match the CARRY_FLAG..NEGATIVE_FLAG constants in registers.ts.
 enum cpu_flag {
@@ -25,23 +43,20 @@ func to_number(value) {
     return $value + "";
 }
 
-# Wraps an integer into the unsigned byte range; mirrors normalize_byte().
+# Wraps an integer into the unsigned byte range; mirrors normalize_byte(). Scratch's modulo
+# is floored, so this is the whole conversion.
 func normalize_byte(value) {
-    local numeric = $value + "";
-
-    return ((numeric % 256) + 256) % 256;
+    return $value % 256;
 }
 
 # Wraps an integer into the unsigned 16-bit address range; mirrors normalize_word().
 func normalize_word(value) {
-    local numeric = $value + "";
-
-    return ((numeric % 65536) + 65536) % 65536;
+    return $value % 65536;
 }
 
 # Converts a byte to its signed two's-complement value; mirrors to_signed_byte().
 func to_signed_byte(value) {
-    local byte = normalize_byte($value);
+    local byte = $value % 256;
 
     if byte >= 128 {
         return byte - 256;
@@ -52,81 +67,61 @@ func to_signed_byte(value) {
 
 # High byte of a 16-bit word.
 func byte_high(word) {
-    return normalize_word($word) // 256;
+    return ($word % 65536) // 256;
 }
 
 # Low byte of a 16-bit word.
 func byte_low(word) {
-    return normalize_word($word) % 256;
+    return $word % 256;
 }
 
 # Builds a 16-bit word from two bytes; the inverse of byte_high/byte_low.
 func join_bytes(high, low) {
-    return (normalize_byte($high) * 256) + normalize_byte($low);
+    return (($high % 256) * 256) + ($low % 256);
 }
 
 # Returns 1 when the bit with the given power-of-two weight is set, otherwise 0.
 func bit_at(value, weight) {
-    return (normalize_word($value) // $weight) % 2;
+    return (($value % 65536) // $weight) % 2;
 }
 
-# Bitwise AND over 16 bits. One iteration per bit is measurable overhead in hot CPU paths;
-# a byte-wide variant is a benchmarking follow-up, not a silent optimization.
+# Bitwise AND over 16 bits, through the nibble table. Both operands are bytes for nearly every
+# caller in the console, so the byte case takes a two-lookup path and only a wider pair pays
+# for the full 16-bit split.
 func bitwise_and(left, right) {
-    local remaining_left = normalize_word($left);
-    local remaining_right = normalize_word($right);
-    local result = 0;
-    local weight = 1;
+    local left_word = $left % 65536;
+    local right_word = $right % 65536;
 
-    repeat 16 {
-        if ((remaining_left % 2) == 1) and ((remaining_right % 2) == 1) {
-            result += weight;
-        }
-
-        remaining_left = remaining_left // 2;
-        remaining_right = remaining_right // 2;
-        weight = weight * 2;
+    if left_word < 256 and right_word < 256 {
+        return (bitwise_table_and[((left_word // 16) * 16) + (right_word // 16) + 1] * 16)
+            + bitwise_table_and[((left_word % 16) * 16) + (right_word % 16) + 1];
     }
 
-    return result;
+    local left_high = left_word // 256;
+    local right_high = right_word // 256;
+    local left_low = left_word % 256;
+    local right_low = right_word % 256;
+    local high_nibbles = bitwise_table_and[((left_high // 16) * 16) + (right_high // 16) + 1];
+    local high_bits = bitwise_table_and[((left_high % 16) * 16) + (right_high % 16) + 1];
+    local low_nibbles = bitwise_table_and[((left_low // 16) * 16) + (right_low // 16) + 1];
+    local low_bits = bitwise_table_and[((left_low % 16) * 16) + (right_low % 16) + 1];
+
+    return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
 }
 
-# Bitwise OR over 16 bits.
+# Bitwise OR over 16 bits. a | b is exactly a + b - (a & b) for non-negative operands, so
+# the nibble table only has to answer AND.
 func bitwise_or(left, right) {
-    local remaining_left = normalize_word($left);
-    local remaining_right = normalize_word($right);
-    local result = 0;
-    local weight = 1;
+    local left_word = $left % 65536;
+    local right_word = $right % 65536;
 
-    repeat 16 {
-        if ((remaining_left % 2) == 1) or ((remaining_right % 2) == 1) {
-            result += weight;
-        }
-
-        remaining_left = remaining_left // 2;
-        remaining_right = remaining_right // 2;
-        weight = weight * 2;
-    }
-
-    return result;
+    return (left_word + right_word) - bitwise_and(left_word, right_word);
 }
 
-# Bitwise XOR over 16 bits.
+# Bitwise XOR over 16 bits. a ^ b is exactly a + b - 2 * (a & b) for non-negative operands.
 func bitwise_xor(left, right) {
-    local remaining_left = normalize_word($left);
-    local remaining_right = normalize_word($right);
-    local result = 0;
-    local weight = 1;
+    local left_word = $left % 65536;
+    local right_word = $right % 65536;
 
-    repeat 16 {
-        if (remaining_left % 2) != (remaining_right % 2) {
-            result += weight;
-        }
-
-        remaining_left = remaining_left // 2;
-        remaining_right = remaining_right // 2;
-        weight = weight * 2;
-    }
-
-    return result;
+    return (left_word + right_word) - (2 * bitwise_and(left_word, right_word));
 }

@@ -110,6 +110,11 @@ nowarp proc rom_run_loop {
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;
             rom_run_frame_count = rom_run_frame_count + 1;
+
+            # The summary line is rebuilt once per emulated frame instead of once per chunk:
+            # the report cannot change faster than the counters it shows, and a chunk is only
+            # a hundred cycles of one frame.
+            rom_run_update_status;
         }
 
         if ppu_frame_ready == 1 {
@@ -123,7 +128,6 @@ nowarp proc rom_run_loop {
             broadcast_and_wait "draw frame";
         }
 
-        rom_run_update_status;
         wait 0;
     }
 }

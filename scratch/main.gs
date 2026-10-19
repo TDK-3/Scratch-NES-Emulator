@@ -79,9 +79,12 @@ proc pen_draw_frame {
         run_key = (ppu_framebuffer_emphasis[framebuffer_index] * 64)
             + ppu_framebuffer_colors[framebuffer_index];
 
-        until pixel_x == 255 {
-            pixel_x++;
-            framebuffer_index = row_base + pixel_x + 1;
+        # The remaining 255 pixels of the row, with the framebuffer index carried forward
+        # instead of being recomputed from the pixel number: a repeat loop and one addition
+        # per pixel, over 61,440 pixels a frame.
+        repeat 255 {
+            pixel_x = pixel_x + 1;
+            framebuffer_index = framebuffer_index + 1;
             current_key = (ppu_framebuffer_emphasis[framebuffer_index] * 64)
                 + ppu_framebuffer_colors[framebuffer_index];
 

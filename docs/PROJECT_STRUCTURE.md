@@ -152,6 +152,7 @@
         goboscript.toml
         main.gs  display sprite: reports status and draws each frame with the pen extension
         src/
+            bitwise_tables.gs  the 256-entry nibble AND table the bit-free helpers index
             cartridge.gs  iNES and NES 2.0 header parsing with numeric error codes
             cartridge_loader.gs  boot path: signature, header, board validation, payload, attachment
             controller.gs  two serial controller ports
@@ -258,7 +259,8 @@ toolchain needs Cargo and rustc, which are unavailable here.
   driven from, and the sampler that turns the keys held down into the two button masks `controller.gs`
   reports. The run loop calls it once per chunk of emulated cycles.
 - `src/numeric.gs` holds the bit-free byte, word, and bitwise helpers, plus the `cpu_flag` enum. GoboScript
-  has no bitwise operators, so masks and shifts are floor division and modulo.
+  has no bitwise operators, so masks and shifts are floor division and modulo, and `src/bitwise_tables.gs`
+  fills the 256-entry nibble AND table the helpers read instead of walking a bit loop.
 - `src/cpu_status.gs` holds status normalization, flag get/set, zero/negative updates, and the stack forms.
 - `src/cpu_alu.gs` holds the thirteen ALU operations; each proc leaves its result in `alu_value` and its
   status in `alu_status`.

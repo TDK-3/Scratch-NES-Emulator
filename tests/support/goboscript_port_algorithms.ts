@@ -70,23 +70,23 @@ export function to_number(value: number | string): number {
     return numeric;
 }
 
-/** Mirror of `normalize_byte(value)`. */
+/**
+ * Mirror of `normalize_byte(value)`. Scratch's modulo is floored, so the modulo alone
+ * reproduces `((n % 256) + 256) % 256` for every input; the port and this mirror both use
+ * the single modulo.
+ */
 export function normalize_byte(value: number): number {
-    const numeric = to_number(value);
-
-    return scratch_mod(scratch_mod(numeric, 256) + 256, 256);
+    return scratch_mod(value, 256);
 }
 
-/** Mirror of `normalize_word(value)`. */
+/** Mirror of `normalize_word(value)`; a single floored modulo, like normalize_byte. */
 export function normalize_word(value: number): number {
-    const numeric = to_number(value);
-
-    return scratch_mod(scratch_mod(numeric, 65536) + 65536, 65536);
+    return scratch_mod(value, 65536);
 }
 
 /** Mirror of `to_signed_byte(value)`. */
 export function to_signed_byte(value: number): number {
-    const byte = normalize_byte(value);
+    const byte = scratch_mod(value, 256);
 
     if (byte >= 128) {
         return byte - 256;
@@ -97,114 +97,135 @@ export function to_signed_byte(value: number): number {
 
 /** Mirror of `byte_high(word)`. */
 export function byte_high(word: number): number {
-    return scratch_floor_divide(normalize_word(word), 256);
+    return scratch_floor_divide(scratch_mod(word, 65536), 256);
 }
 
 /** Mirror of `byte_low(word)`. */
 export function byte_low(word: number): number {
-    return scratch_mod(normalize_word(word), 256);
+    return scratch_mod(word, 256);
 }
 
 /** Mirror of `join_bytes(high, low)`. */
 export function join_bytes(high: number, low: number): number {
-    return normalize_byte(high) * 256 + normalize_byte(low);
+    return scratch_mod(high, 256) * 256 + scratch_mod(low, 256);
 }
 
 /** Mirror of `bit_at(value, weight)`; the weight must be a power of two. */
 export function bit_at(value: number, weight: number): number {
-    return scratch_mod(scratch_floor_divide(normalize_word(value), weight), 2);
+    return scratch_mod(scratch_floor_divide(scratch_mod(value, 65536), weight), 2);
 }
 
-/** Mirror of `bitwise_and(left, right)`; one iteration per bit, as in the ported header. */
+/**
+ * Mirror of the `bitwise_table_and` list and `bitwise_table_init` proc: the AND of the two
+ * nibbles selected by index = high * 16 + low. The TypeScript side can build it with
+ * bitwise operators because only the GoboScript port is bit-free; the port fills the same
+ * entries at run time from four per-bit tests, and this construction is checked against
+ * those by the same exhaustive comparison that exercises bitwise_and below.
+ */
+export const BITWISE_TABLE_AND: readonly number[] = (() => {
+    const table: number[] = [];
+
+    for (let high = 0; high < 16; high += 1) {
+        for (let low = 0; low < 16; low += 1) {
+            let value = 0;
+
+            for (let bit = 0; bit < 4; bit += 1) {
+                const weight = 2 ** bit;
+                const high_bit = scratch_floor_divide(high, weight) % 2;
+                const low_bit = scratch_floor_divide(low, weight) % 2;
+
+                if (high_bit === 1 && low_bit === 1) {
+                    value += weight;
+                }
+            }
+
+            table.push(value);
+        }
+    }
+
+    return table;
+})();
+
+/**
+ * Mirror of `bitwise_and(left, right)`: a pair of nibble-table reads for a byte-wide pair
+ * and four for a wider one, so the ported helper costs a fixed handful of blocks per call.
+ * The port keeps the table in a 1-based list and this mirror in a 0-based array; both index
+ * it with high nibble * 16 + low nibble, which is the same entry either way.
+ */
 export function bitwise_and(left: number, right: number): number {
-    let remaining_left = normalize_word(left);
-    let remaining_right = normalize_word(right);
-    let result = 0;
-    let weight = 1;
+    const left_word = scratch_mod(left, 65536);
+    const right_word = scratch_mod(right, 65536);
 
-    for (let iteration = 0; iteration < 16; iteration += 1) {
-        if (scratch_mod(remaining_left, 2) === 1 && scratch_mod(remaining_right, 2) === 1) {
-            result += weight;
-        }
+    if (left_word < 256 && right_word < 256) {
+        const low_nibbles = BITWISE_TABLE_AND[(scratch_floor_divide(left_word, 16) * 16) + scratch_floor_divide(right_word, 16)] ?? 0;
+        const low_bits = BITWISE_TABLE_AND[(scratch_mod(left_word, 16) * 16) + scratch_mod(right_word, 16)] ?? 0;
 
-        remaining_left = scratch_floor_divide(remaining_left, 2);
-        remaining_right = scratch_floor_divide(remaining_right, 2);
-        weight = weight * 2;
+        return low_nibbles * 16 + low_bits;
     }
 
-    return result;
+    const left_high = scratch_floor_divide(left_word, 256);
+    const right_high = scratch_floor_divide(right_word, 256);
+    const left_low = scratch_mod(left_word, 256);
+    const right_low = scratch_mod(right_word, 256);
+    const high_nibbles = BITWISE_TABLE_AND[(scratch_floor_divide(left_high, 16) * 16) + scratch_floor_divide(right_high, 16)] ?? 0;
+    const high_bits = BITWISE_TABLE_AND[(scratch_mod(left_high, 16) * 16) + scratch_mod(right_high, 16)] ?? 0;
+    const low_nibbles = BITWISE_TABLE_AND[(scratch_floor_divide(left_low, 16) * 16) + scratch_floor_divide(right_low, 16)] ?? 0;
+    const low_bits = BITWISE_TABLE_AND[(scratch_mod(left_low, 16) * 16) + scratch_mod(right_low, 16)] ?? 0;
+
+    return (high_nibbles * 16 + high_bits) * 256 + (low_nibbles * 16 + low_bits);
 }
 
-/** Mirror of `bitwise_or(left, right)`. */
+/** Mirror of `bitwise_or(left, right)`: a + b - (a & b) for non-negative operands. */
 export function bitwise_or(left: number, right: number): number {
-    let remaining_left = normalize_word(left);
-    let remaining_right = normalize_word(right);
-    let result = 0;
-    let weight = 1;
+    const left_word = scratch_mod(left, 65536);
+    const right_word = scratch_mod(right, 65536);
 
-    for (let iteration = 0; iteration < 16; iteration += 1) {
-        if (scratch_mod(remaining_left, 2) === 1 || scratch_mod(remaining_right, 2) === 1) {
-            result += weight;
-        }
-
-        remaining_left = scratch_floor_divide(remaining_left, 2);
-        remaining_right = scratch_floor_divide(remaining_right, 2);
-        weight = weight * 2;
-    }
-
-    return result;
+    return left_word + right_word - bitwise_and(left_word, right_word);
 }
 
-/** Mirror of `bitwise_xor(left, right)`. */
+/** Mirror of `bitwise_xor(left, right)`: a + b - 2 * (a & b) for non-negative operands. */
 export function bitwise_xor(left: number, right: number): number {
-    let remaining_left = normalize_word(left);
-    let remaining_right = normalize_word(right);
-    let result = 0;
-    let weight = 1;
+    const left_word = scratch_mod(left, 65536);
+    const right_word = scratch_mod(right, 65536);
 
-    for (let iteration = 0; iteration < 16; iteration += 1) {
-        if (scratch_mod(remaining_left, 2) !== scratch_mod(remaining_right, 2)) {
-            result += weight;
-        }
-
-        remaining_left = scratch_floor_divide(remaining_left, 2);
-        remaining_right = scratch_floor_divide(remaining_right, 2);
-        weight = weight * 2;
-    }
-
-    return result;
+    return left_word + right_word - 2 * bitwise_and(left_word, right_word);
 }
 
-/** Mirror of `normalize_status(status)`. */
+/**
+ * Mirror of `normalize_status(status)`. The status byte is eight bits wide, so the two
+ * bits the invariant owns are read with floored modulo and division; the port no longer
+ * goes through bit_at for them.
+ */
 export function normalize_status(status: number): number {
-    const byte = normalize_byte(status);
-    const without_break = byte - 16 * bit_at(byte, 16);
+    const byte = scratch_mod(status, 256);
 
-    return without_break + 32 * (1 - bit_at(without_break, 32));
+    return scratch_mod(byte, 16) + 32 + scratch_floor_divide(byte, 64) * 64;
 }
 
 /** Mirror of `has_status_flag(status, flag)`. */
 export function has_status_flag(status: number, flag: number): number {
-    return bit_at(normalize_status(status), flag);
+    return scratch_mod(scratch_floor_divide(normalize_status(status), flag), 2);
 }
 
 /** Mirror of `set_status_flag(status, flag, enabled)`; `enabled` is the ported 0/1 form. */
 export function set_status_flag(status: number, flag: number, enabled: number): number {
     const normalized = normalize_status(status);
-    const current = bit_at(normalized, flag);
+    const current = scratch_mod(scratch_floor_divide(normalized, flag), 2);
     const updated = enabled === 1 ? normalized + flag * (1 - current) : normalized - flag * current;
 
     return normalize_status(updated);
 }
 
-/** Mirror of `update_zero_negative_flags(status, value)`. */
+/** Mirror of `update_zero_negative_flags(status, value)`: one normalize, two bits in place. */
 export function update_zero_negative_flags(status: number, value: number): number {
-    const byte = normalize_byte(value);
-    const zero_enabled = byte === 0 ? 1 : 0;
-    const negative_enabled = byte >= 128 ? 1 : 0;
-    const with_zero = set_status_flag(status, CPU_FLAG.ZERO, zero_enabled);
+    const byte = scratch_mod(value, 256);
+    const normalized = normalize_status(status);
+    const without_zero = normalized - 2 * scratch_mod(scratch_floor_divide(normalized, 2), 2);
+    const without_negative = without_zero - 128 * scratch_floor_divide(without_zero, 128);
+    const zero_bit = byte === 0 ? CPU_FLAG.ZERO : 0;
+    const negative_bit = byte >= 128 ? CPU_FLAG.NEGATIVE : 0;
 
-    return set_status_flag(with_zero, CPU_FLAG.NEGATIVE, negative_enabled);
+    return without_negative + zero_bit + negative_bit;
 }
 
 /** Mirror of `pack_status_for_stack(status, break_enabled)`. */
@@ -223,137 +244,187 @@ export function unpack_status_from_stack(status: number): number {
     return normalize_status(status);
 }
 
-/** Mirror of `alu_add_with_carry accumulator, operand, status`. */
+/**
+ * Mirror of `alu_add_with_carry accumulator, operand, status`. One status normalize feeds
+ * the carry input, the stored carry and overflow bits, and the final zero/negative update.
+ */
 export function alu_add_with_carry(accumulator: number, operand: number, status: number): AluResult {
-    const left = normalize_byte(accumulator);
-    const right = normalize_byte(operand);
-    const carry_in = has_status_flag(status, CPU_FLAG.CARRY);
+    const left = scratch_mod(accumulator, 256);
+    const right = scratch_mod(operand, 256);
+    const normalized = normalize_status(status);
+    const carry_in = scratch_mod(normalized, 2);
     const sum = left + right + carry_in;
-    const value = normalize_byte(sum);
-    const signed_sum = to_signed_byte(left) + to_signed_byte(right) + carry_in;
-    const carry_enabled = sum > 255 ? 1 : 0;
-    const overflow_enabled = signed_sum !== to_signed_byte(value) ? 1 : 0;
-    const with_carry = set_status_flag(status, CPU_FLAG.CARRY, carry_enabled);
-    const updated = set_status_flag(with_carry, CPU_FLAG.OVERFLOW, overflow_enabled);
+    const value = scratch_mod(sum, 256);
+    let signed_left = left;
+    let signed_right = right;
+    let signed_value = value;
+    const carried = sum > 255 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    const overflow_bit = scratch_mod(scratch_floor_divide(carried, 64), 2);
+
+    if (signed_left >= 128) {
+        signed_left -= 256;
+    }
+
+    if (signed_right >= 128) {
+        signed_right -= 256;
+    }
+
+    if (signed_value >= 128) {
+        signed_value -= 256;
+    }
+
+    const signed_sum = signed_left + signed_right + carry_in;
+    const updated =
+        signed_sum !== signed_value ? carried + 64 * (1 - overflow_bit) : carried - 64 * overflow_bit;
 
     return { value, status: update_zero_negative_flags(updated, value) };
 }
 
 /** Mirror of `alu_subtract_with_carry accumulator, operand, status`. */
 export function alu_subtract_with_carry(accumulator: number, operand: number, status: number): AluResult {
-    const left = normalize_byte(accumulator);
-    const right = normalize_byte(operand);
-    const carry_in = has_status_flag(status, CPU_FLAG.CARRY);
-    const borrow = 1 - carry_in;
+    const left = scratch_mod(accumulator, 256);
+    const right = scratch_mod(operand, 256);
+    const normalized = normalize_status(status);
+    const borrow = 1 - scratch_mod(normalized, 2);
     const difference = left - right - borrow;
-    const value = normalize_byte(difference);
-    const signed_difference = to_signed_byte(left) - to_signed_byte(right) - borrow;
-    const carry_enabled = difference >= 0 ? 1 : 0;
-    const overflow_enabled = signed_difference !== to_signed_byte(value) ? 1 : 0;
-    const with_carry = set_status_flag(status, CPU_FLAG.CARRY, carry_enabled);
-    const updated = set_status_flag(with_carry, CPU_FLAG.OVERFLOW, overflow_enabled);
+    const value = scratch_mod(difference, 256);
+    let signed_left = left;
+    let signed_right = right;
+    let signed_value = value;
+    const carried =
+        difference >= 0 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    const overflow_bit = scratch_mod(scratch_floor_divide(carried, 64), 2);
+
+    if (signed_left >= 128) {
+        signed_left -= 256;
+    }
+
+    if (signed_right >= 128) {
+        signed_right -= 256;
+    }
+
+    if (signed_value >= 128) {
+        signed_value -= 256;
+    }
+
+    const signed_difference = signed_left - signed_right - borrow;
+    const updated =
+        signed_difference !== signed_value ? carried + 64 * (1 - overflow_bit) : carried - 64 * overflow_bit;
 
     return { value, status: update_zero_negative_flags(updated, value) };
 }
 
 /** Mirror of `alu_and accumulator, operand, status`. */
 export function alu_and(accumulator: number, operand: number, status: number): AluResult {
-    const value = bitwise_and(normalize_byte(accumulator), normalize_byte(operand));
+    const value = bitwise_and(scratch_mod(accumulator, 256), scratch_mod(operand, 256));
 
     return { value, status: update_zero_negative_flags(status, value) };
 }
 
 /** Mirror of `alu_ora accumulator, operand, status`. */
 export function alu_ora(accumulator: number, operand: number, status: number): AluResult {
-    const value = bitwise_or(normalize_byte(accumulator), normalize_byte(operand));
+    const value = bitwise_or(scratch_mod(accumulator, 256), scratch_mod(operand, 256));
 
     return { value, status: update_zero_negative_flags(status, value) };
 }
 
 /** Mirror of `alu_eor accumulator, operand, status`. */
 export function alu_eor(accumulator: number, operand: number, status: number): AluResult {
-    const value = bitwise_xor(normalize_byte(accumulator), normalize_byte(operand));
+    const value = bitwise_xor(scratch_mod(accumulator, 256), scratch_mod(operand, 256));
 
     return { value, status: update_zero_negative_flags(status, value) };
 }
 
 /** Mirror of `alu_shift_left value, status`. */
 export function alu_shift_left(value: number, status: number): AluResult {
-    const byte = normalize_byte(value);
+    const byte = scratch_mod(value, 256);
     const shifted = byte * 2;
-    const result = normalize_byte(shifted);
-    const carry_enabled = shifted > 255 ? 1 : 0;
-    const updated = set_status_flag(status, CPU_FLAG.CARRY, carry_enabled);
+    const result = scratch_mod(shifted, 256);
+    const normalized = normalize_status(status);
+    const updated = shifted > 255 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
 
     return { value: result, status: update_zero_negative_flags(updated, result) };
 }
 
 /** Mirror of `alu_shift_right value, status`. */
 export function alu_shift_right(value: number, status: number): AluResult {
-    const byte = normalize_byte(value);
+    const byte = scratch_mod(value, 256);
     const result = scratch_floor_divide(byte, 2);
-    const updated = set_status_flag(status, CPU_FLAG.CARRY, scratch_mod(byte, 2));
+    const normalized = normalize_status(status);
+    const updated =
+        scratch_mod(byte, 2) === 1 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
 
     return { value: result, status: update_zero_negative_flags(updated, result) };
 }
 
 /** Mirror of `alu_rotate_left value, status`. */
 export function alu_rotate_left(value: number, status: number): AluResult {
-    const byte = normalize_byte(value);
-    const carry_in = has_status_flag(status, CPU_FLAG.CARRY);
-    const shifted = byte * 2 + carry_in;
-    const result = normalize_byte(shifted);
-    const carry_enabled = shifted > 255 ? 1 : 0;
-    const updated = set_status_flag(status, CPU_FLAG.CARRY, carry_enabled);
+    const byte = scratch_mod(value, 256);
+    const normalized = normalize_status(status);
+    const shifted = byte * 2 + scratch_mod(normalized, 2);
+    const result = scratch_mod(shifted, 256);
+    const updated = shifted > 255 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
 
     return { value: result, status: update_zero_negative_flags(updated, result) };
 }
 
 /** Mirror of `alu_rotate_right value, status`. */
 export function alu_rotate_right(value: number, status: number): AluResult {
-    const byte = normalize_byte(value);
-    const carry_in = has_status_flag(status, CPU_FLAG.CARRY);
-    const shifted = byte + carry_in * 256;
+    const byte = scratch_mod(value, 256);
+    const normalized = normalize_status(status);
+    const shifted = byte + scratch_mod(normalized, 2) * 256;
     const result = scratch_floor_divide(shifted, 2);
-    const updated = set_status_flag(status, CPU_FLAG.CARRY, scratch_mod(shifted, 2));
+    const updated =
+        scratch_mod(shifted, 2) === 1 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
 
     return { value: result, status: update_zero_negative_flags(updated, result) };
 }
 
 /** Mirror of `alu_compare register_value, operand, status`. */
 export function alu_compare(register_value: number, operand: number, status: number): AluResult {
-    const left = normalize_byte(register_value);
-    const right = normalize_byte(operand);
+    const left = scratch_mod(register_value, 256);
+    const right = scratch_mod(operand, 256);
     const difference = left - right;
-    const carry_enabled = difference >= 0 ? 1 : 0;
-    const updated = set_status_flag(status, CPU_FLAG.CARRY, carry_enabled);
+    const normalized = normalize_status(status);
+    const updated =
+        difference >= 0 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
 
-    return { value: left, status: update_zero_negative_flags(updated, normalize_byte(difference)) };
+    return { value: left, status: update_zero_negative_flags(updated, scratch_mod(difference, 256)) };
 }
 
 /** Mirror of `alu_bit_test accumulator, operand, status`. */
 export function alu_bit_test(accumulator: number, operand: number, status: number): AluResult {
-    const left = normalize_byte(accumulator);
-    const memory = normalize_byte(operand);
+    const left = scratch_mod(accumulator, 256);
+    const memory = scratch_mod(operand, 256);
     const tested = bitwise_and(left, memory);
-    const zero_enabled = tested === 0 ? 1 : 0;
-    const with_zero = set_status_flag(status, CPU_FLAG.ZERO, zero_enabled);
-    const with_negative = set_status_flag(with_zero, CPU_FLAG.NEGATIVE, bit_at(memory, 128));
-    const updated = set_status_flag(with_negative, CPU_FLAG.OVERFLOW, bit_at(memory, 64));
+    const normalized = normalize_status(status);
+    let updated =
+        tested === 0
+            ? normalized + 2 * (1 - scratch_mod(scratch_floor_divide(normalized, 2), 2))
+            : normalized - 2 * scratch_mod(scratch_floor_divide(normalized, 2), 2);
+
+    updated =
+        scratch_mod(scratch_floor_divide(memory, 128), 2) === 1
+            ? updated + 128 * (1 - scratch_floor_divide(updated, 128))
+            : updated - 128 * scratch_floor_divide(updated, 128);
+    updated =
+        scratch_mod(scratch_floor_divide(memory, 64), 2) === 1
+            ? updated + 64 * (1 - scratch_mod(scratch_floor_divide(updated, 64), 2))
+            : updated - 64 * scratch_mod(scratch_floor_divide(updated, 64), 2);
 
     return { value: left, status: updated };
 }
 
 /** Mirror of `alu_increment value, status`. */
 export function alu_increment(value: number, status: number): AluResult {
-    const result = normalize_byte(normalize_byte(value) + 1);
+    const result = scratch_mod(scratch_mod(value, 256) + 1, 256);
 
     return { value: result, status: update_zero_negative_flags(status, result) };
 }
 
 /** Mirror of `alu_decrement value, status`. */
 export function alu_decrement(value: number, status: number): AluResult {
-    const result = normalize_byte(normalize_byte(value) - 1);
+    const result = scratch_mod(scratch_mod(value, 256) - 1, 256);
 
     return { value: result, status: update_zero_negative_flags(status, result) };
 }
@@ -561,7 +632,10 @@ export class GoboscriptCpuBus {
         this.bus_cycle_count = this.bus_cycle_count + 1;
 
         if (numeric_address < 8192) {
-            return this.apply_driven_value(this.ram[scratch_mod(numeric_address, 2048)] ?? 0, 255);
+            const ram_value = this.ram[scratch_mod(numeric_address, 2048)] ?? 0;
+            this.open_bus = ram_value;
+
+            return ram_value;
         }
 
         if (numeric_address < 16384) {
@@ -633,14 +707,22 @@ export class GoboscriptCpuBus {
     }
 
     private apply_driven_value(value: number, driven_mask: number): number {
-        const driven = normalize_byte(driven_mask);
-        const undriven = bitwise_xor(255, driven);
-        const driven_bits = bitwise_and(normalize_byte(value), driven);
-        const retained_bits = bitwise_and(this.open_bus, undriven);
-        const merged = bitwise_or(driven_bits, retained_bits);
-        this.open_bus = merged;
+        const driven = scratch_mod(driven_mask, 256);
+        const numeric_value = scratch_mod(value, 256);
 
-        return merged;
+        if (driven === 255) {
+            this.open_bus = numeric_value;
+
+            return numeric_value;
+        }
+
+        if (driven === 0) {
+            return this.open_bus;
+        }
+
+        this.open_bus = bitwise_and(numeric_value, driven) + bitwise_and(this.open_bus, 255 - driven);
+
+        return this.open_bus;
     }
 
     // OAM DMA state machine
@@ -2339,29 +2421,29 @@ export class GoboscriptCpuCore {
 
     /** Mirror of `cpu_fetch_byte`. */
     fetch_byte(): void {
-        const address = normalize_word(this.program_counter);
+        const address = this.program_counter;
         this.read_cycle(address);
         this.fetched_byte = this.cycle_value;
-        this.program_counter = normalize_word(address + 1);
+        this.program_counter = scratch_mod(address + 1, 65536);
     }
 
     /** Mirror of `cpu_fetch_word`. */
     fetch_word(): void {
         this.fetch_byte();
-        const low_byte = this.fetched_byte;
+        const low_byte = scratch_mod(this.fetched_byte, 256);
         this.fetch_byte();
-        this.fetched_word = join_bytes(this.fetched_byte, low_byte);
+        this.fetched_word = scratch_mod(this.fetched_byte, 256) * 256 + low_byte;
     }
 
     /** Mirror of `cpu_push_byte value`. */
     push_byte(value: number): void {
         this.write_cycle(256 + this.stack_pointer, value);
-        this.stack_pointer = normalize_byte(this.stack_pointer - 1);
+        this.stack_pointer = scratch_mod(this.stack_pointer - 1, 256);
     }
 
     /** Mirror of `cpu_pop_byte`. */
     pop_byte(): void {
-        const next_stack_pointer = normalize_byte(this.stack_pointer + 1);
+        const next_stack_pointer = scratch_mod(this.stack_pointer + 1, 256);
         this.read_cycle(256 + next_stack_pointer);
         this.stack_pointer = next_stack_pointer;
         this.popped_byte = this.cycle_value;
@@ -2369,17 +2451,17 @@ export class GoboscriptCpuCore {
 
     /** Mirror of `cpu_push_word value`. */
     push_word(value: number): void {
-        const word = normalize_word(value);
-        this.push_byte(byte_high(word));
-        this.push_byte(byte_low(word));
+        const word = scratch_mod(value, 65536);
+        this.push_byte(scratch_floor_divide(word, 256));
+        this.push_byte(scratch_mod(word, 256));
     }
 
     /** Mirror of `cpu_pop_word`. */
     pop_word(): void {
         this.pop_byte();
-        const low_byte = this.popped_byte;
+        const low_byte = scratch_mod(this.popped_byte, 256);
         this.pop_byte();
-        this.popped_word = join_bytes(this.popped_byte, low_byte);
+        this.popped_word = scratch_mod(this.popped_byte, 256) * 256 + low_byte;
     }
 
     /** Mirror of `cpu_push_status break_enabled`. */
@@ -3800,60 +3882,79 @@ export function ppu_sprite_pattern_address(
     return pattern_table + base_tile * 16 + effective_row;
 }
 
-/** Mirror of `ppu_increment_scroll_x_for(vram_value)` in ppu_2c02.gs. */
+/**
+ * Mirror of `ppu_increment_scroll_x_for(vram_value)` in ppu_2c02.gs. The reference masks
+ * and toggles bits; the port spells the same operations as division, modulo and addition.
+ */
 export function ppu_increment_scroll_x_for(vram_value: number): number {
-    let result = bitwise_and(vram_value, 32767);
+    let result = scratch_mod(vram_value, 32768);
 
     if (scratch_mod(result, 32) === 31) {
-        result = bitwise_and(result, 32767 - 31);
-        result = bitwise_xor(result, 1024);
+        result = result - 31;
+
+        const nametable_bit = scratch_mod(scratch_floor_divide(result, 1024), 2);
+        result = nametable_bit === 1 ? result - 1024 : result + 1024;
     } else {
         result = result + 1;
     }
 
-    return bitwise_and(result, 32767);
+    return scratch_mod(result, 32768);
 }
 
 /** Mirror of `ppu_increment_scroll_y_for(vram_value)` in ppu_2c02.gs. */
 export function ppu_increment_scroll_y_for(vram_value: number): number {
-    let result = bitwise_and(vram_value, 32767);
+    let result = scratch_mod(vram_value, 32768);
     let coarse_y = 0;
 
-    if (bitwise_and(result, 28672) !== 28672) {
+    if (scratch_mod(scratch_floor_divide(result, 4096), 8) !== 7) {
         result = result + 4096;
     } else {
-        result = bitwise_and(result, 32767 - 28672);
+        result = scratch_mod(result, 4096);
         coarse_y = scratch_mod(scratch_floor_divide(result, 32), 32);
 
         if (coarse_y === 29) {
             coarse_y = 0;
-            result = bitwise_xor(result, 2048);
+
+            const nametable_bit = scratch_mod(scratch_floor_divide(result, 2048), 2);
+            result = nametable_bit === 1 ? result - 2048 : result + 2048;
         } else if (coarse_y === 31) {
             coarse_y = 0;
         } else {
             coarse_y = coarse_y + 1;
         }
 
-        result = bitwise_and(result, 32767 - 992) + coarse_y * 32;
+        result = result - scratch_mod(scratch_floor_divide(result, 32), 32) * 32 + coarse_y * 32;
     }
 
-    return bitwise_and(result, 32767);
+    return scratch_mod(result, 32768);
 }
 
 /** Mirror of `ppu_transfer_horizontal_for` in ppu_2c02.gs. */
 export function ppu_transfer_horizontal_for(current_value: number, temporary_value: number): number {
-    const preserved = bitwise_and(current_value, 31712);
-    const transferred = bitwise_and(temporary_value, 1055);
+    const current = scratch_mod(current_value, 32768);
+    const temporary = scratch_mod(temporary_value, 32768);
 
-    return bitwise_or(preserved, transferred);
+    return (
+        current -
+        scratch_mod(current, 32) -
+        scratch_mod(scratch_floor_divide(current, 1024), 2) * 1024 +
+        scratch_mod(temporary, 32) +
+        scratch_mod(scratch_floor_divide(temporary, 1024), 2) * 1024
+    );
 }
 
 /** Mirror of `ppu_transfer_vertical_for` in ppu_2c02.gs. */
 export function ppu_transfer_vertical_for(current_value: number, temporary_value: number): number {
-    const preserved = bitwise_and(current_value, 1055);
-    const transferred = bitwise_and(temporary_value, 31712);
+    const current = scratch_mod(current_value, 32768);
+    const temporary = scratch_mod(temporary_value, 32768);
 
-    return bitwise_or(preserved, transferred);
+    return (
+        scratch_mod(current, 32) +
+        scratch_mod(scratch_floor_divide(current, 1024), 2) * 1024 +
+        temporary -
+        scratch_mod(temporary, 32) -
+        scratch_mod(scratch_floor_divide(temporary, 1024), 2) * 1024
+    );
 }
 
 /** Mirror of `pen_display_fit_scale` in pen_display.gs. */

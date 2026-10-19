@@ -59,7 +59,9 @@ proc cpu_fetch_and_decode_opcode {
 }
 
 # Branches are exactly the official opcodes whose decoded mode is relative, so the dispatch tests
-# the mode and this proc picks the condition from the mnemonic. The operand resolution and the
+# the mode and this proc picks the condition from the mnemonic. cpu_status is normalized by
+# every writer, so each condition reads its flag bit directly instead of through
+# has_status_flag; the branches are ordered by how often compiled code takes them. The operand resolution and the
 # taken, page-crossing, and not-taken cycle counts are the ported relative-branch sequence.
 proc cpu_execute_branch {
     local taken = 0;
@@ -68,21 +70,21 @@ proc cpu_execute_branch {
     if cpu_resolved_error != cpu_operand_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.unresolved_operand;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcc {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.carry);
+        taken = 1 - (cpu_status % 2);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcs {
-        taken = has_status_flag(cpu_status, cpu_flag.carry);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_beq {
-        taken = has_status_flag(cpu_status, cpu_flag.zero);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bmi {
-        taken = has_status_flag(cpu_status, cpu_flag.negative);
+        taken = cpu_status % 2;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bne {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.zero);
+        taken = 1 - ((cpu_status // 2) % 2);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_beq {
+        taken = (cpu_status // 2) % 2;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bpl {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.negative);
+        taken = 1 - (cpu_status // 128);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bmi {
+        taken = cpu_status // 128;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvc {
-        taken = 1 - has_status_flag(cpu_status, cpu_flag.overflow);
+        taken = 1 - ((cpu_status // 64) % 2);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvs {
-        taken = has_status_flag(cpu_status, cpu_flag.overflow);
+        taken = (cpu_status // 64) % 2;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
     }
@@ -114,8 +116,14 @@ proc cpu_execute_jump {
 proc cpu_execute_regular_instruction {
     cpu_resolve_operand cpu_opcode_mode, cpu_opcode_access;
 
+    # The operand kinds are tested immediate first and memory second because those are the two
+    # a running game reaches most often; the branches themselves are unchanged.
     if cpu_resolved_error != cpu_operand_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.unresolved_operand;
+    } elif cpu_resolved_kind == cpu_operand_kind.immediate {
+        cpu_apply_read_instruction cpu_opcode_mnemonic, cpu_resolved_value;
+    } elif cpu_resolved_kind == cpu_operand_kind.memory {
+        cpu_execute_memory_instruction;
     } elif cpu_resolved_kind == cpu_operand_kind.implied {
         cpu_read_cycle cpu_program_counter;
         cpu_apply_implied_instruction;
@@ -127,92 +135,91 @@ proc cpu_execute_regular_instruction {
             cpu_a = alu_value;
             cpu_status = alu_status;
         }
-    } elif cpu_resolved_kind == cpu_operand_kind.immediate {
-        cpu_apply_read_instruction cpu_opcode_mnemonic, cpu_resolved_value;
-    } elif cpu_resolved_kind == cpu_operand_kind.memory {
-        cpu_execute_memory_instruction;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_operand;
     }
 }
 
-# The register, flag, and counter instructions, in the order the reference lists them.
+# The register, flag, and counter instructions. The branches are ordered by how often a game
+# executes them rather than by the reference's source order: an if / elif chain compiles to
+# nested comparisons, and a typical frame runs the first few branches far more often than the
+# flag setters. The registers are bytes by construction, so copying one needs no normalize.
 proc cpu_apply_implied_instruction {
     if cpu_opcode_mnemonic == cpu_mnemonic.op_inx {
-        cpu_x = normalize_byte(cpu_x + 1);
+        cpu_x = (cpu_x + 1) % 256;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_iny {
-        cpu_y = normalize_byte(cpu_y + 1);
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_dex {
-        cpu_x = normalize_byte(cpu_x - 1);
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_dey {
-        cpu_y = normalize_byte(cpu_y - 1);
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tax {
-        cpu_x = normalize_byte(cpu_a);
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tay {
-        cpu_y = normalize_byte(cpu_a);
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tsx {
-        cpu_x = normalize_byte(cpu_stack_pointer);
+        cpu_x = (cpu_x - 1) % 256;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_txa {
-        cpu_a = normalize_byte(cpu_x);
+        cpu_a = cpu_x;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_txs {
-        cpu_stack_pointer = normalize_byte(cpu_x);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tya {
-        cpu_a = normalize_byte(cpu_y);
+        cpu_a = cpu_y;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_clc {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.carry, 0);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_cld {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.decimal, 0);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_cli {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.interrupt_disable, 0);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_clv {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.overflow, 0);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sec {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.carry, 1);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sed {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.decimal, 1);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sei {
-        cpu_status = set_status_flag(cpu_status, cpu_flag.interrupt_disable, 1);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tax {
+        cpu_x = cpu_a;
+        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tay {
+        cpu_y = cpu_a;
+        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_nop {
         # NOP changes no register and spends only the dummy read, so the branch keeps the error
         # at none with an explicit assignment; GoboScript drops an empty branch.
         cpu_instruction_error = cpu_instruction_error_code.none;
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_clc {
+        cpu_status = cpu_status - (cpu_status % 2);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sec {
+        cpu_status = cpu_status + (1 - (cpu_status % 2));
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_cli {
+        cpu_status = cpu_status - (4 * ((cpu_status // 4) % 2));
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sei {
+        cpu_status = cpu_status + (4 * (1 - ((cpu_status // 4) % 2)));
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_iny {
+        cpu_y = (cpu_y + 1) % 256;
+        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_dey {
+        cpu_y = (cpu_y - 1) % 256;
+        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tsx {
+        cpu_x = cpu_stack_pointer;
+        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_txs {
+        cpu_stack_pointer = cpu_x;
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_clv {
+        cpu_status = cpu_status - (64 * ((cpu_status // 64) % 2));
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_cld {
+        cpu_status = cpu_status - (8 * ((cpu_status // 8) % 2));
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_sed {
+        cpu_status = cpu_status + (8 * (1 - ((cpu_status // 8) % 2)));
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
     }
 }
 
 # Applies an operand that was read, whether it came from an immediate byte or from memory. The
-# arithmetic and the flag updates are the ported ALU and status helpers.
+# arithmetic and the flag updates are the ported ALU and status helpers, and the branches are
+# ordered by how often a game executes them.
 proc cpu_apply_read_instruction mnemonic, value {
     if $mnemonic == cpu_mnemonic.op_lda {
-        cpu_a = normalize_byte($value);
+        cpu_a = $value % 256;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
     } elif $mnemonic == cpu_mnemonic.op_ldx {
-        cpu_x = normalize_byte($value);
+        cpu_x = $value % 256;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
     } elif $mnemonic == cpu_mnemonic.op_ldy {
-        cpu_y = normalize_byte($value);
+        cpu_y = $value % 256;
         cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
     } elif $mnemonic == cpu_mnemonic.op_adc {
         alu_add_with_carry cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_sbc {
-        alu_subtract_with_carry cpu_a, $value, cpu_status;
-        cpu_a = alu_value;
-        cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_and {
         alu_and cpu_a, $value, cpu_status;
         cpu_a = alu_value;
+        cpu_status = alu_status;
+    } elif $mnemonic == cpu_mnemonic.op_cmp {
+        alu_compare cpu_a, $value, cpu_status;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_ora {
         alu_ora cpu_a, $value, cpu_status;
@@ -222,14 +229,15 @@ proc cpu_apply_read_instruction mnemonic, value {
         alu_eor cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_cmp {
-        alu_compare cpu_a, $value, cpu_status;
-        cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_cpx {
         alu_compare cpu_x, $value, cpu_status;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_cpy {
         alu_compare cpu_y, $value, cpu_status;
+        cpu_status = alu_status;
+    } elif $mnemonic == cpu_mnemonic.op_sbc {
+        alu_subtract_with_carry cpu_a, $value, cpu_status;
+        cpu_a = alu_value;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_bit {
         alu_bit_test cpu_a, $value, cpu_status;
@@ -283,7 +291,11 @@ proc cpu_compute_store_value {
 # The read-modify-write effects, mirroring modify_value for the six official mnemonics. The
 # result and its status are left in alu_value and alu_status for the caller to store.
 proc cpu_modify_value mnemonic, value {
-    if $mnemonic == cpu_mnemonic.op_asl {
+    if $mnemonic == cpu_mnemonic.op_inc {
+        alu_increment $value, cpu_status;
+    } elif $mnemonic == cpu_mnemonic.op_dec {
+        alu_decrement $value, cpu_status;
+    } elif $mnemonic == cpu_mnemonic.op_asl {
         alu_shift_left $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_lsr {
         alu_shift_right $value, cpu_status;
@@ -291,10 +303,6 @@ proc cpu_modify_value mnemonic, value {
         alu_rotate_left $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_ror {
         alu_rotate_right $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_inc {
-        alu_increment $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_dec {
-        alu_decrement $value, cpu_status;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
     }
@@ -302,9 +310,17 @@ proc cpu_modify_value mnemonic, value {
 
 # Executes one instruction. The caller owns interrupt acceptance, so this proc never decides
 # between an instruction and a hardware interrupt; it runs whatever is at the program counter.
+#
+# The dispatch branches are ordered by how often a game reaches them: the opcode checks first,
+# then the subroutine and branch mnemonics, then the remaining whole sequences. Every branch
+# still runs the same ported sequence; only the comparison order changed.
 proc cpu_execute_instruction {
-    cpu_reset_instruction_error;
-    cpu_fetch_and_decode_opcode;
+    # cpu_reset_instruction_error and cpu_fetch_and_decode_opcode inlined: this proc runs once
+    # per emulated instruction, and two custom-block calls for one assignment, one fetch, and
+    # one decode are pure call overhead.
+    cpu_instruction_error = cpu_instruction_error_code.none;
+    cpu_fetch_byte;
+    cpu_decode_opcode cpu_fetched_byte;
 
     if cpu_opcode_error != cpu_opcode_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.undecodable_opcode;
@@ -314,14 +330,16 @@ proc cpu_execute_instruction {
         cpu_jammed = 1;
     } elif cpu_opcode_official == 0 {
         cpu_instruction_error = cpu_instruction_error_code.unofficial_opcode;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_brk {
-        cpu_execute_brk_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jsr {
         cpu_execute_jsr_cycles;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rti {
-        cpu_execute_rti_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rts {
         cpu_execute_rts_cycles;
+    } elif cpu_opcode_mode == cpu_addressing_mode.relative {
+        cpu_execute_branch;
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_brk {
+        cpu_execute_brk_cycles;
+    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rti {
+        cpu_execute_rti_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pha {
         cpu_read_cycle cpu_program_counter;
         cpu_push_byte cpu_a;
@@ -341,8 +359,6 @@ proc cpu_execute_instruction {
         cpu_restore_status_from_stack cpu_popped_byte;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jmp {
         cpu_execute_jump;
-    } elif cpu_opcode_mode == cpu_addressing_mode.relative {
-        cpu_execute_branch;
     } else {
         cpu_execute_regular_instruction;
     }

@@ -337,8 +337,8 @@ proc mmc3_load_payload {
 func mmc3_prg_bank(slot) {
     local last_bank = mmc3_prg_bank_count - 1;
     local second_last_bank = mmc3_prg_bank_count - 2;
-    local bank6 = to_number(mmc3_bank_registers[7]);
-    local bank7 = to_number(mmc3_bank_registers[8]);
+    local bank6 = mmc3_bank_registers[7];
+    local bank7 = mmc3_bank_registers[8];
     local bank = 0;
 
     if mmc3_prg_mode == 0 {
@@ -370,8 +370,8 @@ func mmc3_prg_bank(slot) {
 # slots and the four 1 KiB registers in the last four; mode 1 swaps the two groups. A paired register
 # selects its own bank and the one after it, which is why bank execute forces those two even.
 func mmc3_chr_bank(slot) {
-    local register0 = to_number(mmc3_bank_registers[1]);
-    local register1 = to_number(mmc3_bank_registers[2]);
+    local register0 = mmc3_bank_registers[1];
+    local register1 = mmc3_bank_registers[2];
     local bank = 0;
 
     if mmc3_chr_mode == 0 {
@@ -384,11 +384,11 @@ func mmc3_chr_bank(slot) {
         } elif $slot == 3 {
             bank = register1 + 1;
         } else {
-            bank = to_number(mmc3_bank_registers[$slot - 1]);
+            bank = mmc3_bank_registers[$slot - 1];
         }
     } else {
         if $slot < 4 {
-            bank = to_number(mmc3_bank_registers[$slot + 3]);
+            bank = mmc3_bank_registers[$slot + 3];
         } elif $slot == 4 {
             bank = register0;
         } elif $slot == 5 {
@@ -458,7 +458,7 @@ proc mmc3_write_register address, value {
 # is the selected PRG bank, and $6000-$7FFF is PRG RAM when the board has any and the protect register
 # still enables it. Anything else is unmapped, which the reference reports as a null read.
 proc mmc3_read_cpu address {
-    local numeric_address = normalize_word($address);
+    local numeric_address = $address % 65536;
     local slot = 0;
     local offset = 0;
     mmc3_cpu_mapped = 0;
@@ -466,16 +466,18 @@ proc mmc3_read_cpu address {
     mmc3_cpu_driven_mask = 0;
 
     if numeric_address >= mmc3_limit.prg_rom_start {
+        # One division per slot, and the in-bank offset is the address modulo the bank size:
+        # this is the path every instruction fetch in mapped PRG ROM takes.
         slot = (numeric_address - mmc3_limit.prg_rom_start) // mmc3_limit.prg_bank_bytes;
-        offset = (mmc3_prg_bank(slot) * mmc3_limit.prg_bank_bytes) + bitwise_and(numeric_address, 8191);
+        offset = (mmc3_prg_bank(slot) * mmc3_limit.prg_bank_bytes) + (numeric_address % 8192);
         mmc3_cpu_mapped = 1;
-        mmc3_cpu_value = to_number(mmc3_prg_rom[offset + 1]);
+        mmc3_cpu_value = mmc3_prg_rom[offset + 1];
         mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
     } elif numeric_address >= mmc3_limit.prg_ram_start and mmc3_prg_ram_enabled == 1 {
         if mmc3_prg_ram_bytes > 0 {
             offset = (numeric_address - mmc3_limit.prg_ram_start) % mmc3_prg_ram_bytes;
             mmc3_cpu_mapped = 1;
-            mmc3_cpu_value = to_number(mmc3_prg_ram[offset + 1]);
+            mmc3_cpu_value = mmc3_prg_ram[offset + 1];
             mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
         }
     }
@@ -502,23 +504,23 @@ proc mmc3_write_cpu address, value {
 # Reads one pattern-table byte from the CHR bank its slot selects, out of CHR ROM when the board has
 # it and out of CHR RAM otherwise.
 proc mmc3_read_pattern address {
-    local numeric_address = normalize_word($address) % mmc3_limit.pattern_space_bytes;
+    local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
-    local offset = (mmc3_chr_bank(slot) * mmc3_limit.chr_bank_bytes) + bitwise_and(numeric_address, 1023);
+    local offset = (mmc3_chr_bank(slot) * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
     mmc3_pattern_value = 0;
 
     if mmc3_chr_rom_bytes > 0 {
-        mmc3_pattern_value = to_number(mmc3_chr_rom[offset + 1]);
+        mmc3_pattern_value = mmc3_chr_rom[offset + 1];
     } elif mmc3_chr_ram_bytes > 0 {
-        mmc3_pattern_value = to_number(mmc3_chr_ram[offset + 1]);
+        mmc3_pattern_value = mmc3_chr_ram[offset + 1];
     }
 }
 
 # Writes one pattern-table byte. A CHR ROM board drops the write, as the reference does.
 proc mmc3_write_pattern address, value {
-    local numeric_address = normalize_word($address) % mmc3_limit.pattern_space_bytes;
+    local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
-    local offset = (mmc3_chr_bank(slot) * mmc3_limit.chr_bank_bytes) + bitwise_and(numeric_address, 1023);
+    local offset = (mmc3_chr_bank(slot) * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
     mmc3_pattern_write_accepted = 0;
 
     if mmc3_chr_ram_bytes > 0 {
