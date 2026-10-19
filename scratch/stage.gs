@@ -27,11 +27,14 @@ costumes "assets/blank.svg";
 %include src/rom_loader
 %include src/cartridge_loader
 %include src/frame_loop
+%include src/nes_palette
+%include src/pen_display
 %include src/shared_vectors
 %include src/vector_selftest
 %include src/rom_run
 
 onflag {
+    nes_palette_init;
     run_port_self_test;
     broadcast "port self test done";
     rom_run_start;

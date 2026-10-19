@@ -13,9 +13,11 @@
 # frame completes. The bus-access log stays off while the game runs, the way the reference runs
 # the CPU without a trace sink, so the log cannot grow without bound.
 #
-# The port has no PPU renderer yet, so the run produces no picture: the game still writes to
-# VRAM, still receives vblank interrupts, and still advances the frame counter, and the report
-# shows the frames, the CPU cycles, and the program counter the console reached.
+# Every time the PPU finishes a visible frame it raises ppu_frame_ready at the vblank-start
+# dot. The loop then hands the framebuffer to the display sprite with a broadcast it waits on,
+# so the sprite draws one stable frame with the pen extension while the console is paused, and
+# no scanline of the next frame can overwrite a row the sprite has not drawn yet. The report
+# still shows the frames, the drawn frames, the CPU cycles, and the program counter reached.
 
 %include src/numeric
 %include src/cpu_core
@@ -24,12 +26,16 @@
 %include src/controller
 %include src/cartridge_loader
 %include src/frame_loop
+%include src/pen_display
 
 # Whether the console booted and the image is running.
 var rom_run_started = 0;
 
 # The frames the console has run since the boot.
 var rom_run_frame_count = 0;
+
+# The finished frames the display sprite has drawn since the boot.
+var rom_run_frames_drawn = 0;
 
 # The CPU cycles the console has run since the boot.
 var rom_run_cycles = 0;
@@ -42,6 +48,7 @@ var rom_run_state_text = "";
 proc rom_run_start {
     rom_run_started = 0;
     rom_run_frame_count = 0;
+    rom_run_frames_drawn = 0;
     rom_run_cycles = 0;
     rom_run_state_text = "not started";
 
@@ -77,9 +84,10 @@ proc rom_run_start {
 }
 
 # Runs the console until the project stops. Every iteration runs one bounded chunk of CPU
-# cycles, counts the frame the chunk finished, refreshes the report, and yields. The block is
-# declared nowarp so the loop hands the project back after every chunk instead of holding the
-# screen refresh for a whole warp window.
+# cycles, counts the frame the chunk finished, presents a frame the PPU completed, refreshes
+# the report, and yields. The block is declared nowarp so the loop hands the project back
+# after every chunk instead of holding the screen refresh for a whole warp window, and so the
+# presentation broadcast can wait for the display sprite to finish drawing.
 nowarp proc rom_run_loop {
     forever {
         frame_loop_run_chunk;
@@ -88,6 +96,17 @@ nowarp proc rom_run_loop {
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;
             rom_run_frame_count = rom_run_frame_count + 1;
+        }
+
+        if ppu_frame_ready == 1 {
+            ppu_frame_ready = 0;
+            rom_run_frames_drawn = rom_run_frames_drawn + 1;
+
+            # Recompute the pen geometry from the current pen_fit_to_screen
+            # setting before handing the frame over, so a toggle takes
+            # effect on this frame and stays fixed while the sprite draws.
+            pen_display_update_geometry;
+            broadcast_and_wait "draw frame";
         }
 
         rom_run_update_status;
@@ -99,6 +118,7 @@ nowarp proc rom_run_loop {
 proc rom_run_update_status {
     if rom_run_started == 1 {
         rom_run_state_text = "test_rom.nes frame " & rom_run_frame_count
+            & " drawn " & rom_run_frames_drawn
             & " cycles " & rom_run_cycles
             & " pc " & cpu_program_counter
             & " " & cartridge_board_state_text;

@@ -109,7 +109,11 @@ Those sources have never been through the compiler: the pinned toolchain needs C
 obtainable here. The compiled project was brought in line with the sources block by block instead, and it runs
 headlessly: its self test reports `port vectors 582/582 passed, 5 skipped`, and its console boots the embedded
 MMC3 image, reads the reset vector, and runs the game with a bus trace byte-identical to the TypeScript
-reference's. The port has no PPU renderer, so its run produces no picture. The ported algorithms are also
+reference's. The ported PPU now includes the rendering pipeline (background fetch/shift, scrolling, sprite
+evaluation and fetch, priority, palette lookup with greyscale and emphasis), and the display sprite draws each
+finished 256 by 240 frame with the Scratch pen extension in the same 64-color palette the canvas renderer
+uses, at native 1x by default or scaled to fit the stage when the global `pen_fit_to_screen` variable is 1. That renderer is in the `.gs` sources only: the checked-in `.sb3` predates it and still produces no
+picture until the project is rebuilt with `npm run build:scratch`. The ported algorithms are also
 validated by an integer-only TypeScript mirror compared
 exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic
 upstream codegen, reserved block names, and name resolution. See

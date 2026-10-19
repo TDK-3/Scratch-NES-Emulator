@@ -552,6 +552,30 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   and the mixer are ported. The cartridge loader header comment was updated to reflect that NVRAM snapshots
   are ported, and the TODO/PROGRESS docs were updated to mark the GoboScript port as complete (modulo
   compile validation).
+- Pen display slice (2026-10-19): ported the PPU rendering pipeline and the pen presentation. `ppu_2c02.gs`
+  gained the reference background fetch/shift cycle, scroll increments and transfers, sprite evaluation at
+  dot 65 with the diagonal overflow path, the eight-slot sprite fetch, sprite/background priority, the
+  palette read with greyscale masking, and per-pixel emphasis, writing the `ppu_framebuffer_colors` and
+  `ppu_framebuffer_emphasis` lists and raising `ppu_frame_ready` at the vblank-start dot. `ppu_bus.gs` now
+  reports every pattern and nametable access to an attached MMC3 board before running it, so the rendering
+  fetches clock the scanline IRQ through the A12 filter. `scratch/src/nes_palette.gs` holds the canvas
+  renderer's 64-color RGB table and precomputes all 512 palette/emphasis pairs as "#rrggbb" pen colors;
+  `rom_run_loop` waits on a "draw frame" broadcast at each finished frame while the display sprite erases
+  the pen layer and draws the 256 by 240 frame at 1x in run-length pen strokes, resetting the pen color
+  only when it changes. `goboscript.toml` requests TurboWarp's high-quality pen. The twelve pure helpers
+  are mirrored and swept exhaustively (every scroll value, sprite row, byte, and all 512 pen colors against
+  `framebuffer_to_rgba`); the palette literals are pinned by the source lint, which also pins the pen
+  wiring. A follow-up on the same day added the global `pen_fit_to_screen` setting (`scratch/src/pen_display.gs`):
+  at 1 the Stage recomputes the drawing geometry before each presented frame so the sprite scales pixels by
+  1.5, the largest uniform scale that fits the default 480 by 360 stage, centered on (0, 0) with the
+  renderer's size-1 pen offset compensated; at any other value the picture stays native 1x. The follow-up
+  audit checked the ported constants against the reference and fixed two pre-existing transcription bugs the
+  renderer would have exposed: the second PPUSCROLL preserve mask was 3099 instead of 3103 ($0C1F), and the
+  PPU bus started its palette window at 16000 instead of 16128 ($3F00). Upstream scratch-vm/scratch-render
+  sources (via npm) confirmed the runtime half of the design: "#rrggbb" pen color strings are parsed as hex,
+  pen strokes have round caps, and size-1 lines are offset by (+0.5, +0.5) in both renderers. All 1,275
+  tests pass. Compiling, opening, or timing the project is still unverified, and the checked-in `.sb3`
+  predates the renderer.
 - `npm test` on 2026-10-18: passed all 1,234 tests in about 15 seconds, including 257 grouped single-step
   corpus tests (1,026 vectors), 580 shared port-vector tests (579 records), 77 GoboScript port-algorithm
   tests, 17 GoboScript source-lint tests, and 18 PPU register/timing tests. `npx tsc --noEmit` is clean.
@@ -631,10 +655,13 @@ hardware validation remains open.
   `port vectors 582/582 passed, 5 skipped`, and its console run reads the reset vector from the embedded
   MMC3 image and executes the game's code. A rebuild from the sources is still required before the
   project can be called compiler-validated.
-- The port has no PPU renderer, so its ROM run produces no picture. It boots the embedded image, reads
-  the reset vector, and runs the game; the frame counter, the cycle count, and the program counter are
-  reported instead of a framebuffer. Its bus trace for the boot sequence is byte-identical to the
-  TypeScript reference's, but no framebuffer can be compared because the port does not render.
+- The ported PPU renderer and the pen presentation are source-only so far. The checked-in `.sb3` predates
+  them, so its ROM run still produces no picture: it boots the embedded image, reads the reset vector, and
+  runs the game, and the frame counter, the cycle count, and the program counter are reported instead of a
+  framebuffer. Its bus trace for the boot sequence is byte-identical to the TypeScript reference's. The
+  `.gs` renderer has not been compiled, opened, or compared pixel by pixel with the reference framebuffer,
+  and the pen drawing has not been seen running; rebuilding the `.sb3` from the sources is required before
+  any of that can be checked.
 - The review of the port against the reference turned up three decoder differences that the shared
   vectors did not cover, and all three are fixed: a RAM write also reached the PPU registers, because
   the port answered the `$2000-$3FFF` window before the `$0000-$1FFF` one; the boot kept the RAM the
@@ -671,16 +698,17 @@ hardware validation remains open.
 numeric/status/ALU helpers, both controller ports, the CPU-bus (with RAM mirroring, open-bus, the PPU/APU/controller
 windows, and the per-device attachment flags), cartridge header parsing, the full CPU (registers, addressing,
 instruction dispatch, opcode decode, control loop, and interrupt acceptance), both mappers (NROM and MMC3 with
-banking, IRQ, and NVRAM snapshots), the NVRAM save/load wiring, the PPU (registers, timing, and bus, but no
-rendering pipeline), the APU (pulse 1/2, triangle, noise, DMC, mixer, and frame sequencer), the frame loop,
-and the console boot that
-runs the embedded image. Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively
+banking, IRQ, and NVRAM snapshots), the NVRAM save/load wiring, the PPU (registers, timing, bus, and the
+rendering pipeline into framebuffer lists), the APU (pulse 1/2, triangle, noise, DMC, mixer, and frame sequencer), the frame loop,
+the console boot that runs the embedded image, and the pen display that draws each finished frame in color.
+Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively
 with the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints.
-All 1,258 tests pass. The compiled project was brought in line with the sources and now reports
+All 1,275 tests pass. The compiled project was brought in line with the earlier sources and now reports
 `port vectors 582/582 passed, 5 skipped` from its own in-project self test, and its console run reads the reset
 vector from the embedded MMC3 image and executes the game's code with a bus trace byte-identical to the
-TypeScript reference's. Compile validation stays blocked by the missing GoboScript toolchain, and the port has no
-PPU renderer, so its ROM run produces no picture.
+TypeScript reference's. Compile validation stays blocked by the missing GoboScript toolchain; the renderer
+and pen display are in the sources but not yet in that compiled project, so its ROM run still produces no
+picture until it is rebuilt.
 
 **Milestone 1: CPU instruction and interrupt foundation.** Register/status helpers, reset/stack behavior,
 all addressing modes, all 151 official opcodes, one-bus-transaction-per-cycle execution, branch cycles,

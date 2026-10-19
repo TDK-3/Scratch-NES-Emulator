@@ -11,9 +11,12 @@
 #
 # The mapper port is whichever board the cartridge loader attached. Pattern
 # accesses forward to the board's read_pattern / write_pattern; nametable
-# mirroring is queried from the board on every access. Observer callbacks and
-# the per-dot mapper clock forward to the MMC3 A12 filter when an MMC3 board
-# is attached, and are no-ops otherwise.
+# mirroring is queried from the board on every access. Every pattern and
+# nametable access is also reported to the board before it runs, the way
+# PpuMemoryBus calls observe_ppu_access, because the MMC3 A12 filter clocks
+# its scanline IRQ from the addresses the rendering pipeline fetches. The
+# address-bus observer and the per-dot mapper clock forward as well when an
+# MMC3 board is attached, and are no-ops otherwise.
 
 %include src/numeric
 %include src/mapper
@@ -199,9 +202,11 @@ proc ppu_bus_read_ppu address {
 
     if ppu_address < 8192 {
         ppu_bus_last_access_region = ppu_bus_region.pattern;
+        ppu_bus_observe_access ppu_bus_access.read, ppu_address;
         ppu_bus_read_pattern ppu_address;
-    } elif ppu_address < 16000 {
+    } elif ppu_address < 16128 {
         ppu_bus_last_access_region = ppu_bus_region.nametable;
+        ppu_bus_observe_access ppu_bus_access.read, ppu_address;
         local nt_index = ppu_bus_map_nametable(ppu_address);
         ppu_bus_read_value = to_number(ppu_nametable_ram[nt_index]);
     } else {
@@ -222,9 +227,11 @@ proc ppu_bus_write_ppu address, value {
 
     if ppu_address < 8192 {
         ppu_bus_last_access_region = ppu_bus_region.pattern;
+        ppu_bus_observe_access ppu_bus_access.write, ppu_address;
         ppu_bus_write_pattern ppu_address, byte_value;
-    } elif ppu_address < 16000 {
+    } elif ppu_address < 16128 {
         ppu_bus_last_access_region = ppu_bus_region.nametable;
+        ppu_bus_observe_access ppu_bus_access.write, ppu_address;
         local nt_index = ppu_bus_map_nametable(ppu_address);
         ppu_nametable_ram[nt_index] = byte_value;
     } else {
@@ -262,6 +269,17 @@ proc ppu_bus_write_pattern address, value {
     } elif ppu_bus_mapper_kind == mapper_kind.mmc3 {
         mmc3_write_pattern $address, $value;
         ppu_bus_pattern_write_accepted = mmc3_pattern_write_accepted;
+    }
+}
+
+# Reports one pattern or nametable access to the attached mapper before the
+# access runs, mirroring the observe_ppu_access calls in PpuMemoryBus. NROM
+# ignores accesses, so only an attached MMC3 board receives them, and its
+# A12 filter decides from the address alone whether the IRQ counter clocks.
+# Palette accesses are never reported, matching the reference bus.
+proc ppu_bus_observe_access access_kind, address {
+    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        mmc3_observe_ppu_access $access_kind, $address;
     }
 }
 

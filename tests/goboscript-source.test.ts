@@ -746,6 +746,101 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_get_fine_x_scroll", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_get_oam_address", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_get_read_buffer", mirror: null, reason: "ppu pending mirror" },
+    { source: "src/ppu_bus.gs", declaration: "ppu_bus_observe_access", mirror: null, reason: "ppu bus pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_reset_sprite_units", mirror: null, reason: "ppu rendering pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_clear_frame_output", mirror: null, reason: "ppu rendering pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_shift_pixel", mirror: "ppu_shift_pixel" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_select_palette_offset", mirror: "ppu_select_palette_offset" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_reverse_byte_bits", mirror: "ppu_reverse_byte_bits" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_sprite_row", mirror: "ppu_sprite_row" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_sprite_pattern_address", mirror: "ppu_sprite_pattern_address" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_increment_scroll_x_for", mirror: "ppu_increment_scroll_x_for" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_increment_scroll_y_for", mirror: "ppu_increment_scroll_y_for" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_transfer_horizontal_for", mirror: "ppu_transfer_horizontal_for" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_transfer_vertical_for", mirror: "ppu_transfer_vertical_for" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_render_pixel", mirror: null, reason: "ppu rendering pending mirror" },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_read_sprite_pixel", mirror: null, reason: "ppu rendering pending mirror" },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_clock_sprite_output_units",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_clock_rendering_pipeline",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_shift_background_registers",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_load_background_registers",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_fetch_background_attribute",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_fetch_background_pattern_low",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_fetch_background_pattern_high",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_evaluate_sprites_for_next_scanline",
+        mirror: null,
+        reason: "ppu rendering pending mirror",
+    },
+    { source: "src/ppu_2c02.gs", declaration: "ppu_clock_sprite_fetch", mirror: null, reason: "ppu rendering pending mirror" },
+    {
+        source: "src/nes_palette.gs",
+        declaration: "nes_palette_init",
+        mirror: null,
+        reason: "fills the Stage palette lists from literals and builds the cache through nes_pen_color",
+    },
+    { source: "src/nes_palette.gs", declaration: "nes_palette_dim_channel", mirror: "nes_palette_dim_channel" },
+    { source: "src/nes_palette.gs", declaration: "nes_palette_hex_byte", mirror: "nes_palette_hex_byte" },
+    { source: "src/nes_palette.gs", declaration: "nes_pen_color", mirror: "nes_pen_color" },
+    { source: "src/pen_display.gs", declaration: "pen_display_fit_scale", mirror: "pen_display_fit_scale" },
+    { source: "src/pen_display.gs", declaration: "pen_display_scale_for", mirror: "pen_display_scale_for" },
+    { source: "src/pen_display.gs", declaration: "pen_display_renderer_offset", mirror: "pen_display_renderer_offset" },
+    { source: "src/pen_display.gs", declaration: "pen_display_first_x_for", mirror: "pen_display_first_x_for" },
+    { source: "src/pen_display.gs", declaration: "pen_display_first_y_for", mirror: "pen_display_first_y_for" },
+    {
+        source: "src/pen_display.gs",
+        declaration: "pen_display_update_geometry",
+        mirror: null,
+        reason: "writes the derived geometry variables from the mirrored pen_display funcs",
+    },
+    {
+        source: "main.gs",
+        declaration: "pen_draw_frame",
+        mirror: null,
+        reason: "sprite pen presentation; it issues pen and motion blocks over Stage lists",
+    },
+    {
+        source: "main.gs",
+        declaration: "pen_draw_run",
+        mirror: null,
+        reason: "sprite pen presentation; it issues pen and motion blocks over Stage lists",
+    },
 ];
 
 const sources = load_sources();
@@ -771,7 +866,9 @@ test("the GoboScript project contains the expected sources", () => {
         "src/mapper.gs",
         "src/mapper_000.gs",
         "src/mapper_004.gs",
+        "src/nes_palette.gs",
         "src/numeric.gs",
+        "src/pen_display.gs",
         "src/ppu_2c02.gs",
         "src/ppu_bus.gs",
         "src/rom_loader.gs",
@@ -1472,6 +1569,168 @@ test("the Stage boots the embedded ROM after the shared-vector self test", () =>
 
     const sprite = get_source("main.gs");
     assert.match(sprite.text, /say rom_run_state_text;/, "the display sprite must report the ROM status");
+});
+
+test("the ported pen palette literals match the mirrored palette planes", () => {
+    // The .gs palette is 192 literal channel values that no test executes, so a transposed
+    // digit would only show up as a wrong color in a compiled project. Parsing the init
+    // assignments and comparing them with the mirror planes (which the algorithm suite in
+    // turn compares with the canvas renderer's palette) keeps all three tables equal.
+    const palette = get_source("src/nes_palette.gs");
+
+    for (const [list_name, mirror_plane] of [
+        ["nes_palette_red", ported.NES_PALETTE_RED],
+        ["nes_palette_green", ported.NES_PALETTE_GREEN],
+        ["nes_palette_blue", ported.NES_PALETTE_BLUE],
+    ] as const) {
+        const values = new Array<number>(64).fill(-1);
+
+        for (const match of palette.text.matchAll(new RegExp(`${list_name}\\[(\\d+)\\] = (\\d+);`, "g"))) {
+            const slot = Number(match[1]);
+            assert.ok(slot >= 1 && slot <= 64, `${list_name} slot ${slot} is outside the palette`);
+            assert.equal(values[slot - 1], -1, `${list_name} slot ${slot} is assigned twice`);
+            values[slot - 1] = Number(match[2]);
+        }
+
+        assert.ok(!values.includes(-1), `${list_name} must assign all 64 palette slots`);
+        assert.deepEqual(values, [...mirror_plane], `${list_name} must hold the mirrored channel plane`);
+    }
+});
+
+test("the display sprite draws each finished frame with the pen extension in color", () => {
+    // The Stage owns the console but cannot move or use the pen, so a finished frame is
+    // presented by the display sprite. The handoff has to be a broadcast the Stage waits on:
+    // a frame the sprite drew while the PPU was already rendering the next one would tear.
+    const ppu = get_source("src/ppu_2c02.gs");
+    const clock_dot = ppu.declarations.find((declaration) => declaration.name === "ppu_clock_ppu_dot");
+    assert.ok(clock_dot, "ppu_clock_ppu_dot is missing");
+    const clock_body = clock_dot.body.join("\n");
+    assert.match(clock_body, /ppu_frame_ready = 1;/, "vblank start must offer the finished frame");
+
+    const render_at = clock_body.indexOf("ppu_render_pixel;");
+    const pipeline_at = clock_body.indexOf("ppu_clock_rendering_pipeline;");
+    const advance_at = clock_body.indexOf("ppu_advance_dot;");
+    assert.ok(render_at >= 0 && pipeline_at > render_at, "each dot renders its pixel before the fetch pipeline");
+    assert.ok(advance_at > pipeline_at, "each dot advances only after it renders");
+
+    const stage = get_source("stage.gs");
+    assert.match(stage.text, /nes_palette_init;/, "the green flag must build the pen colors before the run");
+
+    const rom_run = get_source("src/rom_run.gs");
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    assert.ok(loop, "rom_run_loop is missing");
+    const loop_body = loop.body.join("\n");
+    const clear_at = loop_body.indexOf("ppu_frame_ready = 0;");
+    const draw_at = loop_body.indexOf('broadcast_and_wait "draw frame";');
+    assert.match(loop_body, /if ppu_frame_ready == 1 \{/, "the run loop must present only finished frames");
+    assert.ok(clear_at >= 0 && draw_at > clear_at, "the flag clears before the sprite draws the frame");
+    const geometry_at = loop_body.indexOf("pen_display_update_geometry;");
+    assert.ok(
+        geometry_at > clear_at && geometry_at < draw_at,
+        "the pen geometry is recomputed from the fit setting before the sprite draws",
+    );
+
+    const sprite = get_source("main.gs");
+    assert.match(sprite.text, /on "draw frame" \{/, "the sprite must answer the frame broadcast");
+    assert.match(sprite.text, /erase_all;/, "each frame must start from a cleared pen layer");
+    assert.match(sprite.text, /pen_down;/, "runs are drawn with the pen down");
+    assert.match(sprite.text, /pen_up;/, "the pen lifts between runs");
+    assert.match(sprite.text, /set_pen_size pen_display_scale;/, "the pen size is the stage-units-per-pixel scale");
+    assert.match(
+        sprite.text,
+        /set_pen_color nes_pen_colors\[/,
+        "runs take their RGB color from the cached palette/emphasis colors",
+    );
+    assert.match(sprite.text, /ppu_framebuffer_colors\[/, "the sprite reads the color-index framebuffer");
+    assert.match(sprite.text, /ppu_framebuffer_emphasis\[/, "the sprite reads the emphasis framebuffer");
+    assert.match(
+        sprite.text,
+        /goto pen_display_first_x \+ \(\$left_x \* pen_display_scale\), \$stage_y;/,
+        "NES x maps onto the centered, scaled stage x",
+    );
+    assert.match(
+        sprite.text,
+        /stage_y = pen_display_first_y - \(row \* pen_display_scale\);/,
+        "rows step down from the centered, scaled top row",
+    );
+
+    const config = readFileSync(join(SCRATCH_DIRECTORY, "goboscript.toml"), "utf8");
+    assert.match(config, /high_quality_pen = true/, "TurboWarp renders the pen layer at display resolution");
+});
+
+test("the PPU bus reports pattern and nametable accesses to an attached MMC3 board", () => {
+    // The reference bus observes every pattern and nametable access before running it, and
+    // the MMC3 scanline IRQ clocks from those addresses. A ported renderer that fetched
+    // tiles without the observation would never raise a scanline IRQ, so the sprite/background
+    // split games rely on would stick. Palette accesses are not part of the observation.
+    const bus = get_source("src/ppu_bus.gs");
+
+    for (const [proc_name, kind] of [
+        ["ppu_bus_read_ppu", "read"],
+        ["ppu_bus_write_ppu", "write"],
+    ] as const) {
+        const declaration = bus.declarations.find((candidate) => candidate.name === proc_name);
+        assert.ok(declaration, `${proc_name} is missing`);
+        const body = declaration.body.join("\n");
+        const observations = body.match(new RegExp(`ppu_bus_observe_access ppu_bus_access\\.${kind}, ppu_address;`, "g"));
+        assert.equal(observations?.length, 2, `${proc_name} observes its pattern and nametable windows only`);
+        assert.match(body, /elif ppu_address < 16128 \{/, `${proc_name} starts the palette window at $3F00`);
+    }
+
+    const read = bus.declarations.find((declaration) => declaration.name === "ppu_bus_read_ppu");
+    const read_body = read?.body.join("\n") ?? "";
+    assert.ok(
+        read_body.indexOf("ppu_bus_observe_access") < read_body.indexOf("ppu_bus_read_pattern"),
+        "a pattern read is observed before it reaches the board, like the reference bus",
+    );
+
+    const observe = bus.declarations.find((declaration) => declaration.name === "ppu_bus_observe_access");
+    assert.ok(observe, "ppu_bus_observe_access is missing");
+    assert.match(
+        observe.body.join("\n"),
+        /mmc3_observe_ppu_access \$access_kind, \$address;/,
+        "an attached MMC3 board receives the access for its A12 filter",
+    );
+});
+
+test("the ported PPU and pen display constants match the reference values", () => {
+    // The port spells its constants as decimal literals where the reference uses hex or
+    // named expressions, which is exactly where a transcription slip hides: the pen
+    // renderer audit caught the second PPUSCROLL preserve mask at 3099 instead of
+    // 3103 ($0C1F), silently dropping coarse X bit two. Every numeric constant the
+    // two PPU implementations share by name must agree, and the pen display header
+    // must frame the same 256 by 240 picture the PPU renders, because the sprite
+    // geometry is computed from the pen header's copies.
+    const reference_text = readFileSync(
+        fileURLToPath(new URL("../src/nes/ppu/ppu_2c02.ts", import.meta.url)),
+        "utf8",
+    );
+    const reference_constants = new Map<string, number>();
+
+    for (const match of reference_text.matchAll(/^const ([A-Z][A-Z0-9_]*) = (0x[0-9a-f]+|\d+);$/gim)) {
+        reference_constants.set(match[1] as string, Number(match[2]));
+    }
+
+    assert.ok(reference_constants.size > 40, "the reference constant scan must find the PPU constants");
+
+    const ppu = get_source("src/ppu_2c02.gs");
+    let compared = 0;
+
+    for (const match of ppu.text.matchAll(/^var ([A-Z][A-Z0-9_]*) = (\d+);$/gm)) {
+        const reference_value = reference_constants.get(match[1] as string);
+
+        if (reference_value !== undefined) {
+            compared += 1;
+            assert.equal(Number(match[2]), reference_value, `${match[1]} must match the reference PPU`);
+        }
+    }
+
+    assert.ok(compared > 40, "most ported PPU constants are shared with the reference by name");
+
+    const pen_display = get_source("src/pen_display.gs");
+    assert.match(pen_display.text, /^var PEN_FRAME_WIDTH = 256;$/m, "the pen frame width is the PPU width");
+    assert.match(pen_display.text, /^var PEN_FRAME_HEIGHT = 240;$/m, "the pen frame height is the PPU height");
+    assert.match(pen_display.text, /^var pen_fit_to_screen = 0;$/m, "fit-to-screen starts off, at native 1x");
 });
 
 test("the self-test operation ids match the shared vector fixture operations", () => {

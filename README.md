@@ -65,8 +65,10 @@ loading, persistence, and known-limitations statement.
   registers, the PPU A12 filter with its ten-dot low window, and the nonvolatile memory snapshots are
   ported. The embedded default image is MMC3 and now attaches and can raise a scanline IRQ.
   Its Stage runs a self test over the 587 generated parity vectors and reports a summary; the CPU state
-  and mapper suites are counted as skipped. It then boots the embedded image and runs the game, but it has no
-  PPU renderer, so the run produces no picture. None of its sources have been through the compiler, because
+  and mapper suites are counted as skipped. It then boots the embedded image and runs the game. The ported
+  PPU renders each frame into palette-index and emphasis framebuffer lists, and the display sprite draws
+  every finished frame on the stage with the pen extension in full NES color, one run-length stroke per
+  run of equal pixels; set the `pen_fit_to_screen` variable to 1 to scale the picture to fit the stage. None of its sources have been through the compiler, because
   the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
   source lint for grammar shape and reserved names.

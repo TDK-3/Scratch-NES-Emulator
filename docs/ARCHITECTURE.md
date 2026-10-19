@@ -204,11 +204,15 @@ hardware timing races remain deviations. Pixel output is a tested baseline, not 
 emulation.
 
 The TypeScript browser renderer is an RGBA canvas baseline; its emphasis dimming and 64-color palette are
-approximations, and performance has not been benchmarked in a real browser. The separate TurboWarp renderer
-remains an experiment. Do not commit to 61,440 pen or list updates per frame without a benchmark. Candidate
-strategies include pre-rendered or generated tile costumes, sprite/clone composition, batched pen work, and
-TurboWarp-specific output paths. Record memory use, frame time, visual differences, and runtime compatibility
-for every candidate.
+approximations, and performance has not been benchmarked in a real browser. The GoboScript port's renderer
+is the batched pen path: the ported PPU fills palette-index and emphasis framebuffer lists, and the display
+sprite draws each finished frame as horizontal runs of equal pixels with the pen extension, so the stroke
+count follows color changes rather than the 61,440-pixel count, although it still reads every pixel once.
+The picture is centered on the stage origin; the global `pen_fit_to_screen` variable selects native 1x
+pixels by default, or at 1 a uniform 1.5x scale that fits the default 480 by 360 stage.
+That is a first strategy, not a measured winner: costume/clone composition and generated assets remain
+candidates, and no frame time, memory use, or runtime compatibility has been recorded for any of them yet,
+because the project has neither been compiled nor timed on a target device.
 
 ## APU and input
 

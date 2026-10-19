@@ -150,7 +150,7 @@
         assets/
             blank.svg
         goboscript.toml
-        main.gs  display sprite: reports the self-test summary
+        main.gs  display sprite: reports status and draws each frame with the pen extension
         src/
             cartridge.gs  iNES and NES 2.0 header parsing with numeric error codes
             cartridge_loader.gs  boot path: signature, header, board validation, payload, attachment
@@ -167,7 +167,11 @@
             mapper.gs  exact mapper and submapper routing with numeric error codes
             mapper_000.gs  NROM validation, payload copy, and the CPU and pattern windows
             mapper_004.gs  MMC3 validation, banking registers, both modes, and the windows
+            nes_palette.gs  the 64-color palette cached as 512 pen colors with emphasis dimming
+            pen_display.gs  pen drawing geometry and the pen_fit_to_screen fit-to-stage setting
             numeric.gs  bit-free byte, word, and bitwise helpers
+            ppu_2c02.gs  PPU registers, timing, and the framebuffer rendering pipeline
+            ppu_bus.gs  pattern, nametable, palette, and OAM routing with mapper observation
             rom_loader.gs  generated ROM list, header load, and signature check
             shared_vectors.gs  generated port-vector list
             vector_selftest.gs  walks the vector list, replays it, and reports a summary
@@ -237,7 +241,17 @@ toolchain needs Cargo and rustc, which are unavailable here.
   lists, and enums, and its green-flag handler runs the port-vector self test and broadcasts completion.
 - `main.gs` defines the `main` display sprite. It includes no header and only reads Stage-owned state,
   because a sprite resolves Stage variable, list, and enum names while a proc or func is compiled separately
-  into each target that includes it.
+  into each target that includes it. It owns all pen and motion blocks, since the Stage can neither move nor
+  draw: on the waited "draw frame" broadcast it erases the pen layer and draws the PPU framebuffer lists as
+  run-length strokes in the cached `nes_pen_colors`.
+- `src/ppu_2c02.gs` holds the PPU registers, timing, and rendering pipeline into the
+  `ppu_framebuffer_colors` and `ppu_framebuffer_emphasis` lists; `src/ppu_bus.gs` routes its memory and
+  reports pattern/nametable accesses to an attached MMC3 board.
+- `src/nes_palette.gs` holds the canvas renderer's 64-color RGB table and the 512 cached pen colors built
+  from it with emphasis dimming.
+- `src/pen_display.gs` holds the pen geometry: the global `pen_fit_to_screen` setting (1 scales pixels to
+  the largest uniform size that fits the 480 by 360 stage, centered on (0, 0); anything else is native 1x)
+  and the derived scale/first-pixel variables the Stage refreshes before each presented frame.
 - `src/numeric.gs` holds the bit-free byte, word, and bitwise helpers, plus the `cpu_flag` enum. GoboScript
   has no bitwise operators, so masks and shifts are floor division and modulo.
 - `src/cpu_status.gs` holds status normalization, flag get/set, zero/negative updates, and the stack forms.

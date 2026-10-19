@@ -3567,3 +3567,267 @@ export class GoboscriptPpu2C02 {
         this.scanline += 1;
     }
 }
+
+/** Red plane of the `nes_palette_red` list filled by `nes_palette_init` in nes_palette.gs. */
+export const NES_PALETTE_RED: readonly number[] = [
+    84, 0, 8, 48, 68, 92, 84, 60, 32, 8, 0, 0, 0, 0, 0, 0,
+    152, 8, 48, 92, 136, 160, 152, 120, 84, 40, 8, 0, 0, 0, 0, 0,
+    236, 76, 120, 176, 228, 236, 236, 212, 160, 116, 76, 56, 56, 60, 0, 0,
+    236, 168, 188, 212, 236, 236, 236, 228, 204, 180, 168, 152, 160, 160, 0, 0,
+];
+
+/** Green plane of the `nes_palette_green` list in nes_palette.gs. */
+export const NES_PALETTE_GREEN: readonly number[] = [
+    84, 30, 16, 0, 0, 0, 4, 24, 42, 58, 64, 60, 50, 0, 0, 0,
+    150, 76, 50, 30, 20, 20, 34, 60, 90, 114, 124, 118, 102, 0, 0, 0,
+    238, 154, 124, 98, 84, 88, 106, 136, 170, 196, 208, 204, 180, 60, 0, 0,
+    238, 204, 188, 178, 174, 174, 180, 196, 210, 222, 226, 226, 214, 162, 0, 0,
+];
+
+/** Blue plane of the `nes_palette_blue` list in nes_palette.gs. */
+export const NES_PALETTE_BLUE: readonly number[] = [
+    84, 116, 144, 136, 100, 48, 0, 0, 0, 0, 0, 0, 60, 0, 0, 0,
+    152, 196, 236, 228, 176, 100, 32, 0, 0, 0, 0, 40, 120, 0, 0, 0,
+    236, 236, 236, 236, 236, 180, 100, 32, 0, 0, 32, 108, 204, 60, 0, 0,
+    236, 236, 236, 236, 236, 212, 176, 144, 120, 120, 144, 180, 228, 160, 0, 0,
+];
+
+/** The `nes_hex_digits` list in nes_palette.gs, held as one string for `charAt` reads. */
+const NES_HEX_DIGITS = "0123456789abcdef";
+
+/** Mirror of `nes_palette_dim_channel(channel)`: three quarters, rounded half up. */
+export function nes_palette_dim_channel(channel: number): number {
+    return scratch_floor_divide(scratch_mod(channel, 256) * 3 + 2, 4);
+}
+
+/** Mirror of `nes_palette_hex_byte(channel)`: the two hex digits of one channel byte. */
+export function nes_palette_hex_byte(channel: number): string {
+    const byte_value = scratch_mod(channel, 256);
+
+    return (
+        NES_HEX_DIGITS.charAt(scratch_floor_divide(byte_value, 16)) +
+        NES_HEX_DIGITS.charAt(scratch_mod(byte_value, 16))
+    );
+}
+
+/** Mirror of `nes_pen_color(color_index, emphasis)`: the "#rrggbb" pen color. */
+export function nes_pen_color(color_index: number, emphasis: number): string {
+    const palette_offset = scratch_mod(color_index, 64);
+    const emphasis_bits = scratch_mod(emphasis, 8);
+    let red = NES_PALETTE_RED[palette_offset];
+    let green = NES_PALETTE_GREEN[palette_offset];
+    let blue = NES_PALETTE_BLUE[palette_offset];
+
+    if (red === undefined || green === undefined || blue === undefined) {
+        throw new RangeError(`NES palette offset ${palette_offset} is outside its storage.`);
+    }
+
+    if (scratch_mod(emphasis_bits, 2) === 1) {
+        green = nes_palette_dim_channel(green);
+        blue = nes_palette_dim_channel(blue);
+    }
+
+    if (scratch_mod(scratch_floor_divide(emphasis_bits, 2), 2) === 1) {
+        red = nes_palette_dim_channel(red);
+        blue = nes_palette_dim_channel(blue);
+    }
+
+    if (scratch_mod(scratch_floor_divide(emphasis_bits, 4), 2) === 1) {
+        red = nes_palette_dim_channel(red);
+        green = nes_palette_dim_channel(green);
+    }
+
+    return "#" + nes_palette_hex_byte(red) + nes_palette_hex_byte(green) + nes_palette_hex_byte(blue);
+}
+
+/** Mirror of `ppu_shift_pixel(shift_low, shift_high, fine_x)` in ppu_2c02.gs. */
+export function ppu_shift_pixel(shift_low: number, shift_high: number, fine_x: number): number {
+    let bit_weight = 32768;
+
+    for (let step = 0; step < fine_x; step += 1) {
+        bit_weight = scratch_floor_divide(bit_weight, 2);
+    }
+
+    return (
+        scratch_mod(scratch_floor_divide(shift_low, bit_weight), 2) +
+        scratch_mod(scratch_floor_divide(shift_high, bit_weight), 2) * 2
+    );
+}
+
+/** Mirror of `ppu_select_palette_offset` in ppu_2c02.gs. */
+export function ppu_select_palette_offset(
+    bg_pixel: number,
+    bg_palette: number,
+    has_sprite: number,
+    spr_pixel: number,
+    spr_attributes: number,
+): number {
+    if (has_sprite === 1 && (bg_pixel === 0 || scratch_mod(scratch_floor_divide(spr_attributes, 32), 2) === 0)) {
+        return 16 + scratch_mod(spr_attributes, 4) * 4 + spr_pixel;
+    }
+
+    if (bg_pixel !== 0) {
+        return bg_palette * 4 + bg_pixel;
+    }
+
+    return 0;
+}
+
+/** Mirror of `ppu_reverse_byte_bits(byte_value)` in ppu_2c02.gs. */
+export function ppu_reverse_byte_bits(byte_value: number): number {
+    let remaining = normalize_byte(byte_value);
+    let result = 0;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+        result = result * 2 + scratch_mod(remaining, 2);
+        remaining = scratch_floor_divide(remaining, 2);
+    }
+
+    return result;
+}
+
+/** Mirror of `ppu_sprite_row(target_scanline, sprite_y)` in ppu_2c02.gs. */
+export function ppu_sprite_row(target_scanline: number, sprite_y: number): number {
+    return normalize_byte(target_scanline - (sprite_y + 1));
+}
+
+/** Mirror of `ppu_sprite_pattern_address` in ppu_2c02.gs. */
+export function ppu_sprite_pattern_address(
+    control_value: number,
+    tile_value: number,
+    attributes_value: number,
+    row_value: number,
+): number {
+    let sprite_height = 8;
+    let effective_row = row_value;
+    let pattern_table = 0;
+    let base_tile = scratch_mod(tile_value, 256);
+
+    if (scratch_mod(scratch_floor_divide(control_value, 32), 2) === 1) {
+        sprite_height = 16;
+    }
+
+    if (scratch_mod(scratch_floor_divide(attributes_value, 128), 2) === 1) {
+        effective_row = sprite_height - row_value - 1;
+    }
+
+    if (sprite_height === 16) {
+        pattern_table = scratch_mod(base_tile, 2) * 4096;
+        base_tile = base_tile - scratch_mod(base_tile, 2);
+
+        if (effective_row >= 8) {
+            base_tile = base_tile + 1;
+        }
+
+        return pattern_table + base_tile * 16 + scratch_mod(effective_row, 8);
+    }
+
+    pattern_table = scratch_mod(scratch_floor_divide(control_value, 8), 2) * 4096;
+
+    return pattern_table + base_tile * 16 + effective_row;
+}
+
+/** Mirror of `ppu_increment_scroll_x_for(vram_value)` in ppu_2c02.gs. */
+export function ppu_increment_scroll_x_for(vram_value: number): number {
+    let result = bitwise_and(vram_value, 32767);
+
+    if (scratch_mod(result, 32) === 31) {
+        result = bitwise_and(result, 32767 - 31);
+        result = bitwise_xor(result, 1024);
+    } else {
+        result = result + 1;
+    }
+
+    return bitwise_and(result, 32767);
+}
+
+/** Mirror of `ppu_increment_scroll_y_for(vram_value)` in ppu_2c02.gs. */
+export function ppu_increment_scroll_y_for(vram_value: number): number {
+    let result = bitwise_and(vram_value, 32767);
+    let coarse_y = 0;
+
+    if (bitwise_and(result, 28672) !== 28672) {
+        result = result + 4096;
+    } else {
+        result = bitwise_and(result, 32767 - 28672);
+        coarse_y = scratch_mod(scratch_floor_divide(result, 32), 32);
+
+        if (coarse_y === 29) {
+            coarse_y = 0;
+            result = bitwise_xor(result, 2048);
+        } else if (coarse_y === 31) {
+            coarse_y = 0;
+        } else {
+            coarse_y = coarse_y + 1;
+        }
+
+        result = bitwise_and(result, 32767 - 992) + coarse_y * 32;
+    }
+
+    return bitwise_and(result, 32767);
+}
+
+/** Mirror of `ppu_transfer_horizontal_for` in ppu_2c02.gs. */
+export function ppu_transfer_horizontal_for(current_value: number, temporary_value: number): number {
+    const preserved = bitwise_and(current_value, 31712);
+    const transferred = bitwise_and(temporary_value, 1055);
+
+    return bitwise_or(preserved, transferred);
+}
+
+/** Mirror of `ppu_transfer_vertical_for` in ppu_2c02.gs. */
+export function ppu_transfer_vertical_for(current_value: number, temporary_value: number): number {
+    const preserved = bitwise_and(current_value, 1055);
+    const transferred = bitwise_and(temporary_value, 31712);
+
+    return bitwise_or(preserved, transferred);
+}
+
+/** Mirror of `pen_display_fit_scale` in pen_display.gs. */
+export function pen_display_fit_scale(
+    stage_width: number,
+    stage_height: number,
+    frame_width: number,
+    frame_height: number,
+): number {
+    const scale_x = stage_width / frame_width;
+    const scale_y = stage_height / frame_height;
+
+    if (scale_x < scale_y) {
+        return scale_x;
+    }
+
+    return scale_y;
+}
+
+/** Mirror of `pen_display_scale_for` in pen_display.gs (480x360 stage, 256x240 frame). */
+export function pen_display_scale_for(fit_enabled: number): number {
+    if (fit_enabled === 1) {
+        return pen_display_fit_scale(480, 360, 256, 240);
+    }
+
+    return 1;
+}
+
+/** Mirror of `pen_display_renderer_offset` in pen_display.gs. */
+export function pen_display_renderer_offset(scale_value: number): number {
+    if (scale_value === 1) {
+        return 0.5;
+    }
+
+    return 0;
+}
+
+/** Mirror of `pen_display_first_x_for` in pen_display.gs. */
+export function pen_display_first_x_for(scale_value: number): number {
+    const picture_width = 256 * scale_value;
+
+    return (0 - (picture_width / 2)) + (scale_value / 2) - pen_display_renderer_offset(scale_value);
+}
+
+/** Mirror of `pen_display_first_y_for` in pen_display.gs. */
+export function pen_display_first_y_for(scale_value: number): number {
+    const picture_height = 240 * scale_value;
+
+    return (picture_height / 2) - (scale_value / 2) - pen_display_renderer_offset(scale_value);
+}

@@ -121,9 +121,9 @@ not mistaken for missing work.
 
 ## Completion reporting
 
-As of 2026-10-19, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,258 tests passed
-(including 1,026 pinned CPU corpus vectors as 257 grouped tests, 587 shared port-vector records, 77
-GoboScript port-algorithm comparisons, 4 opcode-table checks, and 17 GoboScript source-lint checks),
+As of 2026-10-19, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,275 tests passed
+(including 1,026 pinned CPU corpus vectors as 257 grouped tests, 587 shared port-vector records, 97
+GoboScript port-algorithm comparisons, 4 opcode-table checks, and 26 GoboScript source-lint checks),
 `npm run build:ts` and all three data
 generators passed, the opt-in runner matched all 2,560,000 upstream corpus scenarios, and the 46 ms
 synthetic-frame smoke measurement from 2026-10-15 (332 tests then) is still explicitly labeled
