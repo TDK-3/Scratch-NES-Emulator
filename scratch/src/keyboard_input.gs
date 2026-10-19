@@ -18,9 +18,12 @@
 # TurboWarp extension: the Scratch website's keyboard device drops modifier keys, so Select
 # simply stays up there while every other binding works on plain Scratch too.
 #
-# GoboScript has no bitwise operators, so a held button is combined into its pad's mask with
-# bitwise_or() from src/numeric.gs, and the finished masks are handed to controller.gs, whose
-# serial report the console reads through $4016 and $4017.
+# Each binding contributes one distinct button bit and the mask starts at zero, so a held
+# button is added to its pad's mask rather than combined with a bitwise_or() call: the bit is
+# never already set, which makes the addition the same mask for a fraction of the cost. This
+# proc runs once per chunk of emulated cycles, so the sixteen sensors and additions it makes
+# are paid about three hundred times per frame. The finished masks are handed to
+# controller.gs, whose serial report the console reads through $4016 and $4017.
 
 %include src/numeric
 %include src/controller
@@ -46,67 +49,67 @@ proc keyboard_poll_controllers {
     local player_two_mask = 0;
 
     if key_pressed("up arrow") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.up);
+        player_one_mask = player_one_mask + keyboard_button.up;
     }
 
     if key_pressed("down arrow") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.down);
+        player_one_mask = player_one_mask + keyboard_button.down;
     }
 
     if key_pressed("left arrow") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.left);
+        player_one_mask = player_one_mask + keyboard_button.left;
     }
 
     if key_pressed("right arrow") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.right);
+        player_one_mask = player_one_mask + keyboard_button.right;
     }
 
     if key_pressed("z") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.a);
+        player_one_mask = player_one_mask + keyboard_button.a;
     }
 
     if key_pressed("x") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.b);
+        player_one_mask = player_one_mask + keyboard_button.b;
     }
 
     if key_pressed("shift") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.select);
+        player_one_mask = player_one_mask + keyboard_button.select;
     }
 
     if key_pressed("enter") {
-        player_one_mask = bitwise_or(player_one_mask, keyboard_button.start);
+        player_one_mask = player_one_mask + keyboard_button.start;
     }
 
     if key_pressed("i") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.up);
+        player_two_mask = player_two_mask + keyboard_button.up;
     }
 
     if key_pressed("k") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.down);
+        player_two_mask = player_two_mask + keyboard_button.down;
     }
 
     if key_pressed("j") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.left);
+        player_two_mask = player_two_mask + keyboard_button.left;
     }
 
     if key_pressed("l") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.right);
+        player_two_mask = player_two_mask + keyboard_button.right;
     }
 
     if key_pressed("u") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.a);
+        player_two_mask = player_two_mask + keyboard_button.a;
     }
 
     if key_pressed("o") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.b);
+        player_two_mask = player_two_mask + keyboard_button.b;
     }
 
     if key_pressed("y") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.select);
+        player_two_mask = player_two_mask + keyboard_button.select;
     }
 
     if key_pressed("p") {
-        player_two_mask = bitwise_or(player_two_mask, keyboard_button.start);
+        player_two_mask = player_two_mask + keyboard_button.start;
     }
 
     controller_set_button_mask 0, player_one_mask;

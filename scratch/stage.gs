@@ -34,6 +34,9 @@ costumes "assets/blank.svg";
 %include src/rom_run
 
 onflag {
+    # The nibble AND table backs every bitwise helper, so it has to exist before the self
+    # test replays its first numeric vector.
+    bitwise_table_init;
     nes_palette_init;
     run_port_self_test;
     broadcast "port self test done";

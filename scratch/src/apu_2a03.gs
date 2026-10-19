@@ -716,19 +716,113 @@ proc apu_read_status {
 
 # Clocks one CPU cycle: advances channel timers and the frame sequencer.
 proc apu_clock_cpu_cycle {
+    local quarter = 0;
+    local half = 0;
+
     apu_cpu_cycle_count = apu_cpu_cycle_count + 1;
     apu_pulse_timer_phase = 1 - apu_pulse_timer_phase;
 
+    # Both pulse timers, at half the CPU rate. The standalone apu_clock_pulse_timer proc
+    # documents one channel's timer; the bodies are repeated here because this proc runs once
+    # per emulated CPU cycle, and a custom-block call per channel per cycle is the single
+    # most expensive thing the APU can do.
     if apu_pulse_timer_phase == 1 {
-        apu_clock_pulse_timer 1;
-        apu_clock_pulse_timer 2;
+        if pulse1_timer_counter == 0 {
+            pulse1_timer_counter = pulse1_timer_period;
+            pulse1_duty_step = (pulse1_duty_step + 1) % 8;
+        } else {
+            pulse1_timer_counter = pulse1_timer_counter - 1;
+        }
+
+        if pulse2_timer_counter == 0 {
+            pulse2_timer_counter = pulse2_timer_period;
+            pulse2_duty_step = (pulse2_duty_step + 1) % 8;
+        } else {
+            pulse2_timer_counter = pulse2_timer_counter - 1;
+        }
     }
 
-    apu_clock_triangle_timer;
-    apu_clock_noise_timer;
-    apu_clock_dmc_timer;
-    apu_clock_frame_sequencer;
+    # Triangle timer, clocked every CPU cycle.
+    if triangle_timer_counter == 0 {
+        triangle_timer_counter = triangle_timer_period;
 
+        # Advance sequence only if timer period >= 2 and both counters are active
+        if triangle_timer_period >= TRIANGLE_TIMER_MIN {
+            if triangle_length_counter > 0 and triangle_linear_counter > 0 {
+                triangle_sequence_step = (triangle_sequence_step + 1) % TRIANGLE_SEQUENCE_LENGTH;
+            }
+        }
+    } else {
+        triangle_timer_counter = triangle_timer_counter - 1;
+    }
+
+    # Noise timer, clocked every CPU cycle.
+    if noise_timer_counter == 0 {
+        noise_timer_counter = noise_timer_reload;
+        apu_shift_lfsr;
+    } else {
+        noise_timer_counter = noise_timer_counter - 1;
+    }
+
+    # DMC timer and its load-DMA delay, clocked every CPU cycle.
+    if dmc_load_dma_delay >= 0 {
+        dmc_load_dma_delay = dmc_load_dma_delay - 1;
+    }
+
+    if dmc_timer_counter == 0 {
+        dmc_timer_counter = dmc_timer_reload;
+        apu_clock_dmc_output_unit;
+    } else {
+        dmc_timer_counter = dmc_timer_counter - 1;
+    }
+
+    # Frame sequencer, inlined from apu_clock_frame_sequencer so one cycle is one call. The
+    # event cycles are tested in the order that reaches the common case first: the two
+    # quarter-frame cycles, then the quarter-plus-half cycles, then the frame reset.
+    apu_frame_cycle_count = apu_frame_cycle_count + 1;
+
+    if apu_five_step_mode == 0 {
+        # Four-step mode
+        if apu_frame_cycle_count == 7457 or apu_frame_cycle_count == 22371 {
+            quarter = 1;
+        } elif apu_frame_cycle_count == 14913 or apu_frame_cycle_count == FOUR_STEP_IRQ_CYCLE {
+            quarter = 1;
+            half = 1;
+
+            if apu_frame_cycle_count == FOUR_STEP_IRQ_CYCLE {
+                if apu_frame_irq_inhibited == 0 {
+                    apu_frame_irq = 1;
+                }
+            }
+        }
+
+        if apu_frame_cycle_count >= FOUR_STEP_LIMIT {
+            apu_frame_cycle_count = 0;
+        }
+    } else {
+        # Five-step mode
+        if apu_frame_cycle_count == 7457 or apu_frame_cycle_count == 22371 {
+            quarter = 1;
+        } elif apu_frame_cycle_count == 14913 or apu_frame_cycle_count == 37281 {
+            quarter = 1;
+            half = 1;
+        }
+
+        if apu_frame_cycle_count >= FIVE_STEP_LIMIT {
+            apu_frame_cycle_count = 0;
+        }
+    }
+
+    if quarter == 1 {
+        apu_clock_quarter_frame;
+    }
+
+    if half == 1 {
+        apu_clock_half_frame;
+    }
+
+    # The five-step timer-IRQ reset delay: when it reaches zero, the sequencer restarts and
+    # an immediate quarter and half frame fire.
     if apu_frame_reset_delay >= 0 {
         apu_frame_reset_delay = apu_frame_reset_delay - 1;
 

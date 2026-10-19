@@ -275,12 +275,12 @@ proc nrom_read_cpu address {
     if $address >= nrom_window.prg_rom_start {
         index = (($address - nrom_window.prg_rom_start) % cartridge_prg_rom_bytes) + 1;
         nrom_cpu_mapped = 1;
-        nrom_cpu_value = to_number(nrom_prg_rom[index]);
+        nrom_cpu_value = nrom_prg_rom[index];
         nrom_cpu_driven_mask = nrom_window.full_byte_mask;
     } elif $address >= nrom_window.prg_ram_start and nrom_prg_ram_bytes > 0 {
         index = (($address - nrom_window.prg_ram_start) % nrom_prg_ram_bytes) + 1;
         nrom_cpu_mapped = 1;
-        nrom_cpu_value = to_number(nrom_prg_ram[index]);
+        nrom_cpu_value = nrom_prg_ram[index];
         nrom_cpu_driven_mask = nrom_window.full_byte_mask;
     }
 }
@@ -303,9 +303,9 @@ proc nrom_read_pattern address {
     nrom_pattern_value = 0;
 
     if cartridge_chr_rom_bytes > 0 {
-        nrom_pattern_value = to_number(nrom_chr_rom[$address + 1]);
+        nrom_pattern_value = nrom_chr_rom[$address + 1];
     } elif nrom_chr_ram_bytes > 0 {
-        nrom_pattern_value = to_number(nrom_chr_ram[($address % nrom_chr_ram_bytes) + 1]);
+        nrom_pattern_value = nrom_chr_ram[($address % nrom_chr_ram_bytes) + 1];
     }
 }
 

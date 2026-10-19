@@ -165,6 +165,22 @@ var ppu_line_zero_sprite_count = 0;
 # PPU_NO_OVERFLOW_DOT when no ninth sprite was found in range.
 var ppu_sprite_overflow_set_dot = 341;
 
+# 2 ^ n for the attribute-bit position the background attribute fetch selects, so the two
+# attribute bits of the shared attribute byte are reached without a doubling loop.
+list ppu_attribute_shift_divisors = [1, 2, 4, 8, 16, 32, 64];
+
+# The bit weight the sixteen-bit background shifters present to the current pixel, that is
+# 32768 >> fine_x. PPUSCROLL and the reset write it, so the per-pixel fine-X bit test is two
+# divisions instead of a loop that halves a weight once per fine-X step.
+var ppu_fine_x_weight = 32768;
+
+# How many of the eight sprite output units hold a sprite for the line being drawn. It is
+# captured when the unit slots are loaded on dots 257-320, so the per-pixel sprite scan and
+# the per-dot unit shift stop after the sprites a line actually has instead of walking eight
+# empty slots on every one of the 256 pixels. A unit past the count always holds X counter
+# $FF and a zero pattern, so it could never contribute a pixel anyway.
+var ppu_sprite_unit_active_count = 0;
+
 # The eight sprite output units that count down their X position and then
 # shift their pattern bytes out one pixel per dot.
 list ppu_sprite_unit_x_counter = [0; 8];
@@ -234,6 +250,8 @@ proc ppu_reset {
     ppu_next_background_attribute = 0;
     ppu_next_background_pattern_low = 0;
     ppu_next_background_pattern_high = 0;
+    ppu_fine_x_weight = 32768;
+    ppu_sprite_unit_active_count = 0;
     ppu_secondary_sprite_count = 0;
     ppu_line_zero_sprite_count = 0;
     ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
@@ -510,27 +528,55 @@ proc ppu_write_cpu_register register_index, value {
 # PPUCTRL: stores the value, updates the nametable bits in the temporary
 # VRAM address, and refreshes NMI output.
 proc ppu_write_control_register value {
+    local temporary = 0;
+    local nt_bits = 0;
+    local preserved = 0;
+
     ppu_control_register = $value;
-    local nt_bits = ($value % 4) * 1024;
-    local preserved = bitwise_and(ppu_temporary_vram_address, 32767 - 1024 * 3);
-    ppu_temporary_vram_address = bitwise_or(preserved, nt_bits);
+    nt_bits = ($value % 4) * 1024;
+    temporary = ppu_temporary_vram_address % 32768;
+    preserved = temporary - (((temporary // 1024) % 4) * 1024);
+    ppu_temporary_vram_address = preserved + nt_bits;
     ppu_refresh_nmi_output;
 }
 
 # PPUSCROLL: two-write toggle sets fine X on the first write and fine Y /
 # coarse Y on the second.
 proc ppu_write_scroll_register value {
+    local fine_x = 0;
+    local weight = 0;
+    local coarse_x = 0;
+    local preserved = 0;
+    local fine_y = 0;
+    local coarse_y = 0;
+    local temporary = 0;
+
     if ppu_write_toggle == 0 {
-        ppu_fine_x_scroll = bitwise_and($value, PPU_SCROLL_FINE_X_MASK);
-        local coarse_x = ($value // 8) % 32;
-        local preserved = bitwise_and(ppu_temporary_vram_address, 32767 - PPU_SCROLL_COARSE_X_MASK);
-        ppu_temporary_vram_address = bitwise_or(preserved, coarse_x);
+        fine_x = $value % PPU_SCROLL_FINE_X_MASK;
+        ppu_fine_x_scroll = fine_x;
+
+        # The shift register weight the renderer reads for this fine X, built once here so
+        # the pixel loop never has to halve a weight per step.
+        weight = 32768;
+
+        repeat fine_x {
+            weight = weight // 2;
+        }
+
+        ppu_fine_x_weight = weight;
+        coarse_x = ($value // 8) % 32;
+        temporary = ppu_temporary_vram_address % 32768;
+        preserved = temporary - (temporary % 32);
+        ppu_temporary_vram_address = preserved + coarse_x;
         ppu_write_toggle = 1;
     } else {
-        local fine_y = ($value % 8) * 4096;
-        local coarse_y = (($value // 8) % 32) * 32;
-        local preserved = bitwise_and(ppu_temporary_vram_address, PPU_SCROLL_SECOND_WRITE_PRESERVE_MASK);
-        ppu_temporary_vram_address = bitwise_or(preserved, bitwise_or(fine_y, coarse_y));
+        fine_y = ($value % 8) * 4096;
+        coarse_y = (($value // 8) % 32) * 32;
+        temporary = ppu_temporary_vram_address % 32768;
+
+        # Preserve coarse X and both nametable bits; fine Y and coarse Y are replaced.
+        preserved = (temporary % 32) + (((temporary // 1024) % 4) * 1024);
+        ppu_temporary_vram_address = preserved + fine_y + coarse_y;
         ppu_write_toggle = 0;
     }
 }
@@ -538,23 +584,26 @@ proc ppu_write_scroll_register value {
 # PPUADDR: two-write toggle sets the high byte on the first write and the
 # low byte on the second, then copies temporary to vram and observes.
 proc ppu_write_address_register value {
+    local temporary = 0;
+
     if ppu_write_toggle == 0 {
-        local address_high = ($value % 64) * 256;
-        local preserved = bitwise_and(ppu_temporary_vram_address, PPU_ADDRESS_HIGH_PRESERVE_MASK);
-        ppu_temporary_vram_address = bitwise_or(preserved, address_high);
+        temporary = ppu_temporary_vram_address % 32768;
+
+        # Keep the low byte; the first write supplies bits 8-13.
+        ppu_temporary_vram_address = (temporary % 256) + (($value % 64) * 256);
         ppu_write_toggle = 1;
     } else {
-        local preserved = bitwise_and(ppu_temporary_vram_address, PPU_ADDRESS_LOW_PRESERVE_MASK);
-        ppu_temporary_vram_address = bitwise_or(preserved, $value);
+        temporary = ppu_temporary_vram_address % 32768;
+        ppu_temporary_vram_address = (temporary - (temporary % 256)) + $value;
         ppu_vram_address = ppu_temporary_vram_address;
         ppu_write_toggle = 0;
-        ppu_bus_observe_ppu_address bitwise_and(ppu_vram_address, PPU_ADDRESS_MASK);
+        ppu_bus_observe_ppu_address ppu_vram_address % PPU_ADDRESS_MASK;
     }
 }
 
 # PPUDATA: writes through the PPU bus and increments the VRAM address.
 proc ppu_write_data_register value {
-    ppu_bus_write_ppu bitwise_and(ppu_vram_address, PPU_ADDRESS_MASK), $value;
+    ppu_bus_write_ppu ppu_vram_address % PPU_ADDRESS_MASK, $value;
     ppu_increment_vram_address;
 }
 
@@ -574,12 +623,12 @@ proc ppu_write_oam_data_register value {
 proc ppu_increment_vram_address {
     local increment = 1;
 
-    if bitwise_and(ppu_control_register, PPU_CONTROL_VRAM_INCREMENT) != 0 {
+    if (ppu_control_register // PPU_CONTROL_VRAM_INCREMENT) % 2 == 1 {
         increment = 32;
     }
 
     ppu_vram_address = (ppu_vram_address + increment) % 32768;
-    ppu_bus_observe_ppu_address bitwise_and(ppu_vram_address, PPU_ADDRESS_MASK);
+    ppu_bus_observe_ppu_address ppu_vram_address % PPU_ADDRESS_MASK;
 }
 
 # ---- timing ----
@@ -587,7 +636,15 @@ proc ppu_increment_vram_address {
 # Clocks one PPU dot: applies vblank timing, renders the dot's pixel, runs
 # the fetch pipeline, then advances dot/scanline, in the reference order.
 proc ppu_clock_ppu_dot {
-    ppu_bus_clock_ppu_dot;
+    # ppu_bus_clock_ppu_dot() and the MMC3 low-dot counter it forwards to, written out here:
+    # this runs 89,460 times a frame, and two custom-block calls per dot for one comparison
+    # and one increment is a cost the frame budget cannot carry. NROM has no observer, so the
+    # whole block collapses to one comparison on that board.
+    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
+            mmc3_a12_low_dots = mmc3_a12_low_dots + 1;
+        }
+    }
 
     if ppu_scanline == PPU_VBLANK_FIRST_SCANLINE and ppu_dot == PPU_VBLANK_START_DOT {
         # Rows 0-239 are complete at this dot even when an early PPUSTATUS
@@ -608,9 +665,26 @@ proc ppu_clock_ppu_dot {
         ppu_set_sprite_overflow 0;
     }
 
-    ppu_render_pixel;
-    ppu_clock_rendering_pipeline;
-    ppu_advance_dot;
+    # Both per-dot procs and the dot advance are called only when they have work to do: a
+    # blanking dot produces no pixel, a vblank or blanked dot runs no fetch, and every dot but
+    # the last one of a line only steps the counter. The procs keep their own full guards, so
+    # calling one directly still behaves exactly as before.
+    if ppu_scanline < PPU_FRAME_HEIGHT and ppu_dot >= 1 and ppu_dot <= PPU_FRAME_WIDTH {
+        ppu_render_pixel;
+    }
+
+    if (ppu_scanline < PPU_FRAME_HEIGHT or ppu_scanline == PPU_PRE_RENDER_SCANLINE)
+        and (ppu_mask_register % 32 >= 8) {
+        ppu_clock_rendering_pipeline;
+    }
+
+    # Dots 0 through 338 only step the counter; the two dots at the end of a line go through
+    # ppu_advance_dot, which owns the wrap and the odd-frame dot-339 skip.
+    if ppu_dot < PPU_ODD_FRAME_LAST_DOT {
+        ppu_dot = ppu_dot + 1;
+    } else {
+        ppu_advance_dot;
+    }
 }
 
 # Advances three NTSC PPU dots for one CPU cycle.
@@ -625,12 +699,12 @@ proc ppu_clock_cpu_cycle {
 # Advances one dot, wrapping at the end of scanline 261, skipping dot 340
 # on odd rendered frames when rendering is enabled.
 proc ppu_advance_dot {
-    local rendering_enabled = ppu_is_rendering_enabled();
     local odd_skip = 0;
 
     if ppu_scanline == PPU_PRE_RENDER_SCANLINE {
         if ppu_dot == PPU_ODD_FRAME_LAST_DOT and ppu_odd_frame == 1 {
-            if rendering_enabled == 1 {
+            # ppu_is_rendering_enabled() inlined; this runs once per dot.
+            if ppu_mask_register % 32 >= 8 {
                 odd_skip = 1;
             }
         }
@@ -774,106 +848,132 @@ func ppu_sprite_pattern_address(control_value, tile_value, attributes_value, row
 }
 
 # The VRAM address after the coarse X scroll increment, which wraps into
-# the horizontally adjacent nametable at coarse X 31.
+# the horizontally adjacent nametable at coarse X 31. The bit masks of the
+# reference are division and modulo arithmetic here, which is cheaper than a
+# bitwise helper call and exactly equivalent on a fifteen-bit address.
 func ppu_increment_scroll_x_for(vram_value) {
-    local result = bitwise_and($vram_value, PPU_VRAM_ADDRESS_MASK);
+    local result = $vram_value % 32768;
+    local nametable_bit = 0;
 
     if result % 32 == 31 {
-        result = bitwise_and(result, 32767 - 31);
-        result = bitwise_xor(result, 1024);
+        result = result - 31;
+        nametable_bit = (result // 1024) % 2;
+
+        if nametable_bit == 1 {
+            result = result - 1024;
+        } else {
+            result = result + 1024;
+        }
     } else {
         result = result + 1;
     }
 
-    return bitwise_and(result, PPU_VRAM_ADDRESS_MASK);
+    return result % 32768;
 }
 
 # The VRAM address after the Y scroll increment: fine Y counts first, then
 # coarse Y, wrapping into the vertically adjacent nametable at coarse Y 29
 # and without the toggle at coarse Y 31.
 func ppu_increment_scroll_y_for(vram_value) {
-    local result = bitwise_and($vram_value, PPU_VRAM_ADDRESS_MASK);
+    local result = $vram_value % 32768;
     local coarse_y = 0;
+    local nametable_bit = 0;
 
-    if bitwise_and(result, 28672) != 28672 {
+    if (result // 4096) % 8 != 7 {
         result = result + 4096;
     } else {
-        result = bitwise_and(result, 32767 - 28672);
+        result = result % 4096;
         coarse_y = (result // 32) % 32;
 
         if coarse_y == 29 {
             coarse_y = 0;
-            result = bitwise_xor(result, 2048);
+            nametable_bit = (result // 2048) % 2;
+
+            if nametable_bit == 1 {
+                result = result - 2048;
+            } else {
+                result = result + 2048;
+            }
         } elif coarse_y == 31 {
             coarse_y = 0;
         } else {
             coarse_y = coarse_y + 1;
         }
 
-        result = bitwise_and(result, 32767 - 992) + (coarse_y * 32);
+        result = (result - (((result // 32) % 32) * 32)) + (coarse_y * 32);
     }
 
-    return bitwise_and(result, PPU_VRAM_ADDRESS_MASK);
+    return result % 32768;
 }
 
 # The VRAM address with its horizontal scroll bits taken from the
-# temporary address, as copied at dot 257 of each rendered line.
+# temporary address, as copied at dot 257 of each rendered line. The two
+# halves of the address are disjoint, so they add.
 func ppu_transfer_horizontal_for(current_value, temporary_value) {
-    local preserved = bitwise_and($current_value, PPU_SCROLL_HORIZONTAL_PRESERVE_MASK);
-    local transferred = bitwise_and($temporary_value, PPU_SCROLL_HORIZONTAL_MASK);
+    local current = $current_value % 32768;
+    local temporary = $temporary_value % 32768;
 
-    return bitwise_or(preserved, transferred);
+    return (current - (current % 32) - (((current // 1024) % 2) * 1024))
+        + (temporary % 32) + (((temporary // 1024) % 2) * 1024);
 }
 
 # The VRAM address with its vertical scroll bits taken from the temporary
 # address, as copied on dots 280-304 of the pre-render line.
 func ppu_transfer_vertical_for(current_value, temporary_value) {
-    local preserved = bitwise_and($current_value, PPU_SCROLL_VERTICAL_PRESERVE_MASK);
-    local transferred = bitwise_and($temporary_value, PPU_SCROLL_VERTICAL_MASK);
+    local current = $current_value % 32768;
+    local temporary = $temporary_value % 32768;
 
-    return bitwise_or(preserved, transferred);
+    return (current % 32) + (((current // 1024) % 2) * 1024)
+        + (temporary - (temporary % 32) - (((temporary // 1024) % 2) * 1024));
 }
 
 # Renders the one visible pixel the current dot produces into the
 # framebuffer lists, including the sprite-zero hit, the priority mix, the
 # palette read with greyscale masking, and the emphasis capture.
+#
+# This proc runs once per visible dot, 61,440 times per frame, so it is written for the
+# Scratch runtime rather than for shape: the PPUMASK tests read their bits with a division
+# and a modulo instead of a bitwise helper call, the fine-X pixel comes from the weight
+# PPUSCROLL precomputed instead of a loop, the palette lookup is one list read through the
+# alias rule spelled out inline instead of a bus read with its address normalization,
+# region decode and mapper observation (a palette access is not observable to the board),
+# and the sprite scan only visits the units the line actually loaded.
 proc ppu_render_pixel {
     local pixel_x = 0;
+    local mask = 0;
     local background_visible = 0;
     local sprite_visible = 0;
     local background_pixel = 0;
     local background_palette = 0;
-    local pattern_low_shift = 0;
-    local pattern_high_shift = 0;
-    local attribute_low_shift = 0;
-    local attribute_high_shift = 0;
+    local fine_weight = 0;
     local palette_offset = 0;
+    local palette_slot = 0;
     local color_index = 0;
     local emphasis_value = 0;
     local framebuffer_index = 0;
 
     if ppu_scanline < PPU_FRAME_HEIGHT and ppu_dot >= 1 and ppu_dot <= PPU_FRAME_WIDTH {
         pixel_x = ppu_dot - 1;
+        mask = ppu_mask_register;
 
-        if (ppu_mask_register // PPU_BACKGROUND_ENABLE) % 2 == 1 {
-            if pixel_x >= 8 or (ppu_mask_register // PPU_BACKGROUND_LEFT_COLUMN_ENABLE) % 2 == 1 {
+        if (mask // PPU_BACKGROUND_ENABLE) % 2 == 1 {
+            if pixel_x >= 8 or (mask // PPU_BACKGROUND_LEFT_COLUMN_ENABLE) % 2 == 1 {
                 background_visible = 1;
             }
         }
 
-        if (ppu_mask_register // PPU_SPRITE_ENABLE) % 2 == 1 {
-            if pixel_x >= 8 or (ppu_mask_register // PPU_SPRITE_LEFT_COLUMN_ENABLE) % 2 == 1 {
+        if (mask // PPU_SPRITE_ENABLE) % 2 == 1 {
+            if pixel_x >= 8 or (mask // PPU_SPRITE_LEFT_COLUMN_ENABLE) % 2 == 1 {
                 sprite_visible = 1;
             }
         }
 
         if background_visible == 1 {
-            pattern_low_shift = ppu_background_pattern_low_shift;
-            pattern_high_shift = ppu_background_pattern_high_shift;
-            attribute_low_shift = ppu_background_attribute_low_shift;
-            attribute_high_shift = ppu_background_attribute_high_shift;
-            background_pixel = ppu_shift_pixel(pattern_low_shift, pattern_high_shift, ppu_fine_x_scroll);
-            background_palette = ppu_shift_pixel(attribute_low_shift, attribute_high_shift, ppu_fine_x_scroll);
+            fine_weight = ppu_fine_x_weight;
+            background_pixel = ((ppu_background_pattern_low_shift // fine_weight) % 2)
+                + (((ppu_background_pattern_high_shift // fine_weight) % 2) * 2);
+            background_palette = ((ppu_background_attribute_low_shift // fine_weight) % 2)
+                + (((ppu_background_attribute_high_shift // fine_weight) % 2) * 2);
         }
 
         if sprite_visible == 1 {
@@ -888,26 +988,41 @@ proc ppu_render_pixel {
             }
         }
 
-        palette_offset = ppu_select_palette_offset(
-            background_pixel,
-            background_palette,
-            ppu_sprite_pixel_found,
-            ppu_sprite_pixel_value,
-            ppu_sprite_pixel_attributes
-        );
-        ppu_bus_read_ppu PPU_PALETTE_ADDRESS_START + palette_offset;
-        color_index = ppu_bus_read_value % 64;
-
-        if (ppu_mask_register // PPU_MASK_GREYSCALE) % 2 == 1 {
-            color_index = bitwise_and(color_index, PPU_PALETTE_GREYSCALE_MASK);
+        # ppu_select_palette_offset() inlined: a front sprite pixel wins over any background,
+        # a behind-background sprite pixel wins only over a transparent background, and an
+        # empty pixel reads the universal backdrop at offset zero.
+        if ppu_sprite_pixel_found == 1
+            and (background_pixel == 0 or (ppu_sprite_pixel_attributes // PPU_SPRITE_PRIORITY_MASK) % 2 == 0) {
+            palette_offset = 16 + ((ppu_sprite_pixel_attributes % PPU_SPRITE_PALETTE_MASK) * 4)
+                + ppu_sprite_pixel_value;
+        } elif background_pixel != 0 {
+            palette_offset = (background_palette * 4) + background_pixel;
+        } else {
+            palette_offset = 0;
         }
 
-        emphasis_value = (ppu_mask_register // 32) % 8;
+        # The palette RAM alias rule of ppu_bus_map_palette: offsets 16, 20, 24 and 28 read
+        # the universal background colors at 0, 4, 8 and 12.
+        palette_slot = palette_offset;
+
+        if palette_offset >= 16 {
+            if palette_offset % 4 == 0 {
+                palette_slot = palette_offset - 16;
+            }
+        }
+
+        color_index = ppu_palette_ram[palette_slot + 1] % PPU_PALETTE_VALUE_MASK;
+
+        if mask % 2 == 1 {
+            color_index = ((color_index // 16) % 4) * 16;
+        }
+
+        emphasis_value = (mask // 32) % 8;
         framebuffer_index = (ppu_scanline * PPU_FRAME_WIDTH) + pixel_x + 1;
         ppu_framebuffer_colors[framebuffer_index] = color_index;
         ppu_framebuffer_emphasis[framebuffer_index] = emphasis_value;
 
-        if ppu_is_rendering_enabled() == 1 {
+        if mask % 32 >= 8 {
             ppu_clock_sprite_output_units;
         }
     }
@@ -925,19 +1040,19 @@ proc ppu_read_sprite_pixel {
     ppu_sprite_pixel_attributes = 0;
     ppu_sprite_pixel_oam_index = PPU_NO_OAM_INDEX;
 
-    repeat PPU_SPRITE_FETCH_COUNT {
-        if ppu_sprite_pixel_found == 0 {
-            if to_number(ppu_sprite_unit_x_counter[unit_index]) == 0 {
-                unit_pixel = (to_number(ppu_sprite_unit_pattern_low[unit_index]) // PPU_SPRITE_PIXEL_WEIGHT) % 2;
-                unit_pixel = unit_pixel
-                    + (((to_number(ppu_sprite_unit_pattern_high[unit_index]) // PPU_SPRITE_PIXEL_WEIGHT) % 2) * 2);
+    # The first opaque unit is the visible one; later units could not win, so the scan stops
+    # there, and it never visits a slot the line did not load a sprite into.
+    until unit_index > ppu_sprite_unit_active_count or ppu_sprite_pixel_found == 1 {
+        if ppu_sprite_unit_x_counter[unit_index] == 0 {
+            unit_pixel = (ppu_sprite_unit_pattern_low[unit_index] // PPU_SPRITE_PIXEL_WEIGHT) % 2;
+            unit_pixel = unit_pixel
+                + (((ppu_sprite_unit_pattern_high[unit_index] // PPU_SPRITE_PIXEL_WEIGHT) % 2) * 2);
 
-                if unit_pixel != 0 {
-                    ppu_sprite_pixel_found = 1;
-                    ppu_sprite_pixel_value = unit_pixel;
-                    ppu_sprite_pixel_attributes = to_number(ppu_sprite_unit_attributes[unit_index]);
-                    ppu_sprite_pixel_oam_index = to_number(ppu_sprite_unit_oam_index[unit_index]);
-                }
+            if unit_pixel != 0 {
+                ppu_sprite_pixel_found = 1;
+                ppu_sprite_pixel_value = unit_pixel;
+                ppu_sprite_pixel_attributes = ppu_sprite_unit_attributes[unit_index];
+                ppu_sprite_pixel_oam_index = ppu_sprite_unit_oam_index[unit_index];
             }
         }
 
@@ -946,21 +1061,22 @@ proc ppu_read_sprite_pixel {
 }
 
 # Counts every sprite output unit down toward its X position, and shifts
-# the patterns of the units already on screen one pixel left.
+# the patterns of the units already on screen one pixel left. Only the units
+# the line loaded are visited; the rest hold X counter $FF and a zero pattern.
 proc ppu_clock_sprite_output_units {
     local unit_index = 1;
     local x_counter = 0;
     local pattern_low = 0;
     local pattern_high = 0;
 
-    repeat PPU_SPRITE_FETCH_COUNT {
-        x_counter = to_number(ppu_sprite_unit_x_counter[unit_index]);
+    repeat ppu_sprite_unit_active_count {
+        x_counter = ppu_sprite_unit_x_counter[unit_index];
 
         if x_counter > 0 {
             ppu_sprite_unit_x_counter[unit_index] = x_counter - 1;
         } else {
-            pattern_low = to_number(ppu_sprite_unit_pattern_low[unit_index]);
-            pattern_high = to_number(ppu_sprite_unit_pattern_high[unit_index]);
+            pattern_low = ppu_sprite_unit_pattern_low[unit_index];
+            pattern_high = ppu_sprite_unit_pattern_high[unit_index];
             ppu_sprite_unit_pattern_low[unit_index] = (pattern_low * 2) % 256;
             ppu_sprite_unit_pattern_high[unit_index] = (pattern_high * 2) % 256;
         }
@@ -973,11 +1089,13 @@ proc ppu_clock_sprite_output_units {
 # sprite evaluation, and sprite fetch for the current dot, in the order
 # the reference clocks them.
 proc ppu_clock_rendering_pipeline {
-    local rendering_enabled = ppu_is_rendering_enabled();
-    local rendered_line = ppu_is_visible_or_pre_render_scanline();
+    local mask = ppu_mask_register;
     local fetch_phase = 0;
 
-    if rendered_line == 1 and rendering_enabled == 1 {
+    # ppu_is_visible_or_pre_render_scanline() and ppu_is_rendering_enabled() inlined: this
+    # proc runs once per dot, and two custom-block calls per dot for two comparisons is a
+    # cost the frame budget cannot carry. The conditions are the same ones the funcs test.
+    if (ppu_scanline < PPU_FRAME_HEIGHT or ppu_scanline == PPU_PRE_RENDER_SCANLINE) and (mask % 32 >= 8) {
         if ppu_dot >= PPU_SPRITE_FETCH_START_DOT and ppu_dot <= PPU_SPRITE_FETCH_END_DOT {
             # OAMADDR is forced to $00 on each dot of the sprite tile
             # loading interval.
@@ -993,7 +1111,12 @@ proc ppu_clock_rendering_pipeline {
         }
 
         if (ppu_dot >= 1 and ppu_dot <= 256) or (ppu_dot >= 321 and ppu_dot <= 336) {
-            ppu_shift_background_registers;
+            # ppu_shift_background_registers() inlined: four shifts per fetch dot, and the
+            # call was a larger share of the dot than the shifts themselves.
+            ppu_background_pattern_low_shift = (ppu_background_pattern_low_shift * 2) % 65536;
+            ppu_background_pattern_high_shift = (ppu_background_pattern_high_shift * 2) % 65536;
+            ppu_background_attribute_low_shift = (ppu_background_attribute_low_shift * 2) % 65536;
+            ppu_background_attribute_high_shift = (ppu_background_attribute_high_shift * 2) % 65536;
             fetch_phase = ppu_dot % 8;
 
             if fetch_phase == 0 {
@@ -1001,7 +1124,7 @@ proc ppu_clock_rendering_pipeline {
                 ppu_load_background_registers;
                 ppu_vram_address = ppu_increment_scroll_x_for(ppu_vram_address);
             } elif fetch_phase == 2 {
-                ppu_bus_read_ppu PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
+                ppu_bus_read_nametable PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
                 ppu_next_background_tile = ppu_bus_read_value;
             } elif fetch_phase == 4 {
                 ppu_fetch_background_attribute;
@@ -1023,7 +1146,7 @@ proc ppu_clock_rendering_pipeline {
         }
 
         if ppu_dot == PPU_BACKGROUND_DUMMY_FETCH_DOT_ONE or ppu_dot == PPU_BACKGROUND_DUMMY_FETCH_DOT_TWO {
-            ppu_bus_read_ppu PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
+            ppu_bus_read_nametable PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
         }
 
         if ppu_dot >= PPU_SPRITE_FETCH_START_DOT and ppu_dot <= PPU_SPRITE_FETCH_END_DOT {
@@ -1054,14 +1177,16 @@ proc ppu_load_background_registers {
         attribute_high_fill = FULL_BYTE_MASK;
     }
 
-    ppu_background_pattern_low_shift = bitwise_and(ppu_background_pattern_low_shift, PPU_BACKGROUND_LOAD_MASK)
-        + ppu_next_background_pattern_low;
-    ppu_background_pattern_high_shift = bitwise_and(ppu_background_pattern_high_shift, PPU_BACKGROUND_LOAD_MASK)
-        + ppu_next_background_pattern_high;
-    ppu_background_attribute_low_shift = bitwise_and(ppu_background_attribute_low_shift, PPU_BACKGROUND_LOAD_MASK)
-        + attribute_low_fill;
-    ppu_background_attribute_high_shift = bitwise_and(ppu_background_attribute_high_shift, PPU_BACKGROUND_LOAD_MASK)
-        + attribute_high_fill;
+    # Keeping the high byte of each sixteeen-bit shifter, then loading the new tile's low
+    # byte; the mask is a subtraction of the low byte instead of a bitwise helper call.
+    ppu_background_pattern_low_shift = (ppu_background_pattern_low_shift
+        - (ppu_background_pattern_low_shift % 256)) + ppu_next_background_pattern_low;
+    ppu_background_pattern_high_shift = (ppu_background_pattern_high_shift
+        - (ppu_background_pattern_high_shift % 256)) + ppu_next_background_pattern_high;
+    ppu_background_attribute_low_shift = (ppu_background_attribute_low_shift
+        - (ppu_background_attribute_low_shift % 256)) + attribute_low_fill;
+    ppu_background_attribute_high_shift = (ppu_background_attribute_high_shift
+        - (ppu_background_attribute_high_shift % 256)) + attribute_high_fill;
 }
 
 # Fetches the two attribute bits for the next background tile from the
@@ -1070,21 +1195,20 @@ proc ppu_fetch_background_attribute {
     local attribute_address = 0;
     local attribute_byte = 0;
     local attribute_shift = 0;
-    local shift_divisor = 1;
 
+    # The three masks of the reference expression, spelled as division and modulo: the
+    # nametable bits, the eight attribute rows, and the eight attribute columns.
     attribute_address = PPU_BACKGROUND_ATTRIBUTE_START
-        + bitwise_and(ppu_vram_address, 3072)
-        + bitwise_and(ppu_vram_address // 16, 56)
-        + bitwise_and(ppu_vram_address // 4, 7);
-    ppu_bus_read_ppu attribute_address;
+        + (((ppu_vram_address // 1024) % 4) * 1024)
+        + (((ppu_vram_address // 128) % 8) * 8)
+        + ((ppu_vram_address // 4) % 8);
+    ppu_bus_read_nametable attribute_address;
     attribute_byte = ppu_bus_read_value;
     attribute_shift = (((ppu_vram_address // 64) % 2) * 4) + (((ppu_vram_address // 2) % 2) * 2);
 
-    repeat attribute_shift {
-        shift_divisor = shift_divisor * 2;
-    }
-
-    ppu_next_background_attribute = (attribute_byte // shift_divisor) % 4;
+    # 2 ^ attribute_shift from a seven-entry table instead of a doubling loop: the shift is
+    # always 0-6, and this fetch runs once per tile per line.
+    ppu_next_background_attribute = (attribute_byte // ppu_attribute_shift_divisors[attribute_shift + 1]) % 4;
 }
 
 # Fetches the low pattern plane byte for the next background tile.
@@ -1092,7 +1216,7 @@ proc ppu_fetch_background_pattern_low {
     local pattern_table = ((ppu_control_register // PPU_BACKGROUND_PATTERN_TABLE_SELECT) % 2) * 4096;
     local fine_y = (ppu_vram_address // 4096) % 8;
 
-    ppu_bus_read_ppu pattern_table + (ppu_next_background_tile * PPU_PATTERN_BYTES_PER_TILE) + fine_y;
+    ppu_bus_read_pattern_window pattern_table + (ppu_next_background_tile * PPU_PATTERN_BYTES_PER_TILE) + fine_y;
     ppu_next_background_pattern_low = ppu_bus_read_value;
 }
 
@@ -1101,7 +1225,7 @@ proc ppu_fetch_background_pattern_high {
     local pattern_table = ((ppu_control_register // PPU_BACKGROUND_PATTERN_TABLE_SELECT) % 2) * 4096;
     local fine_y = (ppu_vram_address // 4096) % 8;
 
-    ppu_bus_read_ppu pattern_table
+    ppu_bus_read_pattern_window pattern_table
         + (ppu_next_background_tile * PPU_PATTERN_BYTES_PER_TILE)
         + fine_y
         + PPU_PATTERN_HIGH_PLANE_OFFSET;
@@ -1152,8 +1276,10 @@ proc ppu_evaluate_sprites_for_next_scanline {
             candidate_address = candidate_address + overflow_offset;
         }
 
-        ppu_bus_read_oam candidate_address;
-        candidate_row = ppu_sprite_row(target_scanline, ppu_bus_oam_read_value);
+        # The OAM read and ppu_sprite_row() inlined: the address is always inside 0-255 for
+        # this loop, and the row is one floored modulo. Sprite evaluation walks up to 64 OAM
+        # entries per line, so the two saved calls per entry matter.
+        candidate_row = (target_scanline - (ppu_oam[candidate_address + 1] + 1)) % 256;
 
         if checking_overflow == 1 {
             if candidate_row < sprite_height {
@@ -1172,15 +1298,12 @@ proc ppu_evaluate_sprites_for_next_scanline {
             elapsed_dots = elapsed_dots + 2;
         } else {
             slot_index = found_count + 1;
-            ppu_secondary_sprite_y[slot_index] = ppu_bus_oam_read_value;
+            ppu_secondary_sprite_y[slot_index] = ppu_oam[candidate_address + 1];
             ppu_secondary_sprite_row[slot_index] = candidate_row;
             ppu_secondary_sprite_oam_index[slot_index] = oam_index;
-            ppu_bus_read_oam candidate_address + 1;
-            ppu_secondary_sprite_tile[slot_index] = ppu_bus_oam_read_value;
-            ppu_bus_read_oam candidate_address + 2;
-            ppu_secondary_sprite_attributes[slot_index] = ppu_bus_oam_read_value;
-            ppu_bus_read_oam candidate_address + 3;
-            ppu_secondary_sprite_x[slot_index] = ppu_bus_oam_read_value;
+            ppu_secondary_sprite_tile[slot_index] = ppu_oam[candidate_address + 2];
+            ppu_secondary_sprite_attributes[slot_index] = ppu_oam[candidate_address + 3];
+            ppu_secondary_sprite_x[slot_index] = ppu_oam[candidate_address + 4];
             found_count = found_count + 1;
             elapsed_dots = elapsed_dots + 8;
         }
@@ -1231,27 +1354,35 @@ proc ppu_clock_sprite_fetch {
     if sprite_slot < candidate_count {
         candidate_found = 1;
 
+        # The fields are bytes and OAM indexes; the lists hold them as text, and every use
+        # below is arithmetic or a comparison, so no number cast is needed here.
         if ppu_scanline == PPU_PRE_RENDER_SCANLINE {
-            candidate_tile = to_number(ppu_line_zero_sprite_tile[slot_index]);
-            candidate_attributes = to_number(ppu_line_zero_sprite_attributes[slot_index]);
-            candidate_x = to_number(ppu_line_zero_sprite_x[slot_index]);
-            candidate_oam_index = to_number(ppu_line_zero_sprite_oam_index[slot_index]);
-            candidate_row = to_number(ppu_line_zero_sprite_row[slot_index]);
+            candidate_tile = ppu_line_zero_sprite_tile[slot_index];
+            candidate_attributes = ppu_line_zero_sprite_attributes[slot_index];
+            candidate_x = ppu_line_zero_sprite_x[slot_index];
+            candidate_oam_index = ppu_line_zero_sprite_oam_index[slot_index];
+            candidate_row = ppu_line_zero_sprite_row[slot_index];
         } else {
-            candidate_tile = to_number(ppu_secondary_sprite_tile[slot_index]);
-            candidate_attributes = to_number(ppu_secondary_sprite_attributes[slot_index]);
-            candidate_x = to_number(ppu_secondary_sprite_x[slot_index]);
-            candidate_oam_index = to_number(ppu_secondary_sprite_oam_index[slot_index]);
-            candidate_row = to_number(ppu_secondary_sprite_row[slot_index]);
+            candidate_tile = ppu_secondary_sprite_tile[slot_index];
+            candidate_attributes = ppu_secondary_sprite_attributes[slot_index];
+            candidate_x = ppu_secondary_sprite_x[slot_index];
+            candidate_oam_index = ppu_secondary_sprite_oam_index[slot_index];
+            candidate_row = ppu_secondary_sprite_row[slot_index];
         }
     }
 
     if sprite_slot < PPU_SPRITE_FETCH_COUNT {
         if fetch_phase == PPU_SPRITE_GARBAGE_FETCH_PHASE_ONE or fetch_phase == PPU_SPRITE_GARBAGE_FETCH_PHASE_TWO {
-            ppu_bus_read_ppu PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
+            ppu_bus_read_nametable PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
         }
 
         if fetch_phase == 0 {
+            if sprite_slot == 0 {
+                # The slots about to be loaded are the ones the next visible line draws, so
+                # the renderer's scan bound is captured here, once per line.
+                ppu_sprite_unit_active_count = candidate_count;
+            }
+
             ppu_sprite_unit_pattern_low[slot_index] = 0;
             ppu_sprite_unit_pattern_high[slot_index] = 0;
             ppu_sprite_unit_attributes[slot_index] = 0;
@@ -1275,7 +1406,7 @@ proc ppu_clock_sprite_fetch {
                 candidate_attributes,
                 candidate_row
             );
-            ppu_bus_read_ppu pattern_address;
+            ppu_bus_read_pattern_window pattern_address;
             pattern_byte = ppu_bus_read_value;
 
             if candidate_found == 1 {
@@ -1294,7 +1425,7 @@ proc ppu_clock_sprite_fetch {
                 candidate_attributes,
                 candidate_row
             );
-            ppu_bus_read_ppu pattern_address + PPU_PATTERN_HIGH_PLANE_OFFSET;
+            ppu_bus_read_pattern_window pattern_address + PPU_PATTERN_HIGH_PLANE_OFFSET;
             pattern_byte = ppu_bus_read_value;
 
             if candidate_found == 1 {

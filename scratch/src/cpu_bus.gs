@@ -87,15 +87,29 @@ proc cpu_bus_clear_ram {
 }
 
 # Merges a device value with the open-bus latch and re-latches the merged byte.
+#
+# The two masks a device in this console actually drives are the full byte (RAM, PPU
+# registers, cartridge ROM and RAM) and a single data line ($4016/$4017). Both take a fast
+# path here: a full-byte read is just the value, and a partial read is two nibble-table ANDs
+# whose results cannot overlap, so they add instead of needing an OR. Only an all-zero mask
+# keeps the latch untouched, exactly as the general merge would.
 func cpu_apply_driven_value(value, driven_mask) {
-    local driven = normalize_byte($driven_mask);
-    local undriven = bitwise_xor(255, driven);
-    local driven_bits = bitwise_and(normalize_byte($value), driven);
-    local retained_bits = bitwise_and(cpu_open_bus, undriven);
-    local merged = bitwise_or(driven_bits, retained_bits);
-    cpu_open_bus = merged;
+    local driven = $driven_mask % 256;
+    local numeric_value = $value % 256;
 
-    return merged;
+    if driven == 255 {
+        cpu_open_bus = numeric_value;
+
+        return numeric_value;
+    }
+
+    if driven == 0 {
+        return cpu_open_bus;
+    }
+
+    cpu_open_bus = bitwise_and(numeric_value, driven) + bitwise_and(cpu_open_bus, 255 - driven);
+
+    return cpu_open_bus;
 }
 
 # Reads one CPU address; mirrors read_cpu() for the ported windows.
@@ -104,7 +118,13 @@ func cpu_bus_read(address) {
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
     if numeric_address < 8192 {
-        return cpu_apply_driven_value(cpu_ram[(numeric_address % 2048) + 1], 255);
+        # RAM drives every data line, so the read is the byte itself both as the return
+        # value and as the new open-bus latch; skipping the merge helper saves a call on
+        # the most frequent bus access in the console.
+        local ram_value = cpu_ram[(numeric_address % 2048) + 1];
+        cpu_open_bus = ram_value;
+
+        return ram_value;
     }
 
     if numeric_address < 16384 {
@@ -115,7 +135,9 @@ func cpu_bus_read(address) {
             local ppu_value = ppu_read_result;
 
             if ppu_register == 2 or ppu_register == 4 or ppu_register == 7 {
-                return cpu_apply_driven_value(ppu_value, 255);
+                cpu_open_bus = ppu_value % 256;
+
+                return cpu_open_bus;
             }
         }
 
@@ -166,6 +188,10 @@ func cpu_bus_read_io(address) {
 }
 
 # Writes one CPU address; mirrors write_cpu() for the ported windows.
+#
+# The windows are a single if / elif / else chain. The RAM window is decoded first and needs
+# nothing else, which is the write a game makes most often; everything below it is reached
+# only for an address in the I/O or cartridge window.
 proc cpu_bus_write address, value {
     local numeric_address = normalize_word($address);
     local numeric_value = normalize_byte($value);
@@ -179,44 +205,48 @@ proc cpu_bus_write address, value {
         # $2000-$3FFF: PPU registers, mirrored every 8 bytes. The RAM window is decoded
         # first, so a RAM write never reaches a PPU register.
         if cpu_bus_ppu_attached == 1 {
-            local ppu_register = numeric_address % 8;
-            ppu_write_cpu_register ppu_register, numeric_value;
+            ppu_write_cpu_register numeric_address % 8, numeric_value;
         }
-    }
-
-    if cpu_bus_apu_attached == 1 {
-        # $4000-$4013 and $4015/$4017 are APU registers; $4014 is the bus's own OAM DMA and
-        # $4016 belongs to the controller port, so neither reaches the APU.
-        if numeric_address >= 16384 and numeric_address <= 16403 {
-            apu_write_register numeric_address, numeric_value;
-        } elif numeric_address == 16405 or numeric_address == 16407 {
-            apu_write_register numeric_address, numeric_value;
+    } else {
+        if cpu_bus_apu_attached == 1 {
+            # $4000-$4013 and $4015/$4017 are APU registers; $4014 is the bus's own OAM DMA
+            # and $4016 belongs to the controller port, so neither reaches the APU.
+            if numeric_address <= 16403 {
+                apu_write_register numeric_address, numeric_value;
+            } elif numeric_address == 16405 or numeric_address == 16407 {
+                apu_write_register numeric_address, numeric_value;
+            }
         }
-    }
 
-    if numeric_address == 16406 and cpu_bus_controllers_attached == 1 {
-        controller_write_strobe numeric_value;
-    }
+        if numeric_address == 16406 and cpu_bus_controllers_attached == 1 {
+            controller_write_strobe numeric_value;
+        }
 
-    # $4014 OAM DMA: set up the DMA state machine. The alignment cycle is needed if the write
-    # happens on an odd cycle (cpu_cycle_count % 2 == 1).
-    if numeric_address == 16404 {
-        cpu_dma_phase = cpu_dma_phase.halt;
-        cpu_dma_page = numeric_value;
-        cpu_dma_index = 0;
-        cpu_dma_data_latch = 0;
-        cpu_dma_sequence_cycle = 0;
+        # $4014 OAM DMA: set up the DMA state machine. The alignment cycle is needed if the
+        # write happens on an odd cycle (cpu_cycle_count % 2 == 1).
+        if numeric_address == 16404 {
+            cpu_dma_phase = cpu_dma_phase.halt;
+            cpu_dma_page = numeric_value;
+            cpu_dma_index = 0;
+            cpu_dma_data_latch = 0;
+            cpu_dma_sequence_cycle = 0;
 
-        # Alignment cycle needed if current cycle count is odd.
-        cpu_dma_alignment_cycle_needed = cpu_bus_cycle_count % 2;
-    }
+            # Alignment cycle needed if current cycle count is odd.
+            cpu_dma_alignment_cycle_needed = cpu_bus_cycle_count % 2;
+        }
 
-    if cpu_bus_cartridge_kind == mapper_kind.nrom {
-        nrom_write_cpu numeric_address, numeric_value;
-    } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
-        mmc3_write_cpu numeric_address, numeric_value;
+        # The cartridge window starts at the PRG RAM window every attached board maps;
+        # nothing below it can reach a board, so the call is skipped for I/O writes.
+        if numeric_address >= nrom_window.prg_ram_start {
+            if cpu_bus_cartridge_kind == mapper_kind.nrom {
+                nrom_write_cpu numeric_address, numeric_value;
+            } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+                mmc3_write_cpu numeric_address, numeric_value;
+            }
+        }
     }
 }
+
 # Clocks one DMA cycle. Returns 1 if a DMA cycle was executed, 0 if no DMA is active.
 # The DMA state machine: halt -> align (optional) -> read -> write (repeat 256 times).
 func cpu_clock_dma_cycle() {
