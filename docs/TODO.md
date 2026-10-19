@@ -415,14 +415,27 @@ separate from TypeScript success.
       the scanline IRQ through the A12 filter the way `PpuMemoryBus` drives them. `scratch/src/nes_palette.gs`
       holds the canvas renderer's 64-color RGB palette and precomputes all 512 palette/emphasis pairs as
       cached "#rrggbb" pen colors; at vblank the run loop waits on a "draw frame" broadcast while
-      `main.gs` erases the pen layer and draws the 256 by 240 frame at 1x (or fit-to-stage 1.5x when the
-      global `pen_fit_to_screen` variable is 1), one pen stroke per run of equal pixels, resetting the
+      `main.gs` erases the pen layer and draws the 256 by 240 frame at the fit-to-stage 1.5x scale the
+      `pen_fit_to_screen` variable now selects by default (or at 1x when it is set to 0), one pen stroke
+      per run of equal pixels, resetting the
       pen color only when it changes. The pure helpers (fine-X pixel,
       palette offset, bit reversal, sprite row and pattern address, both scroll increments and
       transfers, dimming, hex, and the pen color itself) are mirrored and swept exhaustively against
       the bitwise reference and `framebuffer_to_rgba`; the palette literals are pinned against the
       mirror by the source lint. Not verified: compiling, opening, or timing the project, and the
       checked-in `.sb3` predates the renderer. Compile validation stays blocked by the missing toolchain.
+- [x] Drive both ported NES pads from the host keyboard. `scratch/src/keyboard_input.gs` samples the
+      built-in "key () pressed?" reporter for the same sixteen keys `src/nes/browser/keyboard_input.ts`
+      binds (arrows, Z, X, Shift, and Enter on the first pad; IJKL, U, O, Y, and P on the second) and
+      writes the resulting button masks into `controller.gs`, whose serial report the console reads
+      through `$4016` and `$4017`. It polls once per chunk of emulated cycles rather than using key-press
+      hats, so a button cannot be left stuck down by a key-up the project never sees, and a press reaches
+      the console one chunk later instead of one emulated frame later, which at roughly 300 chunks per
+      frame is the difference between milliseconds and seconds. Eleven tests pin the ported key table
+      against the TypeScript mirror and against the browser adapter, the button weights against
+      `CONTROLLER_BUTTON_MASKS`, the assembled masks against the reference controller's serial report,
+      and the sampler's single call site in the run loop. Not verified: real key events in a compiled
+      project; Shift needs TurboWarp, because the Scratch website's keyboard device drops modifier keys.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,

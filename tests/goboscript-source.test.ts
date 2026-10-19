@@ -830,6 +830,14 @@ const MIRROR_CONTRACT: readonly {
         reason: "writes the derived geometry variables from the mirrored pen_display funcs",
     },
     {
+        source: "src/keyboard_input.gs",
+        declaration: "keyboard_poll_controllers",
+        mirror: null,
+        reason:
+            "host input sampling; it reads the Scratch key sensors and writes the masks the " +
+            "mirrored controller ports report",
+    },
+    {
         source: "main.gs",
         declaration: "pen_draw_frame",
         mirror: null,
@@ -863,6 +871,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/cpu_sequence.gs",
         "src/cpu_status.gs",
         "src/frame_loop.gs",
+        "src/keyboard_input.gs",
         "src/mapper.gs",
         "src/mapper_000.gs",
         "src/mapper_004.gs",
@@ -1338,6 +1347,7 @@ test("the ported board enums match the mirror's constants", () => {
         ["src/mapper_004.gs", "mmc3_op", ported.MMC3_OP],
         ["src/mapper_004.gs", "mmc3_ppu_access", ported.MMC3_PPU_ACCESS],
         ["src/cpu_core.gs", "cpu_vector_address", ported.CPU_VECTOR_ADDRESS],
+        ["src/keyboard_input.gs", "keyboard_button", ported.KEYBOARD_BUTTON],
     ] as const) {
         const variants = get_enum(get_source(file), enumeration);
         const expected = Object.entries(constants);
@@ -1730,7 +1740,22 @@ test("the ported PPU and pen display constants match the reference values", () =
     const pen_display = get_source("src/pen_display.gs");
     assert.match(pen_display.text, /^var PEN_FRAME_WIDTH = 256;$/m, "the pen frame width is the PPU width");
     assert.match(pen_display.text, /^var PEN_FRAME_HEIGHT = 240;$/m, "the pen frame height is the PPU height");
-    assert.match(pen_display.text, /^var pen_fit_to_screen = 0;$/m, "fit-to-screen starts off, at native 1x");
+    assert.match(pen_display.text, /^var pen_fit_to_screen = 1;$/m, "fit-to-screen starts on, at the 1.5x fit scale");
+    assert.match(
+        pen_display.text,
+        /^var pen_display_scale = 1\.5;$/m,
+        "the starting scale is the one the default setting selects",
+    );
+    assert.match(
+        pen_display.text,
+        /^var pen_display_first_x = -191\.25;$/m,
+        "the starting first-pixel x is the fit-scale first pixel center",
+    );
+    assert.match(
+        pen_display.text,
+        /^var pen_display_first_y = 179\.25;$/m,
+        "the starting first-pixel y is the fit-scale first pixel center",
+    );
 });
 
 test("the self-test operation ids match the shared vector fixture operations", () => {

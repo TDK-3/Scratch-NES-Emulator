@@ -36,8 +36,10 @@ smoke test; exact frame/DMC/mapper phase behavior remains unverified. The TypeSc
 provides canvas output, keyboard mapping, an approximate audio filter, Web Audio, and per-ROM local-storage
 PRG/CHR-NVRAM saves with legacy PRG-only record support, but interactive browser playback, storage, and
 performance have not been validated.
-Hardware-calibrated audio behavior, gameplay, and P6's TurboWarp input/audio/save adapters remain open, as do PPU
-hardware quirks/races. The supplied mapper 4 fixture is identified with high confidence as a battery-backed
+Hardware-calibrated audio behavior, gameplay, and P6's TurboWarp audio and save adapters remain open, as do PPU
+hardware quirks/races. The first TurboWarp input adapter is written but unverified:
+`scratch/src/keyboard_input.gs` polls the built-in key sensors into both pads, and no compiled project has
+taken a real key event yet. The supplied mapper 4 fixture is identified with high confidence as a battery-backed
 MMC3 conversion of Japanese *Super Mario Bros. 2* (Lost Levels), likely Loopy's port; its exact dump revision
 remains unknown. `NesConsole` and a bounded integration test reach its title screen at frame 43, with an
 independent `jsnes` run showing the same screen. This demonstrates this ROM's title boot, not game compatibility
@@ -552,6 +554,25 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   and the mixer are ported. The cartridge loader header comment was updated to reflect that NVRAM snapshots
   are ported, and the TODO/PROGRESS docs were updated to mark the GoboScript port as complete (modulo
   compile validation).
+- Host keyboard slice (2026-10-19): added `scratch/src/keyboard_input.gs`, the port's first runtime input
+  adapter. It samples the built-in "key () pressed?" reporter for the same sixteen keys the TypeScript
+  browser adapter binds (arrows, Z, X, Shift, and Enter on the first pad; IJKL, U, O, Y, and P on the
+  second) and writes the two live button masks `controller.gs` reports on `$4016` and `$4017`. Asking for
+  the level of each key instead of reacting to press and release hats means a key-up the project never
+  sees, such as the window losing focus mid-press, cannot leave a button stuck down, and stopping the
+  project leaves nothing to undo. `rom_run_loop` samples once per chunk of emulated cycles rather than
+  once per frame: a frame costs about 29,780 cycles, so the loop spends roughly 300 chunks, and 300
+  yields, finishing one, and at that speed a per-frame sample would delay every press by seconds and drop
+  a tap shorter than a frame. The display default changed the same day: `pen_fit_to_screen` now starts at
+  1 in `scratch/src/pen_display.gs`, so the picture opens at the 1.5x fit-the-stage scale, with
+  `pen_display_scale`, `pen_display_first_x`, and `pen_display_first_y` starting at the values that
+  setting derives; setting it to 0 still returns to native 1x. Eleven new tests in
+  `tests/goboscript-keyboard-input.test.ts` pin the parsed key table against the mirrored table and the
+  browser adapter, the button weights against `CONTROLLER_BUTTON_MASKS`, a polled mask against the
+  reference controller's serial report, and the sampler's single call site in the run loop. All 1,286
+  tests pass. Compiling, opening, or timing the project is still unverified, no compiled project has seen
+  a real key event, and Shift needs TurboWarp because the Scratch website's keyboard device drops modifier
+  keys.
 - Pen display slice (2026-10-19): ported the PPU rendering pipeline and the pen presentation. `ppu_2c02.gs`
   gained the reference background fetch/shift cycle, scroll increments and transfers, sprite evaluation at
   dot 65 with the diagonal overflow path, the eight-slot sprite fetch, sprite/background priority, the
@@ -700,10 +721,11 @@ windows, and the per-device attachment flags), cartridge header parsing, the ful
 instruction dispatch, opcode decode, control loop, and interrupt acceptance), both mappers (NROM and MMC3 with
 banking, IRQ, and NVRAM snapshots), the NVRAM save/load wiring, the PPU (registers, timing, bus, and the
 rendering pipeline into framebuffer lists), the APU (pulse 1/2, triangle, noise, DMC, mixer, and frame sequencer), the frame loop,
-the console boot that runs the embedded image, and the pen display that draws each finished frame in color.
+the console boot that runs the embedded image, the pen display that draws each finished frame in color, and
+host keyboard input that polls the built-in key sensors into both pads.
 Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively
 with the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints.
-All 1,275 tests pass. The compiled project was brought in line with the earlier sources and now reports
+All 1,286 tests pass. The compiled project was brought in line with the earlier sources and now reports
 `port vectors 582/582 passed, 5 skipped` from its own in-project self test, and its console run reads the reset
 vector from the embedded MMC3 image and executes the game's code with a bus trace byte-identical to the
 TypeScript reference's. Compile validation stays blocked by the missing GoboScript toolchain; the renderer

@@ -398,6 +398,12 @@ image now drives the cartridge window and can raise a scanline IRQ: the board ca
 and the PPU A12 observation with its ten-dot low filter, the loader reports the line through
 `cartridge_board_irq_line()`, and both ported boards expose their nonvolatile memory snapshot procs. Nothing
 in the port observes PPU addresses or clocks PPU dots yet, because the ported PPU itself is not ported.
+Since 2026-10-19 the port also has host input: `scratch/src/keyboard_input.gs` calls the built-in
+`key_pressed("...")` reporter shape, which codegen lowers to `sensing_keypressed` with a
+`sensing_keyoptions` menu whose field is the string literal, so a key name is a compile-time menu value and
+a name the runtime's keyboard device does not know is a key that can never be pressed. The sampler polls
+rather than using `onkey` hats, because a pad button is a level and not an event, and the run loop calls it
+once per chunk of emulated cycles.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets

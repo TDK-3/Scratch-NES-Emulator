@@ -406,6 +406,79 @@ export class GoboscriptControllerPorts {
 }
 
 /**
+ * Mirror of the `keyboard_button` enum in scratch/src/keyboard_input.gs: the A/B/Select/Start
+ * and Up/Down/Left/Right bit weights of one NES pad, which the reference spells
+ * CONTROLLER_BUTTON_MASKS in src/nes/input/controller.ts.
+ */
+export const KEYBOARD_BUTTON = {
+    A: 0x01,
+    B: 0x02,
+    SELECT: 0x04,
+    START: 0x08,
+    UP: 0x10,
+    DOWN: 0x20,
+    LEFT: 0x40,
+    RIGHT: 0x80,
+} as const;
+
+/** One row of the ported key table: a Scratch key name and the pad button it holds down. */
+export interface KeyboardBinding {
+    readonly key: string;
+    readonly controller: 0 | 1;
+    readonly button: keyof typeof KEYBOARD_BUTTON;
+}
+
+/**
+ * Mirror of the key table in scratch/src/keyboard_input.gs, in the order the ported proc tests
+ * it. The names are Scratch key-option values, so "up arrow" is the up arrow key and "z" is
+ * the letter key; the browser adapter spells the same two bindings "arrowup" and "z".
+ */
+export const KEYBOARD_BINDINGS: readonly KeyboardBinding[] = [
+    { key: "up arrow", controller: 0, button: "UP" },
+    { key: "down arrow", controller: 0, button: "DOWN" },
+    { key: "left arrow", controller: 0, button: "LEFT" },
+    { key: "right arrow", controller: 0, button: "RIGHT" },
+    { key: "z", controller: 0, button: "A" },
+    { key: "x", controller: 0, button: "B" },
+    { key: "shift", controller: 0, button: "SELECT" },
+    { key: "enter", controller: 0, button: "START" },
+    { key: "i", controller: 1, button: "UP" },
+    { key: "k", controller: 1, button: "DOWN" },
+    { key: "j", controller: 1, button: "LEFT" },
+    { key: "l", controller: 1, button: "RIGHT" },
+    { key: "u", controller: 1, button: "A" },
+    { key: "o", controller: 1, button: "B" },
+    { key: "y", controller: 1, button: "SELECT" },
+    { key: "p", controller: 1, button: "START" },
+];
+
+/**
+ * Mirror of `keyboard_poll_controllers`, with the built-in key sensors replaced by the set of
+ * keys the caller reports as held down. Returns the two live button masks the ported proc
+ * hands to `controller_set_button_mask`, in pad order. A key outside the table is ignored the
+ * way an unbound key is, and a key the table listed twice would still set one bit, because the
+ * port combines held buttons with bitwise_or.
+ */
+export function keyboard_poll_masks(held_keys: ReadonlySet<string>): readonly [number, number] {
+    let first_pad = 0;
+    let second_pad = 0;
+
+    for (const binding of KEYBOARD_BINDINGS) {
+        if (!held_keys.has(binding.key)) {
+            continue;
+        }
+
+        if (binding.controller === 0) {
+            first_pad = bitwise_or(first_pad, KEYBOARD_BUTTON[binding.button]);
+        } else {
+            second_pad = bitwise_or(second_pad, KEYBOARD_BUTTON[binding.button]);
+        }
+    }
+
+    return [first_pad, second_pad];
+}
+
+/**
  * Mirror of scratch/src/cpu_bus.gs: RAM with mirroring, the open-bus latch with driven
  * masks, the controller window, and the OAM DMA state machine. The ported PPU and APU have
  * no mirror here, so their windows stay undriven, which is what an absent device does in

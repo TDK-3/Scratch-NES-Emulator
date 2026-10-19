@@ -164,6 +164,7 @@
             cpu_opcode.gs  mnemonic enum plus the generated opcode table decode
             cpu_sequence.gs  reset, BRK, JSR, RTI, RTS, interrupt, and branch cycle sequences
             cpu_status.gs  status normalization and flag updates
+            keyboard_input.gs  host keyboard sampling into both controller button masks
             mapper.gs  exact mapper and submapper routing with numeric error codes
             mapper_000.gs  NROM validation, payload copy, and the CPU and pattern windows
             mapper_004.gs  MMC3 validation, banking registers, both modes, and the windows
@@ -249,9 +250,13 @@ toolchain needs Cargo and rustc, which are unavailable here.
   reports pattern/nametable accesses to an attached MMC3 board.
 - `src/nes_palette.gs` holds the canvas renderer's 64-color RGB table and the 512 cached pen colors built
   from it with emphasis dimming.
-- `src/pen_display.gs` holds the pen geometry: the global `pen_fit_to_screen` setting (1 scales pixels to
-  the largest uniform size that fits the 480 by 360 stage, centered on (0, 0); anything else is native 1x)
-  and the derived scale/first-pixel variables the Stage refreshes before each presented frame.
+- `src/pen_display.gs` holds the pen geometry: the global `pen_fit_to_screen` setting (1, the default,
+  scales pixels to the largest uniform size that fits the 480 by 360 stage, centered on (0, 0); anything
+  else is native 1x) and the derived scale/first-pixel variables the Stage refreshes before each presented
+  frame.
+- `src/keyboard_input.gs` holds the host keyboard table: the sixteen Scratch key names the two pads are
+  driven from, and the sampler that turns the keys held down into the two button masks `controller.gs`
+  reports. The run loop calls it once per chunk of emulated cycles.
 - `src/numeric.gs` holds the bit-free byte, word, and bitwise helpers, plus the `cpu_flag` enum. GoboScript
   has no bitwise operators, so masks and shifts are floor division and modulo.
 - `src/cpu_status.gs` holds status normalization, flag get/set, zero/negative updates, and the stack forms.

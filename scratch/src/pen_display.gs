@@ -1,18 +1,19 @@
 # Pen display geometry and the fit-to-screen setting for the port.
 #
-# pen_fit_to_screen is the one user-facing setting of the display: leave it
-# at 0 for the native picture (one stage unit per NES pixel, pen size 1),
-# or set it to 1, for example from its variable monitor in the editor, to
-# scale the picture up to the largest size that fits the default 480 by
-# 360 Scratch stage without distorting it. The stage coordinates have
-# (0, 0) in the center, with x from -240 to 240 and y from -180 to 180,
-# so a centered picture of scaled size W by H has its first pixel center
-# at (-(W / 2) + scale / 2, (H / 2) - scale / 2), and every other pixel
-# center one scale step right or down from there. At the fit scale of 1.5
-# (the smaller of 480 / 256 and 360 / 240) the picture is 384 by 360: it
-# fills the stage height exactly and leaves 48 units of backdrop on each
-# side, with pixel centers running from -191.25 to 191.25 horizontally
-# and 179.25 down to -179.25 vertically, symmetric about (0, 0).
+# pen_fit_to_screen is the one user-facing setting of the display. It
+# ships at 1, so the picture starts scaled up to the largest size that
+# fits the default 480 by 360 Scratch stage without distorting it; set it
+# to 0, for example from its variable monitor in the editor, for the
+# native picture instead (one stage unit per NES pixel, pen size 1). The
+# stage coordinates have (0, 0) in the center, with x from -240 to 240 and
+# y from -180 to 180, so a centered picture of scaled size W by H has its
+# first pixel center at (-(W / 2) + scale / 2, (H / 2) - scale / 2), and
+# every other pixel center one scale step right or down from there. At the
+# fit scale of 1.5 (the smaller of 480 / 256 and 360 / 240) the picture is
+# 384 by 360: it fills the stage height exactly and leaves 48 units of
+# backdrop on each side, with pixel centers running from -191.25 to
+# 191.25 horizontally and 179.25 down to -179.25 vertically, symmetric
+# about (0, 0).
 #
 # The derived values are recomputed by the Stage before each presented
 # frame, so flipping the setting while the game runs takes effect on the
@@ -25,8 +26,9 @@
 # diameter is exactly 1, a Scratch 2 pixel-alignment compatibility rule in
 # PenSkin.drawLine. The stored first-pixel coordinates are therefore the
 # positions the sprite must go to, with that offset already subtracted at
-# scale 1, so the drawn centers land symmetric about (0, 0) either way:
-# goto (-128, 119) at scale 1, and (-191.25, 179.25) at the fit scale.
+# the native scale, so the drawn centers land symmetric about (0, 0)
+# either way: goto (-128, 119) at the native scale, and (-191.25, 179.25)
+# at the fit scale the project starts at.
 # Pen strokes have round caps of radius scale / 2 around their endpoints,
 # so a stroke between the first and last centers of a run covers exactly
 # the run's pixel band when the pen size equals the scale, at both sizes.
@@ -41,17 +43,21 @@ var PEN_FRAME_HEIGHT = 240;
 
 # The user setting: 1 scales the picture to fit the stage, anything else
 # keeps the native 1x picture. Global (Stage-owned) so it can be changed
-# from any sprite or its monitor while the project runs.
-var pen_fit_to_screen = 0;
+# from any sprite or its monitor while the project runs, and it starts at
+# 1 so the picture fills the stage height out of the box.
+var pen_fit_to_screen = 1;
 
 # Stage units per NES pixel for the frame being presented; also the pen
 # size, so each stroke covers exactly its row band.
-var pen_display_scale = 1;
+var pen_display_scale = 1.5;
 
 # The sprite goto position of the first pixel center (NES x 0, row 0),
-# pre-compensated for the size-1 renderer offset described above.
-var pen_display_first_x = -128;
-var pen_display_first_y = 119;
+# pre-compensated for the size-1 renderer offset described above. The
+# starting values are the ones pen_display_update_geometry derives from
+# the default setting, so the geometry is right even before the first
+# update runs.
+var pen_display_first_x = -191.25;
+var pen_display_first_y = 179.25;
 
 # The largest uniform scale at which a frame fits inside a stage of the
 # given size: the smaller of the horizontal and vertical ratios.
