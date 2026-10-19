@@ -547,6 +547,25 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   bypasses write protection and leaves the IRQ line alone, CHR NVRAM snapshot covers physical CHR RAM under
   any bank, CHR-ROM board with empty CHR NVRAM). The fixture is now nineteen suites and 587 records; the
   generated list is 18,363 values. All 1,258 tests pass.
+- PPU mask audit and graphics hot-path pass (2026-10-19): checked every ported graphics constant and
+  mask use site against `src/nes/ppu/ppu_2c02.ts` and `src/nes/apu/triangle_channel.ts`, the way the pen
+  renderer audit did, and fixed five mask-arithmetic transcription bugs the shared vectors cannot see.
+  Fine X was extracted as `value % 7` instead of `value % 8` ($07), so any `$2005` first write beyond
+  fine X 6 landed on the wrong pixel column; the PPUDATA write and the two PPUADDR observe sites
+  masked the address with `% 16383` instead of `% 16384` ($3FFF), so a VRAM access past the 14-bit wrap
+  hit the wrong address and showed the MMC3 A12 filter the wrong pattern address (the `$2007` read path
+  took the correct bitwise helper and now takes the same cheaper modulo); the inlined sprite
+  palette select used `% 3` instead of `% 4` ($03), so any sprite whose attribute byte carried palette
+  or priority bits drew from the wrong palette; the per-pixel palette read used `% 63` instead of `% 64`
+  ($3F), turning color 63 into color 0; and the APU triangle linear reload used `% 127` instead of `% 128`
+  ($7F). `tests/goboscript-source.test.ts` gained a lint that rejects any modulo whose divisor is a named
+  bit mask and pins the five fixed use sites against literal regressions. The same pass optimized the
+  rendering paths the file's own comments target: PPUMASK decodes once per `$2001` write into seven
+  fields (`ppu_decode_mask_register`) instead of per pixel, the framebuffer row base is cached per
+  scanline instead of multiplied per pixel, the two dot-1 status events share one dot test instead of
+  scanning both every dot, the duplicated per-dot window guards now live only at `ppu_clock_ppu_dot`'s
+  call sites, and the palette alias remap that the pixel select can never reach is gone. All 1,287 tests
+  pass. The `.sb3` still predates the renderer, so none of this is compiled or visible yet.
 - `npm test` on 2026-10-19: passed all 1,258 tests in about 14 seconds. The GoboScript APU port is now
   complete: triangle channel (32-step waveform, linear counter, timer, length counter), noise channel
   (15-bit LFSR with long/short modes, envelope, length counter), DMC channel (sample reader, output unit,

@@ -589,7 +589,7 @@ proc apu_write_status value {
 # Writes $4008: linear counter reload value and length halt flag.
 proc apu_write_triangle_control value {
     triangle_length_halt = $value // TRIANGLE_CONTROL_LENGTH_HALT;
-    triangle_linear_reload_value = $value % TRIANGLE_LINEAR_RELOAD_MASK;
+    triangle_linear_reload_value = $value % 128;
 }
 
 # Writes $400A: timer low 8 bits.
