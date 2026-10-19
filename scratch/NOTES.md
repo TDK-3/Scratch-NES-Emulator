@@ -1,10 +1,10 @@
 Scratch NES Emulator port scaffold.
 
 The TypeScript implementation in src/nes is the behavioral reference. This GoboScript project
-is a separate reimplementation, not a transpile, and it has never been compiled: the pinned
-GoboScript toolchain needs Cargo and rustc, which are not available in this environment, so
-every .gs file here is compile-unvalidated. Its algorithms are validated on the TypeScript
-side instead: tests/support/goboscript_port_algorithms.ts mirrors the arithmetic in
+is a separate reimplementation, not a transpile. The pinned GoboScript toolchain needs Cargo
+and rustc, which are not available in this environment, so no .gs file here has been through
+the real compiler. Its algorithms are validated on the TypeScript side instead:
+tests/support/goboscript_port_algorithms.ts mirrors the arithmetic in
 src/numeric.gs, src/cpu_status.gs, src/cpu_alu.gs, src/controller.gs, src/cpu_bus.gs,
 src/cartridge.gs, src/cpu_core.gs, src/cpu_addressing.gs, src/cpu_sequence.gs,
 src/cpu_opcode.gs, src/cpu_instruction.gs, src/cpu_control.gs, src/mapper.gs, and
@@ -26,9 +26,14 @@ What the ported modules cover:
 * controller.gs: both serial controller ports with strobe, latch on the falling edge, and the
   trailing 1 bits after the eighth read.
 * cpu_bus.gs: 2 KiB RAM with $0000-$1FFF mirroring, the open-bus latch with driven masks, the
-  $4016/$4017 controller window, and the $4020-$FFFF cartridge window, which an attached NROM or
-  MMC3 board drives and which stays undriven until one validates. PPU, APU, and $4014 OAM DMA are not
-  ported yet, so reads of those addresses return the retained latch and writes are dropped.
+  $2000-$3FFF PPU register window, the $4015 APU status register, the $4016/$4017 controller
+  window, the $4014 OAM DMA, the APU register writes, and the $4020-$FFFF cartridge window,
+  which an attached NROM or MMC3 board drives and which stays undriven until one validates.
+  Each device window follows an attachment flag, so the shared-vector replay can leave the
+  PPU, APU, and controllers detached and see the same open-bus behavior the TypeScript
+  reference produces with those devices absent. The decoder follows the reference's order:
+  the RAM window is answered first, so a RAM write never reaches a PPU register, and a bus
+  reset drops a pending OAM DMA transfer the way NesCpuBus.reset() does.
 * cartridge.gs: iNES 1.0 and NES 2.0 header parsing into the cartridge_* result globals,
   covering the signature, version bits, mapper and submapper, mirroring, battery, trainer
   flag, PRG and CHR ROM sizes including the NES 2.0 exponent form, the four RAM and NVRAM
@@ -152,26 +157,41 @@ What the ported modules cover:
   through the MMC3 path. cartridge_board_irq_line reports the line the attached cartridge drives,
   which is the half of the OR the reference console feeds to the CPU: an MMC3 board answers with its
   scanline counter and anything else answers zero.
+* frame_loop.gs: runs the console in bounded chunks of CPU cycles, advancing the PPU three
+  dots per CPU cycle and the APU one cycle per CPU cycle, so the cartridge IRQ line and the
+  APU frame IRQ compose into the single CPU IRQ line the reference uses. A chunk never runs
+  past the end of a frame, the OAM DMA is drained before the next instruction, and the chunk
+  is small enough that the display stays responsive.
+* rom_run.gs: boots the embedded image and runs it. It loads the generated ROM list, parses
+  and validates the header, attaches the board, clears the RAM the self test wrote into it,
+  resets the console the way the reference does, and then runs bounded chunks of the frame
+  loop. The report text carries the frame count, the cycle count, and the program counter, so
+  the display sprite can show the run progress.
 * vector_selftest.gs: walks the generated list in data/shared_port_vectors.txt and compares
   each record with the value recorded from the TypeScript reference. Suites 1 (numeric), 3
-  (bus), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing), 11 (CPU
-  cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop), 15 (NROM
-  board validation), 16 (NROM memory windows), 17 (cartridge bus), 18 (MMC3), and 19 (MMC3
-  scanline IRQ, replayed by the suite-18 handler because the record layout and the board are the
-  same; suites 16 and 18 now exercise the NVRAM snapshot procs as well as the CPU and pattern
-  windows) are replayed;
-  records for the CPU state, mapper, PPU, and APU suites are counted as skipped rather than
-  treated as passing. Its summary reports the ROM header state and the board state the loader recorded.
+  (bus), 5 (PPU), 6 (APU), 7 (controller), 8 (ALU), 9 (cartridge header), 10 (CPU addressing),
+  11 (CPU cycle sequences), 12 (opcode decode), 13 (instruction execution), 14 (control loop),
+  15 (NROM board validation), 16 (NROM memory windows), 17 (cartridge bus), 18 (MMC3), and 19
+  (MMC3 scanline IRQ, replayed by the suite-18 handler because the record layout and the board
+  are the same; suites 16 and 18 now exercise the NVRAM snapshot procs as well as the CPU and
+  pattern windows) are replayed;
+  records for the CPU state suite (3 records) and the mapper-selection suite (2 records) are
+  counted as skipped rather than treated as passing. Its summary reports the ROM header state
+  and the board state the loader recorded.
 
-The green flag runs that self test on the Stage and broadcasts "port self test done"; the
-display sprite reports the summary. data/test_rom_bytes.txt, data/shared_port_vectors.txt, and
+The green flag runs that self test on the Stage, broadcasts "port self test done", and then
+boots and runs the embedded image; the display sprite reports the summary first and the run
+progress afterwards. data/test_rom_bytes.txt, data/shared_port_vectors.txt, and
 data/opcode_table.txt are generated by `npm run scratch:assets`, `npm run scratch:vectors`, and
 `npm run scratch:opcode` and are not stored in Git. The default source image is test_rom.nes, a
 Nintendo-derived dump with unknown
 provenance that must not be modified or redistributed.
 
-Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, DMA stalls,
-the yield policy a frame loop needs, the save/load wiring that would actually drive the snapshot
-buffers from outside the board (the procs themselves are ported), PPU rendering, which is also
-what would feed the ported A12 observation and its dot clock, APU channels, and any frame loop
-or rendering path.
+Not ported: unofficial opcodes other than KIL and their unstable high-byte stores, the
+save/load wiring that would actually drive the snapshot buffers from outside the board (the
+procs themselves are ported), PPU rendering, which is also what would feed the ported A12
+observation and its dot clock, and the APU's audio channels, so the run produces no sound.
+
+The port has no PPU renderer, so running test_rom.nes produces no picture: the game still
+writes to VRAM, still receives vblank interrupts, and still advances the frame counter, and
+the report shows the frames, the CPU cycles, and the program counter.

@@ -4,14 +4,19 @@
 # record through the ported GoboScript modules, and compares the results with the values
 # recorded from the TypeScript reference. Records for suites that are not ported yet are
 # counted as skipped instead of being silently treated as passing. Today that is suite 2
-# (CPU core), 4 (MMC3), 5 (PPU), and 6 (APU).
+# (CPU core) and suite 4 (mapper selection).
+#
+# The replay runs against the same bus the TypeScript reference replays against: the
+# devices a record's reference run leaves absent stay detached here, so both sides see the
+# same open-bus behavior. port_detach_bus_devices does that, and the records that need a
+# device reattach it.
 #
 # List layout (schema version 1, one decimal value per line, 1-indexed Scratch positions):
 #   [1] schema version, [2] record count, then per record:
 #   suite id, case id, operation id, input count, expected count, inputs..., expected...
 #
 # The whole walk is run-without-screen-refresh. It covers a few hundred short records, so it
-# does not need yield points; the frame loop that a ported CPU core will need is separate.
+# does not need yield points; the frame loop that runs a ROM is separate.
 
 %include src/numeric
 %include src/cpu_status
@@ -117,6 +122,7 @@ proc run_port_self_test {
     port_first_failure = "";
     port_self_test_done = 0;
     port_self_test_summary = "";
+    cpu_access_log_enabled = 1;
     rom_header_report;
     cartridge_load_board;
     cpu_check_opcode_table;
@@ -161,7 +167,7 @@ proc run_next_port_vector {
     } elif suite_id == port_suite.alu {
         run_alu_vector operation, input_start;
     } elif suite_id == port_suite.bus {
-        run_bus_vector input_start;
+        run_bus_vector operation, input_start;
     } elif suite_id == port_suite.controller {
         run_controller_vector input_start;
     } elif suite_id == port_suite.cartridge {
@@ -192,7 +198,7 @@ proc run_next_port_vector {
         # Suite 19 shares suite 18's record layout and its board; only the operations differ.
         run_mmc3_vector input_start;
     } else {
-        # Suite 2 (CPU core), 4 (mapper selection), and 6 (APU) are not ported yet.
+        # Suite 2 (CPU core) and suite 4 (mapper selection) are not ported yet.
         skipped = 1;
     }
 
@@ -283,12 +289,22 @@ proc run_alu_vector operation, input_start {
     add alu_status to port_actual_values;
 }
 
+# Detaches every device from the CPU bus, so a record replays against the same open-bus
+# behavior the TypeScript reference produces with absent devices: the PPU, APU, and
+# controller windows go undriven and the cartridge window has no board.
+proc port_detach_bus_devices {
+    cpu_bus_ppu_attached = 0;
+    cpu_bus_apu_attached = 0;
+    cpu_bus_controllers_attached = 0;
+    cpu_bus_cartridge_kind = mapper_kind.none;
+}
+
 # Suite 3: replay CPU bus operations and report every read.
 #
-# The port always has live controller ports, so operation 1 records (which the TypeScript
-# side replays with no devices attached) must not read $4016/$4017. Operation 2 records use
-# live controller ports on both sides.
-proc run_bus_vector input_start {
+# The TypeScript side replays operation 1 records with no devices attached and operation 2
+# records with live controller ports, so the port detaches every device first and then
+# reattaches the controller ports for operation 2.
+proc run_bus_vector operation, input_start {
     local operation_count = to_number(shared_port_vectors[$input_start]);
     local offset = 1;
     local kind = 0;
@@ -297,10 +313,15 @@ proc run_bus_vector input_start {
     local read_index = 1;
     local read_count = 0;
     delete port_bus_reads;
+    port_detach_bus_devices;
     cpu_bus_reset;
     controller_reset;
     controller_set_button_mask 0, 0;
     controller_set_button_mask 1, 0;
+
+    if $operation == 2 {
+        cpu_bus_controllers_attached = 1;
+    }
 
     repeat operation_count {
         kind = to_number(shared_port_vectors[$input_start + offset]);
@@ -396,6 +417,7 @@ proc run_cpu_addressing_vector operation, input_start {
     local log_count = 0;
     cpu_reset_registers;
     cpu_bus_clear_ram;
+    port_detach_bus_devices;
     cpu_bus_reset;
     cpu_program_counter = to_number(shared_port_vectors[$input_start + 1]);
     cpu_a = to_number(shared_port_vectors[$input_start + 2]);
@@ -449,6 +471,7 @@ proc run_cpu_sequence_vector operation, input_start {
     local log_count = 0;
     cpu_reset_registers;
     cpu_bus_clear_ram;
+    port_detach_bus_devices;
     cpu_bus_reset;
     cpu_program_counter = to_number(shared_port_vectors[$input_start]);
     cpu_a = to_number(shared_port_vectors[$input_start + 1]);
@@ -582,6 +605,7 @@ proc run_cpu_instruction_vector input_start {
     local log_count = 0;
     cpu_reset_registers;
     cpu_bus_clear_ram;
+    port_detach_bus_devices;
     cpu_bus_reset;
     cpu_program_counter = program_counter;
     cpu_a = to_number(shared_port_vectors[$input_start + 1]);
@@ -645,6 +669,7 @@ proc run_cpu_control_vector input_start {
     local step = 1;
     cpu_reset_registers;
     cpu_bus_clear_ram;
+    port_detach_bus_devices;
     cpu_bus_reset;
     cpu_program_counter = program_counter;
     cpu_a = to_number(shared_port_vectors[$input_start + 1]);
@@ -882,8 +907,8 @@ proc run_cartridge_bus_vector input_start {
     cartridge_parse_header;
     nrom_validate;
     cpu_bus_clear_ram;
+    port_detach_bus_devices;
     cpu_bus_reset;
-    cpu_bus_cartridge_kind = mapper_kind.none;
 
     if nrom_ok == 1 and attach_board == 1 {
         attached = 1;

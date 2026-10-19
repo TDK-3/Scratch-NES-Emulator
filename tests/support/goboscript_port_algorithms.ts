@@ -407,8 +407,13 @@ export class GoboscriptControllerPorts {
 
 /**
  * Mirror of scratch/src/cpu_bus.gs: RAM with mirroring, the open-bus latch with driven
- * masks, and the controller window. PPU, APU, OAM DMA, and cartridge windows are absent on
- * both sides, so undriven reads return the retained latch and writes are dropped.
+ * masks, the controller window, and the OAM DMA state machine. The ported PPU and APU have
+ * no mirror here, so their windows stay undriven, which is what an absent device does in
+ * the TypeScript decoder: reads return the retained latch and writes are dropped.
+ *
+ * The attachment flags mirror the port's `cpu_bus_ppu_attached`, `cpu_bus_apu_attached`,
+ * and `cpu_bus_controllers_attached`. The shared-vector replay detaches the devices the
+ * TypeScript reference replays without, so both sides see the same open-bus behavior.
  */
 export class GoboscriptCpuBus {
     readonly controllers = new GoboscriptControllerPorts();
@@ -417,6 +422,15 @@ export class GoboscriptCpuBus {
 
     /** Mirror of `cpu_bus_cartridge_kind`: the board the loader attached, if any. */
     cartridge_kind: number = MAPPER_KIND.NONE;
+
+    /** Mirror of `cpu_bus_controllers_attached`. */
+    controllers_attached: boolean = true;
+
+    /** Mirror of `cpu_bus_ppu_attached`. The ported PPU has no mirror, so the window stays undriven. */
+    ppu_attached: boolean = false;
+
+    /** Mirror of `cpu_bus_apu_attached`. The ported APU has no mirror, so the window stays undriven. */
+    apu_attached: boolean = false;
 
     /** The attached NROM board, or null while the cartridge window has no device. */
     board: GoboscriptNromMapper | null = null;
@@ -427,7 +441,13 @@ export class GoboscriptCpuBus {
     reset(): void {
         this.open_bus = 0;
         this.bus_cycle_count = 0;
+
+        // `NesCpuBus.reset()` drops a pending OAM DMA transfer, so the mirror does too.
         this.dma_phase = 0;
+        this.dma_index = 0;
+        this.dma_data_latch = 0;
+        this.dma_sequence_cycle = 0;
+        this.dma_alignment_cycle_needed = 0;
     }
 
     /**
@@ -446,6 +466,17 @@ export class GoboscriptCpuBus {
     /** Mirror of `cpu_bus_clear_ram`. */
     clear_ram(): void {
         this.ram.fill(0);
+    }
+
+    /**
+     * Mirror of `port_detach_bus_devices`: every device window goes undriven, so reads
+     * return the retained latch and writes are dropped.
+     */
+    detach_devices(): void {
+        this.ppu_attached = false;
+        this.apu_attached = false;
+        this.controllers_attached = false;
+        this.cartridge_kind = MAPPER_KIND.NONE;
     }
 
     get_open_bus(): number {
@@ -495,7 +526,7 @@ export class GoboscriptCpuBus {
             this.ram[scratch_mod(numeric_address, 2048)] = numeric_value;
         }
 
-        if (numeric_address === 16406) {
+        if (numeric_address === 16406 && this.controllers_attached) {
             this.controllers.write_strobe(numeric_value);
         }
 
@@ -517,11 +548,11 @@ export class GoboscriptCpuBus {
     }
 
     private read_io(address: number): number {
-        if (address === 16406) {
+        if (address === 16406 && this.controllers_attached) {
             return this.apply_driven_value(this.controllers.serial_read(0), 1);
         }
 
-        if (address === 16407) {
+        if (address === 16407 && this.controllers_attached) {
             return this.apply_driven_value(this.controllers.serial_read(1), 1);
         }
 
@@ -1509,7 +1540,7 @@ export const CPU_MNEMONIC = {
 } as const;
 
 /** Mirror of the `cpu_vector_address` enum in scratch/src/cpu_core.gs. */
-const CPU_VECTOR_ADDRESS = {
+export const CPU_VECTOR_ADDRESS = {
     NMI_LOW: 0xfffa,
     NMI_HIGH: 0xfffb,
     RESET_LOW: 0xfffc,
@@ -2144,6 +2175,8 @@ export class GoboscriptMmc3Mapper {
 export class GoboscriptCpuCore {
     readonly bus = new GoboscriptCpuBus();
     readonly access_log: number[] = [];
+    /** Mirror of `cpu_access_log_enabled`: the reference takes an optional trace sink. */
+    access_log_enabled = true;
     program_counter = 0;
     a = 0;
     x = 0;
@@ -2205,7 +2238,11 @@ export class GoboscriptCpuCore {
     read_cycle(address: number): void {
         const numeric_address = normalize_word(address);
         this.cycle_value = this.bus.read(numeric_address);
-        this.access_log.push(CPU_ACCESS_KIND.READ, numeric_address, this.cycle_value);
+
+        if (this.access_log_enabled) {
+            this.access_log.push(CPU_ACCESS_KIND.READ, numeric_address, this.cycle_value);
+        }
+
         this.cycles += 1;
     }
 
@@ -2214,7 +2251,11 @@ export class GoboscriptCpuCore {
         const numeric_address = normalize_word(address);
         const numeric_value = normalize_byte(value);
         this.bus.write(numeric_address, numeric_value);
-        this.access_log.push(CPU_ACCESS_KIND.WRITE, numeric_address, numeric_value);
+
+        if (this.access_log_enabled) {
+            this.access_log.push(CPU_ACCESS_KIND.WRITE, numeric_address, numeric_value);
+        }
+
         this.cycles += 1;
     }
 

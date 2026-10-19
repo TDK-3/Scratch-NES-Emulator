@@ -37,6 +37,43 @@ const GOBOSCRIPT_KEYWORDS: readonly string[] = [
 ];
 
 /**
+ * The top-level declarations the upstream grammar accepts in a `Sprite = Declr*` file. A line
+ * that matches none of them is a bare statement, which the parser rejects.
+ */
+const TOP_LEVEL_DECLARATIONS: readonly RegExp[] = [
+    /^%include \S+$/,
+    /^%define \S+ .+$/,
+    /^%undef \S+$/,
+    /^costumes .*;$/,
+    /^sounds .*;$/,
+    /^(nowarp )?proc \w+( .*)? \{$/,
+    /^func \w+\(.*\) \{$/,
+    /^var \w+( =.*)?;$/,
+    /^cloud \w+( =.*)?;$/,
+    /^list \w+( .*)?;$/,
+    /^enum \w+ \{$/,
+    /^struct \w+ \{$/,
+    /^onflag \{$/,
+    /^on ".+" \{$/,
+    /^onkey ".+" \{$/,
+    /^onclick \{$/,
+    /^onbackdrop ".+" \{$/,
+    /^onclone \{$/,
+    /^onloudness > .+ \{$/,
+    /^ontimer > .+ \{$/,
+    /^hide;$/,
+    /^show;$/,
+    /^set_x .+;$/,
+    /^set_y .+;$/,
+    /^set_size .+;$/,
+    /^set_volume .+;$/,
+    /^point_in_direction .+;$/,
+    /^set_rotation_style_\w+ .+;$/,
+    /^;$/,
+    /^\}$/,
+];
+
+/**
  * Builtin block and reporter shapes from the upstream `Block::from_shape` and
  * `Repr::from_shape` tables. A proc or func whose name and arity match one of these is
  * compiled into the builtin block instead of a custom block.
@@ -381,6 +418,11 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/vector_selftest.gs", declaration: "run_numeric_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_alu_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_bus_vector", mirror: null, reason: "dispatcher" },
+    {
+        source: "src/vector_selftest.gs",
+        declaration: "port_detach_bus_devices",
+        mirror: "GoboscriptCpuBus.detach_devices",
+    },
     { source: "src/vector_selftest.gs", declaration: "run_controller_vector", mirror: null, reason: "dispatcher" },
     { source: "src/vector_selftest.gs", declaration: "run_cartridge_vector", mirror: null, reason: "dispatcher" },
     {
@@ -414,6 +456,24 @@ const MIRROR_CONTRACT: readonly {
         reason: "dispatcher",
     },
     { source: "src/vector_selftest.gs", declaration: "run_nrom_vector", mirror: null, reason: "dispatcher" },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_start",
+        mirror: null,
+        reason: "console boot; it composes the mirrored bus, board, and CPU helpers the way NesConsole.reset does",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_loop",
+        mirror: null,
+        reason: "frame driver; it schedules the mirrored frame loop instead of computing anything",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_update_status",
+        mirror: null,
+        reason: "report formatting only",
+    },
     {
         source: "src/cartridge_loader.gs",
         declaration: "cartridge_load_board",
@@ -715,10 +775,44 @@ test("the GoboScript project contains the expected sources", () => {
         "src/ppu_2c02.gs",
         "src/ppu_bus.gs",
         "src/rom_loader.gs",
+        "src/rom_run.gs",
         "src/shared_vectors.gs",
         "src/vector_selftest.gs",
         "stage.gs",
     ]);
+});
+
+test("every top-level line of a GoboScript source is a declaration", () => {
+    // The upstream grammar is `Sprite = Declr*`, and a declaration is a proc, a func, a
+    // variable, a list, an enum, a struct, an event hat, or an asset statement. A bare
+    // statement at the top level, such as a `forever` loop, is a parse error the compiler
+    // would reject, so it has to live inside an event hat or a proc body.
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        let depth = 0;
+
+        for (const [index, raw_line] of source.lines.entries()) {
+            const line = raw_line.trim();
+
+            if (depth === 0) {
+                if (line === "" || line.startsWith("#")) {
+                    continue;
+                }
+
+                if (!TOP_LEVEL_DECLARATIONS.some((pattern) => pattern.test(line))) {
+                    violations.push(`${source.path}:${index + 1}: ${line} is not a declaration`);
+                }
+            }
+
+            depth += count_character(strip_comments_and_strings(raw_line), "{");
+            depth -= count_character(strip_comments_and_strings(raw_line), "}");
+        }
+
+        assert.equal(depth, 0, `${source.path} has an unbalanced brace`);
+    }
+
+    assert.deepEqual(violations, []);
 });
 
 test("every GoboScript source is ASCII with no tabs, trailing whitespace, or CRLF", () => {
@@ -1146,6 +1240,7 @@ test("the ported board enums match the mirror's constants", () => {
         ["src/mapper_004.gs", "mmc3_register", ported.MMC3_REGISTER],
         ["src/mapper_004.gs", "mmc3_op", ported.MMC3_OP],
         ["src/mapper_004.gs", "mmc3_ppu_access", ported.MMC3_PPU_ACCESS],
+        ["src/cpu_core.gs", "cpu_vector_address", ported.CPU_VECTOR_ADDRESS],
     ] as const) {
         const variants = get_enum(get_source(file), enumeration);
         const expected = Object.entries(constants);
@@ -1211,9 +1306,176 @@ test("the self-test suite ids match the shared vector fixture", () => {
     assert.deepEqual(skipped, ["cpu", "mapper"], "unported suites must stay skipped, not passing");
 });
 
-test("the self-test operation ids match the shared vector fixture operations", () => {
+test("the vector handlers replay against the same bus environment as the reference", () => {
+    // The TypeScript reference replays the bus suite without devices (operation 1) and with
+    // live controller ports (operation 2), and replays the CPU suites with no devices at all.
+    // The port keeps its PPU, APU, and controller windows live, so a record has to detach the
+    // devices the reference leaves absent, or the two sides see different open-bus bytes.
     const self_test = get_source("src/vector_selftest.gs");
 
+    for (const handler_name of [
+        "run_bus_vector",
+        "run_cpu_addressing_vector",
+        "run_cpu_sequence_vector",
+        "run_cpu_instruction_vector",
+        "run_cpu_control_vector",
+        "run_cartridge_bus_vector",
+    ]) {
+        const handler = self_test.declarations.find((declaration) => declaration.name === handler_name);
+        assert.ok(handler, `${handler_name} is missing`);
+        assert.match(
+            handler?.body.join("\n") ?? "",
+            /port_detach_bus_devices;/,
+            `${handler_name} must detach the devices the reference replays without`,
+        );
+    }
+
+    const bus_handler = self_test.declarations.find((declaration) => declaration.name === "run_bus_vector");
+    assert.match(
+        bus_handler?.body.join("\n") ?? "",
+        /cpu_bus_controllers_attached = 1;/,
+        "the bus suite must reattach the controller ports for the operation that replays with them",
+    );
+
+    // The bus itself has to honor the flags, or detaching a device changes nothing.
+    const bus_source = get_source("src/cpu_bus.gs");
+    const bus_body = bus_source.declarations
+        .filter((declaration) => declaration.kind === "proc" || declaration.kind === "func")
+        .map((declaration) => declaration.body.join("\n"))
+        .join("\n");
+    assert.match(bus_body, /cpu_bus_ppu_attached == 1/, "the PPU window must follow its attachment flag");
+    assert.match(bus_body, /cpu_bus_apu_attached == 1/, "the APU window must follow its attachment flag");
+    assert.match(
+        bus_body,
+        /cpu_bus_controllers_attached == 1/,
+        "the controller window must follow its attachment flag",
+    );
+});
+
+test("the CPU bus keeps the PPU window inside its address bound", () => {
+    // The PPU register window is $2000-$3FFF and the cartridge window is $4020-$FFFF. A read
+    // of a cartridge address must reach the board, because the reset vector lives at $FFFC and
+    // the PPU mirrors its registers every eight bytes. A window that answered every address
+    // would answer $FFFC as PPU register 4 and $FFFF as PPUDATA, so the console would boot
+    // from the wrong vector and never run the game.
+    const bus = get_source("src/cpu_bus.gs");
+    const read = bus.declarations.find((declaration) => declaration.name === "cpu_bus_read");
+    assert.ok(read, "cpu_bus_read is missing");
+
+    const body = read.body.join("\n");
+    const window = body.indexOf("if numeric_address < 16384 {");
+    assert.ok(window >= 0, "the PPU window of cpu_bus_read is missing");
+
+    const attached = body.indexOf("if cpu_bus_ppu_attached == 1 {");
+    assert.ok(attached >= 0, "the PPU window does not follow its attachment flag");
+    assert.ok(
+        attached > window,
+        "the attachment check has to be inside the PPU window, not in place of it",
+    );
+
+    const cartridge = body.indexOf("if cpu_bus_cartridge_kind ==");
+    assert.ok(cartridge > window, "the cartridge window has to follow the PPU window");
+});
+
+test("the CPU bus decodes the RAM window before the PPU window", () => {
+    // The reference decoder returns for the RAM window first, so a RAM write never reaches
+    // a PPU register. A port that answered the PPU window first would write $2000-$3FFF's
+    // registers on every RAM write, which corrupts the scroll, the mask, and the OAM address
+    // while the game runs, and the two sides would no longer agree.
+    const bus = get_source("src/cpu_bus.gs");
+    const write = bus.declarations.find((declaration) => declaration.name === "cpu_bus_write");
+    assert.ok(write, "cpu_bus_write is missing");
+
+    const body = write.body.join("\n");
+    const ram = body.indexOf("if numeric_address < 8192 {");
+    assert.ok(ram >= 0, "the RAM window of cpu_bus_write is missing");
+
+    const ppu = body.indexOf("elif numeric_address < 16384 {");
+    assert.ok(ppu >= 0, "the PPU window of cpu_bus_write has to follow the RAM window");
+    assert.ok(ppu > ram, "the RAM window has to be decoded before the PPU window");
+});
+
+test("the console boot starts from a cleared console", () => {
+    // A fresh console starts with cleared RAM and no pending DMA transfer, and the shared
+    // vector replay leaves values in both. A boot that kept them would read a stale latch
+    // during the reset sequence and would not match the reference console.
+    const bus = get_source("src/cpu_bus.gs");
+    const reset = bus.declarations.find((declaration) => declaration.name === "cpu_bus_reset");
+    assert.ok(reset, "cpu_bus_reset is missing");
+
+    const reset_body = reset.body.join("\n");
+    assert.match(
+        reset_body,
+        /cpu_dma_phase = cpu_dma_phase\.idle;/,
+        "the bus reset has to drop a pending OAM DMA transfer",
+    );
+    assert.match(
+        reset_body,
+        /cpu_dma_alignment_cycle_needed = 0;/,
+        "the bus reset has to clear the DMA alignment flag",
+    );
+
+    const rom_run = get_source("src/rom_run.gs");
+    const start = rom_run.declarations.find((declaration) => declaration.name === "rom_run_start");
+    assert.ok(start, "rom_run_start is missing");
+    assert.match(
+        start.body.join("\n"),
+        /cpu_bus_clear_ram;/,
+        "the boot has to clear the RAM the self test left values in",
+    );
+});
+
+test("the Stage boots the embedded ROM after the shared-vector self test", () => {
+    // The green flag has to do both jobs in order: replay the vectors, then boot the console
+    // with the embedded image and keep it running. The display sprite can only report, so it
+    // reads the Stage-owned status text.
+    const stage = get_source("stage.gs");
+    const on_flag = stage.text.match(/onflag \{([\s\S]*?)\n\}/);
+
+    assert.ok(on_flag, "stage.gs has no onflag block");
+    const body = on_flag?.[1] ?? "";
+
+    const self_test_at = body.indexOf("run_port_self_test;");
+    const boot_at = body.indexOf("rom_run_start;");
+    const loop_at = body.indexOf("rom_run_loop;");
+
+    assert.ok(self_test_at >= 0, "the green flag must run the shared-vector self test");
+    assert.ok(boot_at > self_test_at, "the ROM must boot after the self test");
+    assert.ok(loop_at > boot_at, "the console must run after it boots");
+
+    const rom_run = get_source("src/rom_run.gs");
+    const start = rom_run.declarations.find((declaration) => declaration.name === "rom_run_start");
+    assert.ok(start, "rom_run_start is missing");
+    assert.match(
+        start?.body.join("\n") ?? "",
+        /cartridge_load_board;/,
+        "the boot must load the embedded image and attach its board",
+    );
+    assert.match(
+        start?.body.join("\n") ?? "",
+        /cpu_execute_reset_cycles;/,
+        "the boot must spend the reset accesses the board answers",
+    );
+    assert.match(
+        start?.body.join("\n") ?? "",
+        /cpu_access_log_enabled = 0;/,
+        "a running game must not grow the bus-access log",
+    );
+
+    const self_test = get_source("src/vector_selftest.gs");
+    const replay = self_test.declarations.find((declaration) => declaration.name === "run_port_self_test");
+    assert.match(
+        replay?.body.join("\n") ?? "",
+        /cpu_access_log_enabled = 1;/,
+        "the self test must log the accesses it compares",
+    );
+
+    const sprite = get_source("main.gs");
+    assert.match(sprite.text, /say rom_run_state_text;/, "the display sprite must report the ROM status");
+});
+
+test("the self-test operation ids match the shared vector fixture operations", () => {
+    const self_test = get_source("src/vector_selftest.gs");
     const numeric_operations = fixture_operations("numeric");
     const numeric_enum = get_enum(self_test, "numeric_op");
     assert.deepEqual(

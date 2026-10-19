@@ -6,22 +6,26 @@
 # chunks and yield between them.
 #
 # This module implements a chunked frame loop that:
-# - Runs a bounded number of CPU cycles per chunk (default: 1000)
+# - Runs a bounded number of CPU cycles per chunk (default: 100)
 # - Advances the PPU in sync (3 PPU dots per CPU cycle)
 # - Handles OAM DMA stalls
 # - Checks for IRQ/NMI at instruction boundaries
-# - Yields after each chunk so the caller can process input, update display, etc.
+# - Bounds the work of one chunk so the caller can update the display between chunks
 #
 # The chunk size is a tradeoff: larger chunks are more efficient but less responsive; smaller
-# chunks are more responsive but slower due to yield overhead. The default of 1000 cycles per
-# chunk gives ~30 chunks per frame, which is responsive enough for input handling while keeping
-# overhead reasonable.
+# chunks are more responsive but slower due to yield overhead. The default of 100 cycles per
+# chunk gives ~300 chunks per frame, which keeps a chunk short enough that the project still
+# refreshes while the emulator runs.
+#
+# The Scratch runtime yields once per loop iteration on its own, so the caller does not need to
+# wait between the chunks. The caller may still add a wait of its own between chunks: that keeps
+# the project responsive, and the heap stays flat as long as the chunk itself stays bounded.
 #
 # Usage:
 #   frame_loop_reset;                    # Initialize at frame start
 #   while frame_loop_frame_complete == 0 {
 #       frame_loop_run_chunk;            # Run one chunk
-#       # ... yield, process input, update display ...
+#       # ... update the display ...
 #   }
 #   # Frame is complete, ready for next frame
 
@@ -35,7 +39,7 @@
 
 # NTSC timing constants
 var FRAME_LOOP_CYCLES_PER_FRAME = 29780;
-var FRAME_LOOP_CYCLES_PER_CHUNK = 1000;
+var FRAME_LOOP_CYCLES_PER_CHUNK = 100;
 
 # Frame loop state
 var frame_loop_cycles_run = 0;
@@ -60,7 +64,7 @@ proc frame_loop_reset {
 proc frame_loop_run_chunk {
     frame_loop_chunk_cycles_run = 0;
 
-    repeat FRAME_LOOP_CYCLES_PER_CHUNK {
+    until frame_loop_chunk_cycles_run >= FRAME_LOOP_CYCLES_PER_CHUNK or frame_loop_frame_complete == 1 {
         if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
             frame_loop_frame_complete = 1;
         } else {
@@ -97,8 +101,10 @@ proc frame_loop_run_chunk {
                     cpu_request_nmi;
                 }
 
-                # Check for APU IRQ and forward to CPU
-                if apu_is_irq_asserted() == 1 {
+                # The APU and the cartridge board drive one IRQ line, the way the console
+                # composes them: an MMC3 board raises a scanline IRQ and the APU raises a
+                # frame IRQ.
+                if apu_is_irq_asserted() == 1 or cartridge_board_irq_line() == 1 {
                     cpu_set_irq_line 1;
                 } else {
                     cpu_set_irq_line 0;
@@ -118,13 +124,16 @@ proc frame_loop_check_dma {
     frame_loop_dma_cycles = 0;
     frame_loop_dma_done = 0;
 
-    # Run DMA cycles until the DMA is complete or we've run a bounded number
-    repeat 520 {
-        if frame_loop_dma_done == 0 {
-            if cpu_clock_dma_cycle() == 0 {
+    # The DMA runs until the bus reports that it is finished, which is one call when no
+    # transfer is pending. The bound keeps a stuck transfer from hanging the console.
+    until frame_loop_dma_done == 1 {
+        if cpu_clock_dma_cycle() == 0 {
+            frame_loop_dma_done = 1;
+        } else {
+            frame_loop_dma_cycles = frame_loop_dma_cycles + 1;
+
+            if frame_loop_dma_cycles >= 520 {
                 frame_loop_dma_done = 1;
-            } else {
-                frame_loop_dma_cycles = frame_loop_dma_cycles + 1;
             }
         }
     }

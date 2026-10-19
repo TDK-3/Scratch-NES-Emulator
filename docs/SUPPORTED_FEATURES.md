@@ -103,10 +103,14 @@ with their declared-size restore gate, the MMC3 board checks with both bank mode
 the MMC3 CPU and pattern windows, the MMC3 scanline IRQ with its four registers and the ten-dot A12 low
 filter, and a Stage-run self test
 that replays 587 shared vectors from
-`scratch/data/shared_port_vectors.txt`, counting the CPU state, mapper, PPU, and APU suites as
+`scratch/data/shared_port_vectors.txt`, counting the CPU state and mapper-selection suites as
 skipped. The green flag broadcasts a summary that the display sprite reports.
-Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
-obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared
+Those sources have never been through the compiler: the pinned toolchain needs Cargo and rustc, which are not
+obtainable here. The compiled project was brought in line with the sources block by block instead, and it runs
+headlessly: its self test reports `port vectors 582/582 passed, 5 skipped`, and its console boots the embedded
+MMC3 image, reads the reset vector, and runs the game with a bus trace byte-identical to the TypeScript
+reference's. The port has no PPU renderer, so its run produces no picture. The ported algorithms are also
+validated by an integer-only TypeScript mirror compared
 exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic
 upstream codegen, reserved block names, and name resolution. See
 [`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md) and [`PORTING_PLAN.md`](PORTING_PLAN.md).

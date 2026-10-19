@@ -374,8 +374,8 @@ board to the ported CPU bus), and step 6 is written but unrun, because the proje
 What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the save/load wiring
 that would actually use the ported snapshot buffers is the next porting work, and step 7 remains entirely
 blocked on a toolchain. The in-project
-self test replays suites 1, 3, and 7 through 19 of the shared fixture and counts the CPU state, mapper, PPU,
-and APU suites as skipped rather than passing. The loader attaches either ported board, so the embedded MMC3
+self test replays suites 1, 3, 5, 6, and 7 through 19 of the shared fixture and counts the CPU state and
+mapper-selection suites as skipped rather than passing. The loader attaches either ported board, so the embedded MMC3
 image now drives the cartridge window and can raise a scanline IRQ: the board carries the four IRQ registers
 and the PPU A12 observation with its ten-dot low filter, the loader reports the line through
 `cartridge_board_irq_line()`, and both ported boards expose their nonvolatile memory snapshot procs. Nothing

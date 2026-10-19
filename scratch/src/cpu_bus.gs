@@ -2,11 +2,16 @@
 #
 # Ports the parts of src/nes/cpu/nes_cpu_bus.ts that the current shared vectors cover:
 # 2 KiB RAM mirrored across $0000-$1FFF, the open-bus data latch with per-device driven
-# masks, the $4016/$4017 controller ports, the $4014 OAM DMA stall with alignment cycle,
-# and the "undriven read returns the retained latch" rule. PPU registers, APU registers,
-# and cartridge space are not ported yet: reads of those windows return the retained latch
-# and writes are latched and then dropped, which is exactly what an absent device does in
-# the TypeScript decoder.
+# masks, the $2000-$3FFF PPU register window, the $4015 APU status register, the
+# $4016/$4017 controller ports, the APU register writes, the $4014 OAM DMA stall with
+# alignment cycle, the cartridge window an attached board drives, and the "undriven read
+# returns the retained latch" rule.
+#
+# Each device window can be detached, which is what an absent device does in the
+# TypeScript decoder: the window is left undriven, so its reads return the retained latch
+# and its writes are dropped. The emulator attaches every device; the shared-vector replay
+# detaches the devices the TypeScript reference replays without, so both sides see the
+# same open-bus behavior.
 #
 # Scratch lists are 1-indexed, so the RAM window conversion happens in one place here.
 
@@ -46,10 +51,26 @@ var cpu_dma_alignment_cycle_needed = 0;
 # reference bus behaves with an absent cartridge port.
 var cpu_bus_cartridge_kind = 0;
 
+# Which devices the bus drives. A detached device leaves its window undriven: reads return the
+# retained latch and writes are dropped, exactly as the reference bus behaves with an absent
+# device. The emulator keeps all three attached; the shared-vector replay detaches the ones
+# the TypeScript reference replays without.
+var cpu_bus_ppu_attached = 1;
+var cpu_bus_apu_attached = 1;
+var cpu_bus_controllers_attached = 1;
+
 # Clears the bus latch like NesCpuBus.reset(); RAM contents survive a reset.
 proc cpu_bus_reset {
     cpu_open_bus = 0;
     cpu_bus_cycle_count = 0;
+
+    # NesCpuBus.reset() also drops a pending OAM DMA transfer, so the port's DMA state
+    # machine starts idle again.
+    cpu_dma_phase = cpu_dma_phase.idle;
+    cpu_dma_index = 0;
+    cpu_dma_data_latch = 0;
+    cpu_dma_sequence_cycle = 0;
+    cpu_dma_alignment_cycle_needed = 0;
     ppu_reset;
     apu_reset;
 }
@@ -88,15 +109,18 @@ func cpu_bus_read(address) {
 
     if numeric_address < 16384 {
         # $2000-$3FFF: PPU registers, mirrored every 8 bytes.
-        local ppu_register = numeric_address % 8;
-        ppu_read_cpu_register ppu_register;
-        local ppu_value = ppu_read_result;
+        if cpu_bus_ppu_attached == 1 {
+            local ppu_register = numeric_address % 8;
+            ppu_read_cpu_register ppu_register;
+            local ppu_value = ppu_read_result;
 
-        if ppu_register == 2 or ppu_register == 4 or ppu_register == 7 {
-            return cpu_apply_driven_value(ppu_value, 255);
+            if ppu_register == 2 or ppu_register == 4 or ppu_register == 7 {
+                return cpu_apply_driven_value(ppu_value, 255);
+            }
         }
 
-        # Write-only registers and unimplemented ports return the retained latch.
+        # A detached PPU, a write-only register, and an unimplemented port all leave the
+        # window undriven, so the read returns the retained latch.
         return cpu_open_bus;
     }
 
@@ -123,18 +147,18 @@ func cpu_bus_read(address) {
     return cpu_open_bus;
 }
 
-# Reads the $4000-$401F I/O window; unported devices drive no data lines.
+# Reads the $4000-$401F I/O window; a detached device drives no data lines.
 func cpu_bus_read_io(address) {
-    if $address == 16405 {
+    if $address == 16405 and cpu_bus_apu_attached == 1 {
         apu_read_status;
         return cpu_apply_driven_value(apu_status_value, apu_status_driven_mask);
     }
 
-    if $address == 16406 {
+    if $address == 16406 and cpu_bus_controllers_attached == 1 {
         return cpu_apply_driven_value(controller_serial_read(0), 1);
     }
 
-    if $address == 16407 {
+    if $address == 16407 and cpu_bus_controllers_attached == 1 {
         return cpu_apply_driven_value(controller_serial_read(1), 1);
     }
 
@@ -148,17 +172,29 @@ proc cpu_bus_write address, value {
     cpu_open_bus = numeric_value;
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
-    if numeric_address < 16384 {
-        # $2000-$3FFF: PPU registers, mirrored every 8 bytes.
-        local ppu_register = numeric_address % 8;
-        ppu_write_cpu_register ppu_register, numeric_value;
-    }
-
     if numeric_address < 8192 {
+        # $0000-$1FFF: 2 KiB of RAM, mirrored across the window.
         cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
+    } elif numeric_address < 16384 {
+        # $2000-$3FFF: PPU registers, mirrored every 8 bytes. The RAM window is decoded
+        # first, so a RAM write never reaches a PPU register.
+        if cpu_bus_ppu_attached == 1 {
+            local ppu_register = numeric_address % 8;
+            ppu_write_cpu_register ppu_register, numeric_value;
+        }
     }
 
-    if numeric_address == 16406 {
+    if cpu_bus_apu_attached == 1 {
+        # $4000-$4013 and $4015/$4017 are APU registers; $4014 is the bus's own OAM DMA and
+        # $4016 belongs to the controller port, so neither reaches the APU.
+        if numeric_address >= 16384 and numeric_address <= 16403 {
+            apu_write_register numeric_address, numeric_value;
+        } elif numeric_address == 16405 or numeric_address == 16407 {
+            apu_write_register numeric_address, numeric_value;
+        }
+    }
+
+    if numeric_address == 16406 and cpu_bus_controllers_attached == 1 {
         controller_write_strobe numeric_value;
     }
 
