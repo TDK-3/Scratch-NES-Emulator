@@ -111,14 +111,14 @@ test("KIL keeps CPU bus cycles running while the console PPU advances until rese
 
     assert.equal(console.step().sequence_kind, "reset");
     assert.deepEqual(console.step(), { cpu_cycles: 2, sequence_kind: "instruction" });
-    assert.equal(console.get_cpu_state().program_counter, 0x8000);
+    assert.equal(console.get_cpu_state().program_counter, 0x8001);
 
     const starting_frame = console.get_frame_number();
     const frame = console.advance_frame();
 
     assert.ok(frame.cpu_cycles_elapsed > 0);
     assert.ok(frame.frame_number > starting_frame);
-    assert.equal(console.get_cpu_state().program_counter, 0x8000);
+    assert.equal(console.get_cpu_state().program_counter, 0x8001);
 
     console.reset();
     assert.deepEqual(console.step(), { cpu_cycles: 7, sequence_kind: "reset" });

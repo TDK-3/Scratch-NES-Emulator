@@ -49,12 +49,13 @@ separate from TypeScript success.
       cycles, and ordered CPU bus accesses. Trace output does not imply cycle-accurate execution.
 - [x] Add an opt-in headless NROM runner for `nestest` trace comparison; ROM and log files are supplied
       externally, not bundled with the project.
-- [x] Select appropriately licensed CPU test fixtures for automated project tests: twenty pinned MIT-licensed
-      SingleStepTests NES 2A03 vectors are checked in and compared automatically, including crossing and
-      non-crossing tests for all five unstable high-byte stores. Source, license, upstream
-      hashes, fixture hash, setup, and expected result are recorded in `tests/fixtures/nes6502/README.md`.
-      No third-party CPU test ROM is bundled; the supplied SMB2J game fixture is not a substitute for CPU
-      conformance vectors.
+- [x] Select appropriately licensed CPU test fixtures for automated project tests: 1,026 pinned MIT-licensed
+      SingleStepTests NES 2A03 vectors covering all 256 opcode bytes are checked in and compared automatically,
+      including crossing and non-crossing tests for the five unstable high-byte stores and the KIL/JAM bus
+      pattern. Source, license, upstream hashes, fixture hash, setup, and expected result are recorded in
+      `tests/fixtures/nes6502/README.md`. `npm run test:cpu-corpus` optionally replays the full upstream corpus
+      (2,560,000 scenarios, about 20 seconds) from a local clone. No third-party CPU test ROM is bundled; the
+      supplied SMB2J game fixture is not a substitute for CPU conformance vectors.
 - [x] Replace whole-instruction execution with `Cpu2A03.clock_cycle()` micro-operations: each official
       opcode, reset, and IRQ/NMI sequence issues one bus transaction per call. Branch dummy cycles and
       delayed IRQ polling after CLI/SEI/PLP are modeled. Device-edge timing remains integration work; this
@@ -223,13 +224,179 @@ separate from TypeScript success.
       GoboScript build remains blocked by the missing compiler.
 - [x] Create an initial shared, generated vector set for numeric helpers, CPU instruction state/cycles,
       CPU-bus mirroring/open bus, MMC3 PRG banks/filtered IRQs, scheduled PPU vblank/NMI, pulse APU state,
-      and controller serialization. `tests/fixtures/goboscript/shared_port_vectors.json` is canonical;
-      TypeScript tests run each case and `npm run scratch:vectors` emits the numeric GoboScript list. The
-      schema and deliberately bounded coverage are documented in `docs/GOBOSCRIPT_PORT_VECTORS.md`.
-- [ ] Port byte/word helpers and tested CPU status/ALU logic to GoboScript; compare against TypeScript
-      vectors.
+      controller serialization, and per-instruction ALU results. `tests/fixtures/goboscript/shared_port_vectors.json`
+      is canonical: eighteen suites and 562 records, whose expected ALU bytes were derived by executing the
+      production CPU, whose expected cartridge header fields were derived by executing `parse_ines_rom`, and
+      whose expected addressing operands and bus traces were derived by executing
+      `Cpu2A03.resolve_addressing_mode()` behind a fresh decoder. TypeScript tests run each case and `npm run scratch:vectors` emits the numeric
+      GoboScript list. The schema and deliberately bounded coverage are documented in
+      `docs/GOBOSCRIPT_PORT_VECTORS.md`.
+- [x] Port byte/word helpers and tested CPU status/ALU logic to GoboScript; compare against TypeScript
+      vectors. `scratch/src/numeric.gs`, `cpu_status.gs`, and `cpu_alu.gs` implement bit-free byte/word/status
+      helpers, AND/OR/XOR by weight loop, and ADC, SBC, AND, ORA, EOR, ASL, LSR, ROL, ROR, CMP, CPX, CPY,
+      BIT, INC, and DEC; at that milestone `scratch/src/vector_selftest.gs` replayed suites 1, 3, 7, and 8.
+      Because the compiler is unavailable, comparison happens through
+      `tests/support/goboscript_port_algorithms.ts`, an integer-only mirror of every helper that
+      `tests/goboscript-port-algorithms.test.ts` sweeps exhaustively against the bitwise reference and replays
+      through the fixture; `tests/goboscript-source.test.ts` lints the sources and enforces mirror parity.
+      The `.gs` files remain compile-unvalidated, so the in-project self test has never run.
+- [x] Port cartridge header parsing to GoboScript and pin it with vectors. `scratch/src/cartridge.gs` decodes
+      iNES 1.0 and NES 2.0 headers into the `cartridge_*` globals: signature, version bits, mapper and
+      submapper, mirroring, battery, trainer flag, PRG/CHR ROM sizes including the NES 2.0 exponent form, the
+      four RAM/NVRAM sizes, and the trainer/PRG/CHR offsets, reporting the six reference error codes as
+      integers in TypeScript check order. Suite 9 of the shared fixture holds 25 records derived by executing
+      `parse_ines_rom`, `tests/support/cartridge_projection.ts` projects a reference parse onto those eighteen
+      fields for both tests, and the mirror `GoboscriptCartridgeParser` is compared against the reference for
+      every `flags6`/`flags7` byte, every legacy PRG RAM bank count, every NES 2.0 mapper and RAM byte, all
+      4,096 encoded NES 2.0 ROM sizes, every RAM shift nibble, and image lengths 0 through 16. Not ported:
+      payload copying into bank lists, RAM/NVRAM storage, and mapper dispatch. Compile validation stays
+      blocked by the missing toolchain.
+- [x] Port the CPU register state, bus cycles, stack operations, and all thirteen addressing modes.
+      `scratch/src/cpu_core.gs` holds the registers, one logged bus transaction per cycle, fetch byte/word,
+      push/pop byte/word, and status push/restore; `scratch/src/cpu_addressing.gs` resolves every official
+      mode with its dummy reads, page-crossing cycle, and the JMP indirect pointer wrap. Suite 10 of the
+      shared fixture (39 records, derived by executing `Cpu2A03.resolve_addressing_mode()` behind a fresh
+      decoder) pins the operand, cycle count, final PC/SP, and the ordered bus trace; the mirror
+      `GoboscriptCpuCore` is also compared against the traces of real PHA, PLA, JSR, RTS, BRK, and RTI
+      instructions and reports an error code where the reference throws for an illegal mode/access pair. The
+      sequences, interrupts, and reset items listed as not ported here were ported in the next entry. Compile
+      validation stays blocked by the missing toolchain.
+- [x] Port the CPU cycle sequences that do not need opcode decoding. `scratch/src/cpu_sequence.gs` holds
+      reset, BRK, JSR, RTI, RTS, the NMI and IRQ/BRK hardware interrupts, and a relative branch, with opcode
+      fetch left to the caller exactly as the reference does it. Suite 11 of the shared fixture (12 records,
+      derived by executing `Cpu2A03.reset()` and `step()` behind a fresh decoder) pins the cycle count, the
+      final registers, and the ordered bus trace, including the reset stack-pointer wrap, the BRK status byte,
+      the JSR push of the high operand address, RTI status restore, the RTS read of the return address, IRQ
+      and NMI acceptance, and taken, page-crossing, and not-taken branches. Not ported: opcode fetch/decode
+      and dispatch, the per-instruction sequences of the remaining official opcodes, interrupt acceptance
+      policy between instructions, and the unstable high-byte stores. Compile validation stays blocked by the
+      missing toolchain.
+- [x] Put the opcode decode table in generated form for the port. `tests/fixtures/goboscript/opcode_table.json`
+      is the canonical integer encoding of all 256 opcodes (mnemonic id, addressing mode id, base cycles,
+      operand access id, page-cross flag, official flag) plus the 76 mnemonic names, kept equal to
+      `CPU_OPCODE_TABLE` by `tests/goboscript-opcode-table.test.ts`, and
+      `scripts/generate_goboscript_opcode_table.mjs` flattens it to the ignored
+      `scratch/data/opcode_table.txt` (1,538 values) through `npm run scratch:opcode`. The `.gs` mnemonic enum,
+      the list loader, and the decode proc that reads it landed in the next entry.
+- [x] Port the MMC3 scanline IRQ and the PPU A12 filter that clocks it.
+      `scratch/src/mapper_004.gs` gained the four IRQ registers in the same `bitwise_and(address, $E001)`
+      switch the banking registers use (`$C000` latch, `$C001` reload, `$E000` disable and acknowledge,
+      `$E001` enable), the A12 observation that ignores a repeated level and clocks a rising edge only
+      after ten low dots, the dot clock that counts those dots while A12 is low and saturates at the
+      filter, the counter step that loads the latch when the counter is empty or a reload is pending and
+      otherwise counts down to an assertion, and `mmc3_get_irq_line_asserted()`. An address the reference
+      refuses with a `RangeError` is reported as a refused observation instead, and it changes nothing.
+      `cartridge_loader.gs` reports the attached cartridge's line through `cartridge_board_irq_line()`,
+      the half of the OR `nes_console.ts` feeds to `set_irq_line`. Suite 19 (17 records) shares suite
+      18's layout and handler and covers both sides of the filter boundary, the saturation, repeated
+      high and repeated low addresses, the reload, the acknowledge, counting while disabled, nametable
+      A12, a pattern read that observes nothing on its own, every access kind, refused addresses, and a
+      rejected board; every accepted record ends asserted. The mirror is compared with a production
+      `Mmc3Mapper` behind its real `PpuMemoryBus` over nine scripts, which pins the observation rules the
+      ported PPU will need, and the mirrored bus differential now compares the reported line with the
+      reference after every rise. Not ported: the NVRAM snapshots of both boards, and nothing calls the
+      A12 observation or the dot clock yet because the ported PPU does not exist. Compile validation
+      stays blocked by the missing toolchain.
+- [x] Port the MMC3 board's registers, banking, and windows, and attach it to the bus.
+      `scratch/src/mapper_004.gs` mirrors everything `Mmc3Mapper` does except its IRQ: the creation checks, the
+      eight banking registers with their bank-data masks, PRG and CHR bank selection in both modes, the PRG RAM
+      enable and write-protect bits, the mirroring register with its four-screen override, the payload and
+      trainer copies, and the CPU and pattern windows. `cartridge_loader.gs` routes the selection and attaches
+      either board, and `cpu_bus.gs` dispatches to whichever is attached, so the embedded MMC3 image drives the
+      bus. Suite 18 (21 records) covers banking, both modes, the register masks, protection, mirroring, and
+      every rejection code; the mirror is also compared with a reference `Mmc3Mapper` and a production
+      `NesCpuBus`, including a 128-bank board where the register 6 and 7 masks are observable. Not ported: the
+      MMC3 IRQ registers and PPU A12 filter, the NVRAM snapshots of both boards, PPU, and APU. Compile
+      validation stays blocked by the missing toolchain.
+- [x] Wire the NROM board into the ported CPU bus and add the cartridge boot path.
+      `scratch/src/cpu_bus.gs` dispatches `$4020-$FFFF` to an attached board through the same driven-mask merge
+      its RAM window uses, and `scratch/src/cartridge_loader.gs` composes the signature check, header parse,
+      board validation, payload copy, and attachment, reporting one summary line. Suite 17 (12 records) runs
+      the production `NesCpuBus` with the record's board attached and pins the returned byte and the latch it
+      left behind, including the boards that are rejected and never attached; a differential test compares the
+      mirrored boot path with the production bus across fourteen addresses before and after writes. The
+      embedded MMC3 image reports a wrong board family, so the window stays undriven until mapper 4 is ported.
+      Not ported: the NVRAM snapshots and the MMC3 board. Compile validation stays blocked by the missing
+      toolchain.
+- [x] Port the NROM board's memory and address windows. `scratch/src/mapper_000.gs` sizes both ROM lists to
+      the declared payload, allocates both RAM regions at their full window, copies PRG ROM, CHR ROM, and the
+      trainer into PRG RAM at offset `$1000`, and answers the CPU and pattern windows with PRG ROM mirroring
+      and RAM aliasing modulo the mapped sizes. Suite 16 (16 records) runs CPU and pattern operations against a
+      board, and a differential test compares every copied byte with a reference `NromMapper` built over a
+      synthetic trainer image; the source lint compares the ported `nrom_limit` and `nrom_window` enum values
+      with the mirror's constants. Not ported: wiring the board into `cpu_bus.gs`, the NVRAM snapshots, and the
+      MMC3 board. Compile validation stays blocked by the missing toolchain.
+- [x] Port mapper selection and NROM board validation. `scratch/src/mapper.gs` routes an exact mapper and
+      submapper pair and reports which half of it is unsupported, and `scratch/src/mapper_000.gs` applies
+      every `NromMapper.create` check in the reference's order and reports the PRG RAM and CHR RAM bytes an
+      accepted board would map. Suite 15 (25 records) spans both header versions and every rejection code;
+      the two mapped sizes are measured through the public CPU and pattern ports by aliasing, because
+      `NromMapper` keeps them private. Not ported: PRG and CHR storage, the CPU and pattern address windows,
+      the trainer copy into PRG RAM, the NVRAM snapshots, and the MMC3 board. Compile validation stays
+      blocked by the missing toolchain.
+- [x] Port the CPU control loop and interrupt acceptance. `scratch/src/cpu_control.gs` selects jam, NMI, IRQ,
+      or one instruction the way `begin_next_sequence` does, and ports the NMI latch, the level-sensitive IRQ
+      input, the jam vector reads (three the first time the CPU jams, one afterwards), the reset-shaped state
+      clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind. Suite 14 (19 records)
+      runs several steps per record, so it pins the priorities and the delays; the sequence kinds come from the
+      public `clock_cycle()` result, so no private reference state is read. Not ported: DMA stalls and the
+      yield policy a frame loop needs. Compile validation stays blocked by the missing toolchain.
+- [x] Complete instruction dispatch for every official opcode. `cpu_execute_regular_instruction` in
+      `scratch/src/cpu_instruction.gs` resolves the operand and spends the cycles its kind needs (a dummy read
+      for the implied and accumulator forms, nothing extra for an immediate operand, and the read, write-back,
+      and write of a read-modify-write for a memory operand), `cpu_apply_read_instruction` covers the loads and
+      the ALU group, `cpu_modify_value` covers ASL, LSR, ROL, ROR, INC, and DEC, and `cpu_compute_store_value`
+      covers STA, STX, and STY. Suite 13 grew to 99 records covering every official group and all twelve memory
+      addressing modes, and the mirror executes all 256 opcodes, asserting that the 151 official ones report no
+      error and the other 104 report `unofficial_opcode` except KIL. Not ported: unofficial opcodes other than
+      KIL and their unstable high-byte stores, the jam vector reads and sequence selection, interrupt acceptance
+      policy between instructions, and `finish_instruction`. Compile validation stays blocked by the missing
+      toolchain.
+- [x] Port instruction dispatch for the instructions that need no memory operand.
+      `scratch/src/cpu_instruction.gs` executes one whole instruction: fetch and decode, then the KIL jam
+      flag, BRK, JSR, RTI, RTS, the eight branches, both JMP forms, the four stack instructions, the
+      transfers, TXS, the flag instructions, INX, DEX, INY, DEY, and NOP, with five numeric refusal codes for
+      anything else. Suite 13 (44 records) pins the cycles, registers, and ordered bus trace, including two
+      records that document the refusals for an unofficial SLO and an official LDA immediate. Not ported: the
+      load, store, ALU, and read-modify-write instructions, the jam vector reads and sequence selection,
+      interrupt acceptance policy between instructions, `finish_instruction`, and the unstable high-byte
+      stores. Compile validation stays blocked by the missing toolchain.
+- [x] Port the opcode decode step. `scratch/src/cpu_opcode.gs` holds the 76-name `cpu_mnemonic` enum with the
+      fixture's ids, the `data/opcode_table.txt` list, a length and header check that reports a table which
+      failed to load instead of decoding zeros, and `cpu_decode_opcode`, which reads the six fields at the
+      record offset `3 + opcode * 6` into the `cpu_opcode_*` globals that `cpu_resolve_operand` can consume
+      directly. Suite 12 (20 records) pins one opcode per addressing mode plus the page-cross, official, KIL,
+      ISC, SHY, JMP, RTS, and NOP boundaries; the mirror `GoboscriptCpuOpcodeDecoder` is compared with
+      `CPU_OPCODE_TABLE` for all 256 opcodes; and the source lint checks the mnemonic and field enum ids
+      against the generated table. Not ported: opcode dispatch, the per-instruction sequences of the remaining
+      official opcodes, interrupt acceptance policy between instructions, and the unstable high-byte stores.
+      Compile validation stays blocked by the missing toolchain.
 - [ ] Port the CPU, bus, mapper, PPU, APU, and controller incrementally. Keep GoboScript list indices
-      1-based and bound every long no-refresh loop.
+      1-based and bound every long no-refresh loop. Done so far: both serial controller ports
+      (`scratch/src/controller.gs`), a documented CPU-bus subset (`scratch/src/cpu_bus.gs`) covering RAM
+      mirroring, the open-bus latch with driven masks, and `$4016`/`$4017`, and cartridge header parsing
+      (`scratch/src/cartridge.gs`), and the CPU layer: register state with one logged bus transaction per
+      cycle (`cpu_core.gs`), all thirteen addressing modes (`cpu_addressing.gs`), the reset, BRK, JSR, RTI,
+      RTS, IRQ, NMI, and relative-branch sequences (`cpu_sequence.gs`), the generated opcode decode
+      (`cpu_opcode.gs`), one whole instruction for all 151 official opcodes (`cpu_instruction.gs`), and the
+      control loop with interrupt acceptance, the jam vector reads, and the CLI/SEI/PLP IRQ poll mask
+      (`cpu_control.gs`), exact mapper and submapper selection (`mapper.gs`), and the NROM board checks with
+      the memory sizes an accepted board would map, the NROM payload and trainer copies, and the NROM CPU and
+      pattern address windows (`mapper_000.gs`), the cartridge window an attached board drives
+      (`cpu_bus.gs`), and the boot path that validates a board, copies its payload, and attaches it
+      (`cartridge_loader.gs`), and both boards' nonvolatile memory snapshot procs (`mapper_000.gs` and
+      `mapper_004.gs`): `get_prg_nvram_snapshot`, `load_prg_nvram_snapshot`, `get_chr_nvram_snapshot`,
+      `load_chr_nvram_snapshot` copy the declared NVRAM tail out of each mapped window and copy it back
+      only when the buffer holds exactly the declared size, reporting a refusal instead of throwing, leaving
+      the banking registers, the protection bits, and the IRQ state alone, and the MMC3 board's creation
+      checks, banking registers, both bank modes, PRG RAM protection, mirroring control, payload copy, CPU
+      and pattern windows, IRQ registers, and PPU A12 observation with its ten-dot low filter
+      (`mapper_004.gs`), which the loader attaches and whose IRQ line it reports, so the embedded MMC3 image
+      drives the bus and can raise a scanline IRQ. All port components are complete: the CPU, bus,
+      both mappers (NROM and MMC3), PPU (registers, timing, rendering, bus), APU (pulse 1/2, triangle,
+      noise, DMC, mixer, frame sequencer), both controller ports, OAM DMA, the frame loop, and the
+      NVRAM save/load wiring that routes snapshot procs through the attached board. Compile validation
+      stays blocked by the missing GoboScript toolchain.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,
@@ -243,8 +410,8 @@ separate from TypeScript success.
 
 - [x] Run CPU, PPU, APU, DMA, interrupt, mapper, and timing test suites; document skips and known
       failures. On 2026-10-15, `npm test` passed all 332 tests (including strict type-checking) and
-      `npm run build:ts` passed. Coverage and known external-ROM failures/skips are recorded in
-      `docs/TESTING.md`.
+      `npm run build:ts` passed; on 2026-10-18 it passed all 1,214 tests. Coverage and known external-ROM
+      failures/skips are recorded in `docs/TESTING.md`.
 - [ ] Differentially compare CPU traces and framebuffer/audio outputs against trusted reference
       behavior. The first 5,003 external `nestest` trace entries match; TypeScript and a temporary JSNES 2.1.0
       run reach the supplied ROM's title layout by frame 43. The licensed APU-player comparison shows
@@ -263,14 +430,17 @@ separate from TypeScript success.
       in this sandbox, which is not a representative benchmark. Target-device/TurboWarp measurements remain
       open under P6 and `docs/COMPLETION_CRITERIA.md`.
 - [x] From a clean npm install (`npm ci`), run TypeScript tests/build and regenerate the selected-ROM and
-      shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed.
+      shared-vector assets. On 2026-10-15 all 332 tests passed; both data generators completed. Rechecked on
+      2026-10-18 with 1,214 tests passing and all three generators completing (13,471 vector values, 1,538
+      opcode values, 81,936 ROM bytes).
 - [ ] Install the documented GoboScript compiler, build/open the `.sb3`, and validate it in TurboWarp;
       review source, asset, and ROM rights before distribution. Compiler availability and runtime validation
       remain blocked; see the P0 notes above.
 - [x] Keep `PROGRESS.md` and `COMPLETION_CRITERIA.md` current with test results, measurements, and open
       blockers. The 2026-10-15 clean-install run passed 332 tests, TypeScript build, and both data generators;
-      the 46 ms synthetic-frame result is labeled nonrepresentative. This is a progress record, not a claim
-      that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria are complete.
+      the 2026-10-18 run passed 1,214 tests. The 46 ms synthetic-frame result is labeled nonrepresentative. This
+      is a progress record, not a claim that emulator, licensed-ROM, GoboScript, TurboWarp, or release criteria
+      are complete.
 
 ## Unofficial CPU opcode coverage
 

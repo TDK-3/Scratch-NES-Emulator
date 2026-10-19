@@ -12,6 +12,7 @@ import { Mmc3Mapper } from "../src/nes/cartridge/mapper_004.js";
 import { Cpu2A03 } from "../src/nes/cpu/cpu_2a03.js";
 import type { NesCpuBusDevices } from "../src/nes/cpu/nes_cpu_bus.js";
 import { NesCpuBus } from "../src/nes/cpu/nes_cpu_bus.js";
+import { CPU_OPCODE_TABLE, OFFICIAL_OPCODE_DEFINITIONS } from "../src/nes/cpu/opcode_table.js";
 import {
     normalize_byte,
     normalize_status,
@@ -24,43 +25,98 @@ import { NesControllerPorts } from "../src/nes/input/controller.js";
 import { Ppu2C02 } from "../src/nes/ppu/ppu_2c02.js";
 import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
 import { FakeCpuBus } from "./support/FakeCpuBus.js";
-
-interface SharedVector {
-    readonly id: number;
-    readonly operation: number;
-    readonly input: readonly number[];
-    readonly expected: readonly number[];
-}
-
-interface SharedVectorSuite {
-    readonly id: number;
-    readonly name: string;
-    readonly vectors: readonly SharedVector[];
-}
-
-interface SharedVectorFixture {
-    readonly schema_version: number;
-    readonly suites: readonly SharedVectorSuite[];
-}
+import { CARTRIDGE_HEADER_BYTES, project_cartridge_header } from "./support/cartridge_projection.js";
+import {
+    CPU_ADDRESSING_FIXED_INPUT_COUNT,
+    CPU_ADDRESSING_FIXED_VALUE_COUNT,
+    CPU_ADDRESSING_MODES,
+    CPU_OPERAND_ACCESSES,
+    project_cpu_addressing,
+    type CpuAddressingSetup,
+} from "./support/cpu_addressing_projection.js";
+import {
+    CPU_INSTRUCTION_ERROR_IDS,
+    CPU_INSTRUCTION_FIXED_INPUT_COUNT,
+    CPU_INSTRUCTION_FIXED_VALUE_COUNT,
+    CPU_INSTRUCTION_PORTED_MNEMONICS,
+    project_cpu_instruction,
+    type CpuInstructionSetup,
+} from "./support/cpu_instruction_projection.js";
+import {
+    CPU_CONTROL_FIXED_INPUT_COUNT,
+    CPU_CONTROL_FIXED_VALUE_COUNT,
+    CPU_CONTROL_SEQUENCE_KINDS,
+    project_cpu_control,
+    type CpuControlSetup,
+} from "./support/cpu_control_projection.js";
+import { cpu_mnemonic_ids, is_official_opcode, project_opcode_decode } from "./support/cpu_opcode_projection.js";
+import {
+    MMC3_CLOCK_PPU_DOT,
+    MMC3_CPU_READ,
+    MMC3_CPU_WRITE,
+    MMC3_FIXED_INPUT_COUNT,
+    MMC3_FIXED_VALUE_COUNT,
+    MMC3_GET_CHR_NVRAM,
+    MMC3_GET_PRG_NVRAM,
+    MMC3_LOAD_CHR_NVRAM,
+    MMC3_LOAD_PRG_NVRAM,
+    MMC3_OBSERVE_PPU_ACCESS,
+    MMC3_OPS,
+    MMC3_PATTERN_READ,
+    MMC3_PPU_ACCESSES,
+    MMC3_READ_CHR_NVRAM_BYTE,
+    MMC3_READ_PRG_NVRAM_BYTE,
+    MMC3_REPORT_IRQ,
+    MMC3_REPORT_MIRRORING,
+    MMC3_VALUES_PER_OP,
+    project_mmc3_memory,
+    CARTRIDGE_BUS_FIXED_INPUT_COUNT,
+    CARTRIDGE_BUS_FIXED_VALUE_COUNT,
+    CARTRIDGE_BUS_OPS,
+    CARTRIDGE_BUS_VALUES_PER_OP,
+    CARTRIDGE_BUS_WRITE,
+    project_cartridge_bus,
+    type CartridgeBusOp,
+    MAPPER_CREATION_INPUT_COUNT,
+    NROM_MEMORY_CPU_READ,
+    NROM_MEMORY_CPU_WRITE,
+    NROM_MEMORY_FIXED_INPUT_COUNT,
+    NROM_MEMORY_FIXED_VALUE_COUNT,
+    NROM_MEMORY_GET_CHR_NVRAM,
+    NROM_MEMORY_GET_PRG_NVRAM,
+    NROM_MEMORY_LOAD_CHR_NVRAM,
+    NROM_MEMORY_LOAD_PRG_NVRAM,
+    NROM_MEMORY_OPS,
+    NROM_MEMORY_PATTERN_READ,
+    NROM_MEMORY_PATTERN_WRITE,
+    NROM_MEMORY_READ_CHR_NVRAM_BYTE,
+    NROM_MEMORY_READ_PRG_NVRAM_BYTE,
+    NROM_MEMORY_VALUES_PER_OP,
+    project_nrom_memory,
+    type NromMemoryOp,
+    type NromMemoryPrepare,
+    MAPPER_CREATION_VALUE_COUNT,
+    MAPPER_KIND_IDS,
+    MAPPER_SELECTION_ERROR_IDS,
+    MAPPER_ERROR_IDS,
+    project_mapper_creation,
+} from "./support/mapper_projection.js";
+import {
+    CPU_SEQUENCE_FIXED_INPUT_COUNT,
+    CPU_SEQUENCE_FIXED_VALUE_COUNT,
+    project_cpu_sequence,
+    type CpuSequenceSetup,
+} from "./support/cpu_sequence_projection.js";
+import {
+    for_each_vector,
+    shared_port_fixture as fixture,
+    shared_port_fixture_text as fixture_text,
+} from "./support/shared_port_vectors.js";
 
 const FIXTURE_PATH = new URL("./fixtures/goboscript/shared_port_vectors.json", import.meta.url);
 const GENERATOR_PATH = fileURLToPath(
     new URL("../scripts/generate_goboscript_shared_port_vectors.mjs", import.meta.url),
 );
-const fixture_text = readFileSync(FIXTURE_PATH, "utf8");
-const fixture = JSON.parse(fixture_text) as SharedVectorFixture;
-
-function get_suite(name: string): SharedVectorSuite {
-    const suite = fixture.suites.find((candidate) => candidate.name === name);
-    assert.ok(suite, `Missing shared vector suite ${name}.`);
-    return suite;
-}
-
-function for_each_vector(suite_name: string, run: (vector: SharedVector) => void): void {
-    for (const vector of get_suite(suite_name).vectors) {
-        test(`shared ${suite_name} vector ${vector.id}`, () => run(vector));
-    }
-}
 
 test("generates the canonical shared vectors as a numeric GoboScript list", () => {
     const temporary_directory = mkdtempSync(join(tmpdir(), "goboscript-vectors-"));
@@ -155,6 +211,32 @@ for_each_vector("numeric", (vector) => {
         case 6:
             actual = update_zero_negative_flags(value ?? 0, second_value ?? 0);
             break;
+        // Operations 7 through 13 pin the arithmetic bit helpers that scratch/src/numeric.gs
+        // needs because GoboScript has no bitwise operators. The reference here is the native
+        // expression; tests/goboscript-port-algorithms.test.ts proves the ported algorithms
+        // reproduce it exhaustively.
+        case 7:
+            assert.ok(is_power_of_two(second_value ?? 0), "bit_at expects a power-of-two weight.");
+            actual = Number((normalize_word(value ?? 0) & normalize_word(second_value ?? 0)) !== 0);
+            break;
+        case 8:
+            actual = normalize_word(value ?? 0) & normalize_word(second_value ?? 0);
+            break;
+        case 9:
+            actual = normalize_word(value ?? 0) | normalize_word(second_value ?? 0);
+            break;
+        case 10:
+            actual = normalize_word(value ?? 0) ^ normalize_word(second_value ?? 0);
+            break;
+        case 11:
+            actual = normalize_word(value ?? 0) >>> 8;
+            break;
+        case 12:
+            actual = normalize_word(value ?? 0) & 0xff;
+            break;
+        case 13:
+            actual = (normalize_byte(value ?? 0) << 8) | normalize_byte(second_value ?? 0);
+            break;
         default:
             assert.fail(`Unsupported numeric vector operation ${vector.operation}.`);
     }
@@ -198,12 +280,31 @@ for_each_vector("cpu", (vector) => {
 });
 
 for_each_vector("bus", (vector) => {
-    assert.equal(vector.operation, 1, "Bus vector operation 1 replays CPU read/write triples.");
     const [operation_count, ...operations] = vector.input;
     assert.ok(operation_count !== undefined);
     assert.equal(operations.length, operation_count * 3);
 
-    const bus = new NesCpuBus(make_empty_bus_devices());
+    let devices: NesCpuBusDevices;
+
+    if (vector.operation === 1) {
+        devices = make_empty_bus_devices();
+
+        // Operation 1 replays with no devices attached. The GoboScript port always has live
+        // controller ports, so these records must not read $4016/$4017.
+        for (let operation_index = 0; operation_index < operation_count; operation_index += 1) {
+            const kind = operations[operation_index * 3];
+            const address = operations[operation_index * 3 + 1];
+            assert.ok(
+                !(kind === 0 && (address === 0x4016 || address === 0x4017)),
+                "Bus vector operation 1 must not read the controller ports.",
+            );
+        }
+    } else {
+        assert.equal(vector.operation, 2, "Bus vector operation 2 replays with live controller ports.");
+        devices = make_controller_bus_devices();
+    }
+
+    const bus = new NesCpuBus(devices);
     const read_values: number[] = [];
 
     for (let operation_index = 0; operation_index < operation_count; operation_index += 1) {
@@ -223,6 +324,72 @@ for_each_vector("bus", (vector) => {
     }
 
     assert.deepEqual([read_values.length, ...read_values], vector.expected);
+});
+
+for_each_vector("alu", (vector) => {
+    const [first_input, second_input, third_input] = vector.input;
+    assert.ok(first_input !== undefined, "ALU vectors always supply at least one operand.");
+
+    let actual: number[];
+
+    switch (vector.operation) {
+        case 1:
+            actual = run_accumulator_operand_instruction(0x69, first_input, second_input, third_input);
+            break;
+        case 2:
+            actual = run_accumulator_operand_instruction(0xe9, first_input, second_input, third_input);
+            break;
+        case 3:
+            actual = run_accumulator_operand_instruction(0x29, first_input, second_input, third_input);
+            break;
+        case 4:
+            actual = run_accumulator_operand_instruction(0x09, first_input, second_input, third_input);
+            break;
+        case 5:
+            actual = run_accumulator_operand_instruction(0x49, first_input, second_input, third_input);
+            break;
+        case 6:
+            actual = run_accumulator_only_instruction(0x0a, first_input, second_input);
+            break;
+        case 7:
+            actual = run_accumulator_only_instruction(0x4a, first_input, second_input);
+            break;
+        case 8:
+            actual = run_accumulator_only_instruction(0x2a, first_input, second_input);
+            break;
+        case 9:
+            actual = run_accumulator_only_instruction(0x6a, first_input, second_input);
+            break;
+        case 10:
+            actual = run_register_compare_instruction(0xc9, "a", first_input, second_input, third_input);
+            break;
+        case 11:
+            actual = run_register_compare_instruction(0xe0, "x", first_input, second_input, third_input);
+            break;
+        case 12:
+            actual = run_register_compare_instruction(0xc0, "y", first_input, second_input, third_input);
+            break;
+        case 13: {
+            assert.ok(second_input !== undefined && third_input !== undefined);
+            const cpu = run_cpu_program(
+                [0x24, ALU_ZERO_PAGE_ADDRESS],
+                { a: first_input, x: 0, y: 0, status: third_input },
+                [second_input],
+            );
+            actual = [cpu.a, cpu.status];
+            break;
+        }
+        case 14:
+            actual = run_zero_page_read_modify_write(0xe6, first_input, second_input);
+            break;
+        case 15:
+            actual = run_zero_page_read_modify_write(0xc6, first_input, second_input);
+            break;
+        default:
+            assert.fail(`Unsupported ALU vector operation ${vector.operation}.`);
+    }
+
+    assert.deepEqual(actual, [...vector.expected]);
 });
 
 for_each_vector("mapper", (vector) => {
@@ -325,6 +492,792 @@ for_each_vector("controller", (vector) => {
 
     assert.deepEqual(actual, vector.expected);
 });
+
+for_each_vector("cartridge", (vector) => {
+    assert.equal(vector.operation, 1, "Cartridge vector operation 1 parses one header against an image length.");
+    assert.equal(vector.input.length, CARTRIDGE_HEADER_BYTES + 1, "Cartridge vectors supply a complete header.");
+
+    const [image_bytes] = vector.input;
+    assert.ok(image_bytes !== undefined, "The first cartridge input is the ROM image length in bytes.");
+
+    const actual = project_cartridge_header(image_bytes, vector.input.slice(1));
+    assert.deepEqual(actual, [...vector.expected]);
+});
+
+for_each_vector("cpu_addressing", (vector) => {
+    const mode_id = vector.operation;
+    const [access_id, program_counter, accumulator, x, y, stack_pointer, status, setup_count] = vector.input;
+    assert.ok(
+        access_id !== undefined &&
+            program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            setup_count !== undefined,
+        "Addressing vectors supply the access, all six registers, and a setup count.",
+    );
+    assert.equal(vector.input.length, CPU_ADDRESSING_FIXED_INPUT_COUNT + setup_count * 2);
+
+    const setup: CpuAddressingSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2];
+        const value = vector.input[CPU_ADDRESSING_FIXED_INPUT_COUNT + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    const actual = project_cpu_addressing(
+        mode_id,
+        access_id,
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        setup,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+
+    // The ported decoder always has live controller ports, so no record may touch $4000-$401F.
+    for (let offset = CPU_ADDRESSING_FIXED_VALUE_COUNT; offset < actual.length; offset += 3) {
+        const address = actual[offset + 1] ?? 0;
+        assert.ok(address < 0x4000 || address > 0x401f, `Access at $${address.toString(16)} is controller space.`);
+    }
+});
+
+for_each_vector("cpu_sequence", (vector) => {
+    const operation_id = vector.operation;
+    const [program_counter, accumulator, x, y, stack_pointer, status, taken, setup_count] = vector.input;
+    assert.ok(
+        program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            taken !== undefined &&
+            setup_count !== undefined,
+        "Sequence vectors supply all six registers, the taken flag, and a setup count.",
+    );
+    assert.equal(vector.input.length, CPU_SEQUENCE_FIXED_INPUT_COUNT + setup_count * 2);
+
+    const setup: CpuSequenceSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2];
+        const value = vector.input[CPU_SEQUENCE_FIXED_INPUT_COUNT + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    const actual = project_cpu_sequence(
+        operation_id,
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        taken,
+        setup,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual[0], (actual.length - CPU_SEQUENCE_FIXED_VALUE_COUNT) / 3, "one cycle per bus access");
+
+    // The ported decoder always has live controller ports, so no record may touch $4000-$401F.
+    for (let offset = CPU_SEQUENCE_FIXED_VALUE_COUNT; offset < actual.length; offset += 3) {
+        const address = actual[offset + 1] ?? 0;
+        assert.ok(address < 0x4000 || address > 0x401f, `Access at $${address.toString(16)} is controller space.`);
+    }
+});
+
+for_each_vector("cpu_opcode", (vector) => {
+    assert.equal(vector.operation, 1, "Opcode decoding has a single operation.");
+    assert.equal(vector.input.length, 1, "An opcode vector supplies exactly one opcode byte.");
+    const opcode = vector.input[0];
+    assert.ok(opcode !== undefined, "The opcode byte is present.");
+
+    const actual = project_opcode_decode(opcode);
+    assert.deepEqual(actual, [...vector.expected]);
+
+    // Cross-check the projected integers against the production table so a fixture that drifted
+    // from src/nes/cpu/opcode_table.ts cannot pass by matching a stale projection.
+    const definition = CPU_OPCODE_TABLE.get(opcode);
+    assert.ok(definition !== undefined, `Opcode $${opcode.toString(16)} is defined.`);
+    assert.equal(cpu_mnemonic_ids().get(definition.mnemonic), actual[0], "The mnemonic id names the instruction.");
+    assert.equal(
+        CPU_ADDRESSING_MODES.find((mode) => mode.id === actual[1])?.name,
+        definition.addressing_mode,
+        "The addressing mode id names the mode.",
+    );
+    assert.equal(actual[2], definition.base_cycles, "The base cycles match.");
+    assert.equal(
+        CPU_OPERAND_ACCESSES.find((access) => access.id === actual[3])?.name,
+        definition.operand_access,
+        "The operand access id names the access.",
+    );
+    assert.equal(actual[4], definition.page_cross_cycle ? 1 : 0, "The page-cross cycle flag matches.");
+    assert.equal(
+        actual[5],
+        OFFICIAL_OPCODE_DEFINITIONS.some((entry) => entry.opcode === opcode) ? 1 : 0,
+        "The official flag matches.",
+    );
+    assert.equal(actual[6], 0, "Decoding a defined opcode reports no error.");
+});
+
+for_each_vector("cpu_instruction", (vector) => {
+    assert.equal(vector.operation, 1, "Instruction vectors have a single operation.");
+    const [program_counter, accumulator, x, y, stack_pointer, status, program_count, setup_count] = vector.input;
+    assert.ok(
+        program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            program_count !== undefined &&
+            setup_count !== undefined,
+        "Instruction vectors supply all six registers, a program count, and a setup count.",
+    );
+    assert.equal(vector.input.length, CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + setup_count * 2);
+
+    const program: number[] = [];
+
+    for (let index = 0; index < program_count; index += 1) {
+        const byte = vector.input[CPU_INSTRUCTION_FIXED_INPUT_COUNT + index];
+        assert.ok(byte !== undefined, `Program byte ${index} is present.`);
+        program.push(byte);
+    }
+
+    const setup: CpuInstructionSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + index * 2];
+        const value = vector.input[CPU_INSTRUCTION_FIXED_INPUT_COUNT + program_count + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    // The refusal a record documents is derived here from the production table and the ported
+    // mnemonic set, never copied out of the expected values, and the projection re-checks it.
+    const opcode = program[0] ?? 0;
+    const mnemonic = CPU_OPCODE_TABLE.get(opcode)?.mnemonic ?? "";
+    const ported_mnemonic = CPU_INSTRUCTION_PORTED_MNEMONICS.includes(mnemonic);
+    const refusal = ported_mnemonic
+        ? CPU_INSTRUCTION_ERROR_IDS.none
+        : is_official_opcode(opcode)
+          ? CPU_INSTRUCTION_ERROR_IDS.unsupported_mnemonic
+          : CPU_INSTRUCTION_ERROR_IDS.unofficial_opcode;
+
+    const actual = project_cpu_instruction(
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        program,
+        setup,
+        refusal,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual[0], (actual.length - CPU_INSTRUCTION_FIXED_VALUE_COUNT) / 3, "one cycle per bus access");
+    assert.ok(Number.isInteger(actual[1]) && (actual[1] ?? 0) >= 0 && (actual[1] ?? 0) <= 0xffff, "final PC is a word");
+
+    if (!ported_mnemonic) {
+        // A refused instruction spends only its opcode fetch and reads that byte.
+        assert.equal(actual[0], 1, "a refused instruction spends one cycle");
+        assert.deepEqual(actual.slice(CPU_INSTRUCTION_FIXED_VALUE_COUNT), [0, program_counter, opcode]);
+    }
+});
+
+for_each_vector("cpu_control", (vector) => {
+    assert.equal(vector.operation, 1, "Control vectors have a single operation.");
+    const [
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        nmi_pending,
+        irq_line,
+        step_count,
+        nmi_request_step,
+        irq_assert_step,
+        program_count,
+        setup_count,
+    ] = vector.input;
+    assert.ok(
+        program_counter !== undefined &&
+            accumulator !== undefined &&
+            x !== undefined &&
+            y !== undefined &&
+            stack_pointer !== undefined &&
+            status !== undefined &&
+            nmi_pending !== undefined &&
+            irq_line !== undefined &&
+            step_count !== undefined &&
+            nmi_request_step !== undefined &&
+            irq_assert_step !== undefined &&
+            program_count !== undefined &&
+            setup_count !== undefined,
+        "Control vectors supply all six registers, both interrupt inputs, and the step schedule.",
+    );
+    assert.ok(step_count >= 1, "A control record runs at least one step.");
+    assert.equal(vector.input.length, CPU_CONTROL_FIXED_INPUT_COUNT + program_count + setup_count * 2);
+
+    const program: number[] = [];
+
+    for (let index = 0; index < program_count; index += 1) {
+        const byte = vector.input[CPU_CONTROL_FIXED_INPUT_COUNT + index];
+        assert.ok(byte !== undefined, `Program byte ${index} is present.`);
+        program.push(byte);
+    }
+
+    const setup: CpuControlSetup[] = [];
+
+    for (let index = 0; index < setup_count; index += 1) {
+        const address = vector.input[CPU_CONTROL_FIXED_INPUT_COUNT + program_count + index * 2];
+        const value = vector.input[CPU_CONTROL_FIXED_INPUT_COUNT + program_count + index * 2 + 1];
+        assert.ok(address !== undefined && value !== undefined, `Setup pair ${index} is complete.`);
+        setup.push({ address, value });
+    }
+
+    const actual = project_cpu_control(
+        program_counter,
+        accumulator,
+        x,
+        y,
+        stack_pointer,
+        status,
+        nmi_pending,
+        irq_line,
+        step_count,
+        nmi_request_step,
+        irq_assert_step,
+        program,
+        setup,
+    );
+    assert.deepEqual(actual, [...vector.expected]);
+
+    const cycles = actual[0] ?? 0;
+    const kinds = actual.slice(CPU_CONTROL_FIXED_VALUE_COUNT, CPU_CONTROL_FIXED_VALUE_COUNT + step_count);
+    assert.equal(actual.length, CPU_CONTROL_FIXED_VALUE_COUNT + step_count + cycles * 3, "one triple per cycle");
+    assert.equal(kinds.length, step_count, "one sequence kind per step");
+
+    for (const kind of kinds) {
+        assert.ok(
+            CPU_CONTROL_SEQUENCE_KINDS.some((entry) => entry.id === kind),
+            `Sequence kind ${kind} is a ported id.`,
+        );
+    }
+
+    // The control loop never selects reset, and a jam is sticky: once the CPU jams, every later
+    // sequence is another jam.
+    const reset_id = CPU_CONTROL_SEQUENCE_KINDS.find((entry) => entry.name === "reset")?.id ?? 0;
+    assert.ok(!kinds.includes(reset_id), "reset is reached through request_reset, not the poll");
+
+    const jam_id = CPU_CONTROL_SEQUENCE_KINDS.find((entry) => entry.name === "jam")?.id ?? 0;
+    const first_jam = kinds.indexOf(jam_id);
+
+    if (first_jam >= 0) {
+        assert.ok(
+            kinds.slice(first_jam).every((kind) => kind === jam_id),
+            "a jammed CPU keeps jamming",
+        );
+    }
+});
+
+for_each_vector("nrom", (vector) => {
+    assert.equal(vector.operation, 1, "Board validation vectors have a single operation.");
+    assert.equal(vector.input.length, MAPPER_CREATION_INPUT_COUNT, "one image length and sixteen header bytes");
+    assert.equal(vector.expected.length, MAPPER_CREATION_VALUE_COUNT);
+
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1);
+    const actual = project_mapper_creation(image_bytes, header);
+    assert.deepEqual(actual, [...vector.expected]);
+
+    const [ok, error_code, kind, prg_ram_bytes, chr_ram_bytes, selection_kind, selection_error] = actual;
+    assert.ok(ok === 0 || ok === 1, "ok is a flag");
+    assert.equal(ok === 1, error_code === 0, "an accepted board reports no code and a rejected one reports why");
+    assert.equal(kind === MAPPER_KIND_IDS.nrom, ok === 1, "only an accepted board reports its family");
+
+    if (ok === 1) {
+        assert.equal(selection_kind, MAPPER_KIND_IDS.nrom, "an accepted board was routed to NROM");
+        assert.equal(selection_error, 0);
+        assert.ok(
+            (prg_ram_bytes ?? 0) >= 0 && (prg_ram_bytes ?? 0) <= 0x2000,
+            "the mapped PRG RAM fits the $6000-$7FFF window",
+        );
+        assert.ok(
+            (chr_ram_bytes ?? 0) === 0 || (chr_ram_bytes ?? 0) <= 0x2000,
+            "the mapped CHR RAM fits one pattern table",
+        );
+    } else {
+        assert.equal(kind, 0, "a rejected board reports no family");
+        assert.equal(prg_ram_bytes, 0, "a rejected board maps nothing");
+        assert.equal(chr_ram_bytes, 0);
+        assert.ok(
+            Object.values(MAPPER_ERROR_IDS).includes(
+                error_code as (typeof MAPPER_ERROR_IDS)[keyof typeof MAPPER_ERROR_IDS]),
+            `Error code ${error_code} is a ported board code`,
+        );
+
+        if (selection_error !== 0) {
+            assert.equal(
+                error_code,
+                selection_error === MAPPER_SELECTION_ERROR_IDS["unsupported-mapper"]
+                    ? MAPPER_ERROR_IDS["unsupported-mapper"]
+                    : MAPPER_ERROR_IDS["unsupported-submapper"],
+                "a failed selection is reported unchanged",
+            );
+        }
+    }
+});
+
+for_each_vector("nrom_memory", (vector) => {
+    assert.equal(vector.operation, 1, "Board memory vectors have a single operation.");
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
+    const prg_count = vector.input[17] ?? 0;
+    const chr_count = vector.input[18] ?? 0;
+    const op_count = vector.input[19] ?? 0;
+    assert.equal(
+        vector.input.length,
+        NROM_MEMORY_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + op_count * NROM_MEMORY_VALUES_PER_OP,
+    );
+
+    const prg_prepare: NromMemoryPrepare[] = [];
+    const chr_prepare: NromMemoryPrepare[] = [];
+    const operations: NromMemoryOp[] = [];
+
+    for (let index = 0; index < prg_count; index += 1) {
+        const at = NROM_MEMORY_FIXED_INPUT_COUNT + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `PRG prepare ${index} is a pair.`);
+        prg_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < chr_count; index += 1) {
+        const at = NROM_MEMORY_FIXED_INPUT_COUNT + prg_count * 2 + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `CHR prepare ${index} is a pair.`);
+        chr_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const at = NROM_MEMORY_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + index * 3;
+        const kind = vector.input[at];
+        const address = vector.input[at + 1];
+        const value = vector.input[at + 2];
+        assert.ok(kind !== undefined && address !== undefined && value !== undefined, `Operation ${index}.`);
+        assert.ok(
+            NROM_MEMORY_OPS.some((entry) => entry.id === kind),
+            `Operation kind ${kind} is one the port dispatches.`,
+        );
+        operations.push({ kind, address, value });
+    }
+
+    const actual = project_nrom_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, NROM_MEMORY_FIXED_VALUE_COUNT + op_count * NROM_MEMORY_VALUES_PER_OP);
+    assert.equal(actual[0], 1, "A memory record runs on a board the validation accepted.");
+    assert.equal(actual[1], 0);
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = NROM_MEMORY_FIXED_VALUE_COUNT + index * NROM_MEMORY_VALUES_PER_OP;
+        const taken = actual[at] ?? 0;
+        const value = actual[at + 1] ?? 0;
+        const driven = actual[at + 2] ?? 0;
+        assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
+
+        if (op?.kind === NROM_MEMORY_CPU_READ) {
+            assert.equal(driven, taken === 1 ? 0xff : 0, "a mapped CPU read drives every bit");
+        } else if (op?.kind === NROM_MEMORY_CPU_WRITE) {
+            assert.equal(value, 0, "a write reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_PATTERN_READ) {
+            assert.equal(taken, 1, "an accepted board always answers a pattern read");
+        } else if (op?.kind === NROM_MEMORY_PATTERN_WRITE) {
+            assert.equal(value, 0, "a pattern write reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_GET_PRG_NVRAM || op?.kind === NROM_MEMORY_GET_CHR_NVRAM) {
+            assert.equal(taken, 1, "a snapshot always succeeds");
+            assert.ok(value >= 0, "a snapshot reports its length");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_LOAD_PRG_NVRAM || op?.kind === NROM_MEMORY_LOAD_CHR_NVRAM) {
+            assert.ok(taken === 0 || taken === 1, "a restore reports whether it ran");
+            assert.equal(value, 0, "a restore reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === NROM_MEMORY_READ_PRG_NVRAM_BYTE || op?.kind === NROM_MEMORY_READ_CHR_NVRAM_BYTE) {
+            assert.equal(taken, 1, "a snapshot read always succeeds");
+            assert.ok(value >= 0 && value <= 0xff, "a snapshot byte is in range");
+            assert.equal(driven, 0);
+        }
+    }
+});
+
+for_each_vector("cartridge_bus", (vector) => {
+    assert.equal(vector.operation, 1, "Cartridge bus vectors have a single operation.");
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
+    const attach_board = vector.input[17] ?? 0;
+    const prg_count = vector.input[18] ?? 0;
+    const op_count = vector.input[19] ?? 0;
+    assert.equal(vector.input.length, CARTRIDGE_BUS_FIXED_INPUT_COUNT + prg_count * 2 + op_count * 3);
+
+    const prg_prepare: NromMemoryPrepare[] = [];
+    const operations: CartridgeBusOp[] = [];
+
+    for (let index = 0; index < prg_count; index += 1) {
+        const at = CARTRIDGE_BUS_FIXED_INPUT_COUNT + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `PRG prepare ${index} is a pair.`);
+        prg_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const at = CARTRIDGE_BUS_FIXED_INPUT_COUNT + prg_count * 2 + index * 3;
+        const kind = vector.input[at];
+        const address = vector.input[at + 1];
+        const value = vector.input[at + 2];
+        assert.ok(kind !== undefined && address !== undefined && value !== undefined, `Operation ${index}.`);
+        assert.ok(
+            CARTRIDGE_BUS_OPS.some((entry) => entry.id === kind),
+            `Operation kind ${kind} is one the ported bus dispatches.`,
+        );
+        operations.push({ kind, address, value });
+    }
+
+    const actual = project_cartridge_bus(image_bytes, header, attach_board, prg_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, CARTRIDGE_BUS_FIXED_VALUE_COUNT + op_count * CARTRIDGE_BUS_VALUES_PER_OP);
+
+    const attached = actual[0] ?? 0;
+    const board_error = actual[1] ?? 0;
+    assert.equal(
+        attached,
+        attach_board === 1 && board_error === 0 ? 1 : 0,
+        "a board drives the bus only when it validates and the record attaches it",
+    );
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = CARTRIDGE_BUS_FIXED_VALUE_COUNT + index * CARTRIDGE_BUS_VALUES_PER_OP;
+        const returned = actual[at] ?? 0;
+        const latch = actual[at + 1] ?? 0;
+        assert.ok(returned >= 0 && returned <= 0xff, `Operation ${index} returns a byte.`);
+        assert.ok(latch >= 0 && latch <= 0xff, `Operation ${index} leaves a byte in the latch.`);
+
+        if (op?.kind === CARTRIDGE_BUS_WRITE) {
+            assert.equal(returned, 0, "a write returns no byte");
+            assert.equal(latch, op.value, "the bus latches every write, mapped or not");
+        }
+    }
+});
+
+/** One suite-18 or suite-19 record: both carry the same board image, prepares, and operation list. */
+function parse_mmc3_record(vector: { readonly input: readonly number[] }): {
+    readonly image_bytes: number;
+    readonly header: readonly number[];
+    readonly prg_prepare: NromMemoryPrepare[];
+    readonly chr_prepare: NromMemoryPrepare[];
+    readonly operations: NromMemoryOp[];
+} {
+    const image_bytes = vector.input[0] ?? 0;
+    const header = vector.input.slice(1, MAPPER_CREATION_INPUT_COUNT);
+    const prg_count = vector.input[17] ?? 0;
+    const chr_count = vector.input[18] ?? 0;
+    const op_count = vector.input[19] ?? 0;
+    assert.equal(vector.input.length, MMC3_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + op_count * 3);
+
+    const prg_prepare: NromMemoryPrepare[] = [];
+    const chr_prepare: NromMemoryPrepare[] = [];
+    const operations: NromMemoryOp[] = [];
+
+    for (let index = 0; index < prg_count; index += 1) {
+        const at = MMC3_FIXED_INPUT_COUNT + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `PRG prepare ${index} is a pair.`);
+        prg_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < chr_count; index += 1) {
+        const at = MMC3_FIXED_INPUT_COUNT + prg_count * 2 + index * 2;
+        const prepare_index = vector.input[at];
+        const value = vector.input[at + 1];
+        assert.ok(prepare_index !== undefined && value !== undefined, `CHR prepare ${index} is a pair.`);
+        chr_prepare.push({ index: prepare_index, value });
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const at = MMC3_FIXED_INPUT_COUNT + (prg_count + chr_count) * 2 + index * 3;
+        const kind = vector.input[at];
+        const address = vector.input[at + 1];
+        const value = vector.input[at + 2];
+        assert.ok(kind !== undefined && address !== undefined && value !== undefined, `Operation ${index}.`);
+        assert.ok(
+            MMC3_OPS.some((entry) => entry.id === kind),
+            `Operation kind ${kind} is one the port dispatches.`,
+        );
+        operations.push({ kind, address, value });
+    }
+
+    return { image_bytes, header, prg_prepare, chr_prepare, operations };
+}
+
+for_each_vector("mmc3", (vector) => {
+    assert.equal(vector.operation, 1, "MMC3 vectors have a single operation.");
+    const { image_bytes, header, prg_prepare, chr_prepare, operations } = parse_mmc3_record(vector);
+    const op_count = operations.length;
+    const actual = project_mmc3_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, MMC3_FIXED_VALUE_COUNT + op_count * MMC3_VALUES_PER_OP);
+
+    const accepted = actual[0] ?? 0;
+    assert.ok(accepted === 0 || accepted === 1, "a board either validates or reports why it does not");
+    assert.equal(accepted === 1 ? 0 : 1, actual[1] === 0 ? 0 : 1, "an accepted board reports no error");
+
+    if (accepted === 0) {
+        assert.equal(op_count, 0, "a rejected board runs no operations");
+        assert.deepEqual(actual.slice(2), [0]);
+    }
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = MMC3_FIXED_VALUE_COUNT + index * MMC3_VALUES_PER_OP;
+        const taken = actual[at] ?? 0;
+        const value = actual[at + 1] ?? 0;
+        const driven = actual[at + 2] ?? 0;
+        assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
+        assert.ok(value >= 0, `Operation ${index} reports a non-negative value.`);
+
+        if (op?.kind === MMC3_CPU_READ) {
+            assert.equal(driven, taken === 1 ? 0xff : 0, "a mapped CPU read drives every bit");
+        } else if (op?.kind === MMC3_CPU_WRITE) {
+            if (taken === 1) {
+                assert.ok(op.address >= 0x6000 && op.address < 0x8000, "only PRG RAM takes a write");
+            }
+
+            assert.equal(value, 0, "a write reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_PATTERN_READ) {
+            assert.equal(taken, 1, "an accepted board always answers a pattern read");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_REPORT_MIRRORING) {
+            assert.equal(taken, 1);
+            assert.ok(value >= 1 && value <= 3, `Operation ${index} reports a mirroring id.`);
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_OBSERVE_PPU_ACCESS) {
+            assert.ok(taken === 0 || taken === 1, "an observation reports whether it was in range");
+            assert.equal(value, 0, "an observation reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_CLOCK_PPU_DOT) {
+            assert.equal(taken, 1, "a dot clock always succeeds");
+            assert.equal(value, 0, "a dot clock reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_REPORT_IRQ) {
+            assert.equal(taken, 1, "an IRQ report always succeeds");
+            assert.ok(value === 0 || value === 1, `Operation ${index} reports the IRQ line.`);
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_GET_PRG_NVRAM || op?.kind === MMC3_GET_CHR_NVRAM) {
+            assert.equal(taken, 1, "a snapshot always succeeds");
+            assert.ok(value >= 0, "a snapshot reports its length");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_LOAD_PRG_NVRAM || op?.kind === MMC3_LOAD_CHR_NVRAM) {
+            assert.ok(taken === 0 || taken === 1, "a restore reports whether it ran");
+            assert.equal(value, 0, "a restore reports no byte");
+            assert.equal(driven, 0);
+        } else if (op?.kind === MMC3_READ_PRG_NVRAM_BYTE || op?.kind === MMC3_READ_CHR_NVRAM_BYTE) {
+            assert.equal(taken, 1, "a snapshot read always succeeds");
+            assert.ok(value >= 0 && value <= 0xff, "a snapshot byte is in range");
+            assert.equal(driven, 0);
+        } else {
+            assert.equal(value, 0, "a pattern write reports no byte");
+            assert.equal(driven, 0);
+        }
+    }
+});
+
+for_each_vector("mmc3_irq", (vector) => {
+    assert.equal(vector.operation, 1, "MMC3 IRQ vectors have a single operation.");
+    const { image_bytes, header, prg_prepare, chr_prepare, operations } = parse_mmc3_record(vector);
+    const op_count = operations.length;
+    const actual = project_mmc3_memory(image_bytes, header, prg_prepare, chr_prepare, operations);
+    assert.deepEqual(actual, [...vector.expected]);
+    assert.equal(actual.length, MMC3_FIXED_VALUE_COUNT + op_count * MMC3_VALUES_PER_OP);
+    assert.equal(prg_prepare.length, 0, "an IRQ record prepares no PRG ROM bytes");
+    assert.equal(chr_prepare.length, 0, "an IRQ record prepares no CHR ROM bytes");
+
+    let observed_a_rise = false;
+    let asserted_at_least_once = false;
+
+    for (let index = 0; index < op_count; index += 1) {
+        const op = operations[index];
+        const at = MMC3_FIXED_VALUE_COUNT + index * MMC3_VALUES_PER_OP;
+        const taken = actual[at] ?? 0;
+        const value = actual[at + 1] ?? 0;
+        const driven = actual[at + 2] ?? 0;
+        assert.ok(taken === 0 || taken === 1, `Operation ${index} reports a flag.`);
+
+        if (op?.kind === MMC3_CPU_READ) {
+            assert.equal(driven, taken === 1 ? 0xff : 0, `Operation ${index} drives every bit it answers.`);
+        } else {
+            assert.equal(driven, 0, `Operation ${index} drives no CPU bits.`);
+        }
+
+        if (op?.kind === MMC3_OBSERVE_PPU_ACCESS) {
+            assert.ok(
+                MMC3_PPU_ACCESSES.some((entry) => entry.id === op.value),
+                `Operation ${index} names a PPU access kind the port enumerates.`,
+            );
+            assert.equal(value, 0, "an observation reports no byte");
+
+            const in_range = Number.isInteger(op.address) && op.address >= 0 && op.address < 0x4000;
+            assert.equal(taken, in_range ? 1 : 0, `Operation ${index} is refused only outside the PPU space.`);
+            observed_a_rise ||= in_range && (op.address & 0x1000) !== 0;
+        } else if (op?.kind === MMC3_CLOCK_PPU_DOT) {
+            assert.equal(taken, 1, `Operation ${index} always clocks a dot.`);
+            assert.equal(value, 0, "a dot reports no byte");
+        } else if (op?.kind === MMC3_REPORT_IRQ) {
+            assert.equal(taken, 1, `Operation ${index} always reports the IRQ line.`);
+            assert.ok(value === 0 || value === 1, `Operation ${index} reports the line as a flag.`);
+            asserted_at_least_once ||= value === 1;
+        }
+    }
+
+    if (actual[0] === 1) {
+        assert.ok(op_count > 0, "an accepted board in this suite always runs operations");
+        assert.ok(observed_a_rise, "an IRQ record has to put an A12-high address on the PPU bus");
+    } else {
+        assert.equal(op_count, 0, "a rejected board runs no operations");
+    }
+
+    assert.equal(
+        asserted_at_least_once,
+        actual[0] === 1,
+        "every accepted board in this suite eventually asserts the line, and a rejected one never runs",
+    );
+});
+
+const ALU_PROGRAM_ADDRESS = 0x8000;
+const ALU_ZERO_PAGE_ADDRESS = 0x10;
+
+interface AluRegisters {
+    readonly a: number;
+    readonly x: number;
+    readonly y: number;
+    readonly status: number;
+}
+
+/** Runs one instruction on the production CPU and returns it together with its bus. */
+function run_cpu_program(
+    program: readonly number[],
+    registers: AluRegisters,
+    zero_page: readonly number[] = [],
+): Cpu2A03 {
+    const bus = new FakeCpuBus();
+    bus.load(ALU_PROGRAM_ADDRESS, Uint8Array.from(program));
+
+    for (let index = 0; index < zero_page.length; index += 1) {
+        bus.write_cpu(ALU_ZERO_PAGE_ADDRESS + index, zero_page[index] ?? 0);
+    }
+
+    const cpu = new Cpu2A03(bus);
+    cpu.program_counter = ALU_PROGRAM_ADDRESS;
+    cpu.a = registers.a;
+    cpu.x = registers.x;
+    cpu.y = registers.y;
+    cpu.stack_pointer = 0xfd;
+    cpu.status = registers.status;
+    cpu.step();
+    return cpu;
+}
+
+function assert_alu_status(status: number | undefined): number {
+    assert.ok(status !== undefined, "ALU vectors that change flags supply an input status byte.");
+    return status;
+}
+
+/** Immediate ALU instructions of the form "$opcode operand" that update the accumulator. */
+function run_accumulator_operand_instruction(
+    opcode: number,
+    accumulator: number,
+    operand: number | undefined,
+    status: number | undefined,
+): number[] {
+    assert.ok(operand !== undefined, "This ALU vector supplies an immediate operand.");
+    const cpu = run_cpu_program(
+        [opcode, operand],
+        { a: accumulator, x: 0, y: 0, status: assert_alu_status(status) },
+    );
+    return [cpu.a, cpu.status];
+}
+
+/** Accumulator-mode shift and rotate instructions of the form "$opcode". */
+function run_accumulator_only_instruction(opcode: number, accumulator: number, status: number | undefined): number[] {
+    const cpu = run_cpu_program([opcode], {
+        a: accumulator,
+        x: 0,
+        y: 0,
+        status: assert_alu_status(status),
+    });
+    return [cpu.a, cpu.status];
+}
+
+/** CMP, CPX, and CPY: the compared register must come back unchanged. */
+function run_register_compare_instruction(
+    opcode: number,
+    register: "a" | "x" | "y",
+    register_value: number,
+    operand: number | undefined,
+    status: number | undefined,
+): number[] {
+    assert.ok(operand !== undefined, "This ALU vector supplies an immediate operand.");
+    const cpu = run_cpu_program(
+        [opcode, operand],
+        {
+            a: register === "a" ? register_value : 0,
+            x: register === "x" ? register_value : 0,
+            y: register === "y" ? register_value : 0,
+            status: assert_alu_status(status),
+        },
+    );
+    return [cpu[register], cpu.status];
+}
+
+/** INC/DEC $10: the expected value is the zero-page byte after the instruction. */
+function run_zero_page_read_modify_write(opcode: number, operand: number, status: number | undefined): number[] {
+    const bus = new FakeCpuBus();
+    bus.load(ALU_PROGRAM_ADDRESS, Uint8Array.from([opcode, ALU_ZERO_PAGE_ADDRESS]));
+    bus.write_cpu(ALU_ZERO_PAGE_ADDRESS, operand);
+
+    const cpu = new Cpu2A03(bus);
+    cpu.program_counter = ALU_PROGRAM_ADDRESS;
+    cpu.stack_pointer = 0xfd;
+    cpu.status = assert_alu_status(status);
+    cpu.step();
+    return [bus.peek(ALU_ZERO_PAGE_ADDRESS), cpu.status];
+}
+
+function is_power_of_two(value: number): boolean {
+    return value > 0 && (value & (value - 1)) === 0;
+}
+
+function make_controller_bus_devices(): NesCpuBusDevices {
+    return { ...make_empty_bus_devices(), controllers: new NesControllerPorts() };
+}
 
 function make_empty_bus_devices(): NesCpuBusDevices {
     return {

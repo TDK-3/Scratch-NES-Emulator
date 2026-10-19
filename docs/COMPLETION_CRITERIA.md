@@ -30,7 +30,10 @@ its own.
       and hardware validation remain open. XAA/LXA analog variation and KIL/JAM bus cycles are also
       unverified. Opcode coverage does not claim hardware-accurate behavior.
 - [ ] Pass the selected CPU instruction, interrupt, addressing, and DMA test suites, with every
-      exception documented.
+      exception documented. Evidence so far: 1,026 pinned MIT single-step vectors covering all 256 opcode
+      bytes pass as 257 grouped tests, the complete upstream corpus (2,560,000 scenarios) passes through the
+      opt-in runner, the first 5,003 `nestest` trace entries match, and the interrupt/addressing/DMA unit
+      suites pass. Still missing: a licensed CPU test-ROM suite, so the box stays unchecked.
 - [ ] Run supported cartridges through tested mapper code, including mapper 4 for the supplied
       fixture.
 
@@ -74,15 +77,33 @@ its own.
 
 ## 6. GoboScript and runtime quality
 
+Every item below is blocked by the same cause: the pinned GoboScript compiler needs Cargo and rustc, no
+official binary or npm package is obtainable in this environment, so `scratch/` has never been built and no
+`.sb3` exists. The ported sources are written and validated indirectly, which is recorded here so the block is
+not mistaken for missing work.
+
 - [ ] Pin and record the GoboScript compiler and standard library versions used for the release.
+      `scratch/goboscript.toml` pins `std = "2.1.0"`; the researched upstream source snapshot is 3.3.0 and the
+      latest tagged release found was v3.2.1. The version actually used for a release cannot be recorded until
+      a toolchain is installed.
 - [ ] Build the Scratch project from source using documented commands, including generated ROM
-      data/assets.
+      data/assets. All three generators run and are byte-checked (`npm run scratch:assets`,
+      `npm run scratch:vectors`, `npm run scratch:opcode`); `goboscript build` itself has never run.
 - [ ] Run the same shared vectors through TypeScript and GoboScript for every ported subsystem.
+      The TypeScript side runs all 587 records. The GoboScript side is written
+      (`scratch/src/vector_selftest.gs` replays suites 1, 3, and 7 through 19 and counts the rest as
+      skipped) but has
+      never executed. Substitute evidence: an integer-only TypeScript mirror of every ported helper is
+      compared exhaustively with the bitwise reference and replayed through the same fixture
+      (`tests/goboscript-port-algorithms.test.ts`), and the sources are lint-checked against the upstream
+      grammar and codegen constraints (`tests/goboscript-source.test.ts`).
 - [ ] Open the `.sb3` in the declared runtime and verify boot/reset, input, rendering, and audio.
 - [ ] Confirm that no required code depends on an undocumented Scratch extension. Test Scratch website
-      compatibility separately if it is claimed.
+      compatibility separately if it is claimed. The ported sources use only core blocks, no pen/music/sensing
+      extensions, but that has not been confirmed against compiled output.
 - [ ] Demonstrate that the application remains responsive under normal play and malformed/unsupported
-      inputs.
+      inputs. The current project does not emulate frames, and the self test is one run-without-screen-refresh
+      walk whose duration is unmeasured.
 
 ## 7. Performance, usability, and release evidence
 
@@ -99,11 +120,14 @@ its own.
 
 ## Completion reporting
 
-As of 2026-10-15, the clean-install evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`:
-332 tests passed, `npm run build:ts` and both data generators passed, and a 46 ms synthetic-frame smoke
-measurement is explicitly labeled nonrepresentative. This is an interim status report, not a completion
-claim; the unchecked compatibility, licensed-ROM, GoboScript, TurboWarp, performance, and release criteria
-remain open.
+As of 2026-10-18, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,242 tests passed
+(including 1,026 pinned CPU corpus vectors as 257 grouped tests, 587 shared port-vector records, 77
+GoboScript port-algorithm comparisons, 4 opcode-table checks, and 17 GoboScript source-lint checks),
+`npm run build:ts` and all three data
+generators passed, the opt-in runner matched all 2,560,000 upstream corpus scenarios, and the 46 ms
+synthetic-frame smoke measurement from 2026-10-15 (332 tests then) is still explicitly labeled
+nonrepresentative. This is an interim status report, not a completion claim; the unchecked compatibility,
+licensed-ROM, GoboScript, TurboWarp, performance, and release criteria remain open.
 
 When all applicable criteria are met, update this checklist with links to test logs, test ROM results,
 runtime measurements, supported hardware, and known limitations. If an item is out of scope, say so plainly

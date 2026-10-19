@@ -10,11 +10,12 @@
         workflows/
             test.yml
     AGENTS.md
+    PROMPT.md  continuation prompt and standing project rules
     README.md
     package.json
     package-lock.json
     tsconfig.json
-    test_rom.nes
+    test_rom.nes  supplied mapper 4 fixture; do not modify or redistribute
     src/
         nes/
             apu/
@@ -26,30 +27,6 @@
                 noise_channel.ts
                 pulse_channel.ts
                 triangle_channel.ts
-            cartridge/
-                ines.ts
-                mapper.ts
-                mapper_000.ts
-                mapper_004.ts
-            core/
-                nes_console.ts
-                ntsc_clock.ts
-                console_trace.ts
-            cpu/
-                registers.ts
-                alu.ts
-                addressing_modes.ts
-                opcode_table.ts
-                cpu_bus.ts
-                nes_cpu_bus.ts
-                cpu_2a03.ts
-                cpu_trace.ts
-            ppu/
-                ppu_2c02.ts
-                ppu_bus.ts
-                framebuffer.ts
-            input/
-                controller.ts
             browser/
                 audio_filter.ts
                 audio_output.ts
@@ -58,6 +35,30 @@
                 frame_scheduler.ts
                 keyboard_input.ts
                 main.ts
+            cartridge/
+                ines.ts
+                mapper.ts
+                mapper_000.ts
+                mapper_004.ts
+            core/
+                console_trace.ts
+                nes_console.ts
+                ntsc_clock.ts
+            cpu/
+                addressing_modes.ts
+                alu.ts
+                cpu_2a03.ts
+                cpu_bus.ts
+                cpu_trace.ts
+                nes_cpu_bus.ts
+                opcode_table.ts
+                registers.ts
+            input/
+                controller.ts
+            ppu/
+                framebuffer.ts
+                ppu_2c02.ts
+                ppu_bus.ts
     web/
         index.html
         styles.css
@@ -66,77 +67,116 @@
         apu-audio-sampler.test.ts
         apu-audio.test.ts
         apu-mixer.test.ts
-        dmc-channel.test.ts
-        dmc-dma.test.ts
-        controller.test.ts
         apu-noise-channel.test.ts
         apu-pulse-channel.test.ts
         apu-triangle-channel.test.ts
-        ines.test.ts
-        browser-frame-scheduler.test.ts
-        browser-renderer.test.ts
         browser-audio-filter.test.ts
         browser-audio-output.test.ts
         browser-battery-ram-store.test.ts
+        browser-frame-scheduler.test.ts
         browser-keyboard-input.test.ts
-        nes-console.test.ts
-        nes-console-rom.test.ts
-        shared-port-vectors.test.ts
-        ntsc-clock.test.ts
-        mapper.test.ts
-        mapper-000.test.ts
-        cpu-registers.test.ts
-        cpu-alu.test.ts
-        cpu-addressing.test.ts
-        cpu-interrupts.test.ts
-        cpu-cycle-stepping.test.ts
-        cpu-tracing.test.ts
-        cpu-rom-runner.test.ts
-        cpu-single-step-vectors.test.ts
-        cpu-opcodes.test.ts
-        cpu-bus.test.ts
+        browser-renderer.test.ts
+        browser-server.test.ts
+        controller.test.ts
         cpu-2a03.test.ts
-        nes-cpu-bus.test.ts
-        oam-dma.test.ts
-        ppu-bus.test.ts
-        ppu-2c02.test.ts
-        ppu-rendering.test.ts
+        cpu-addressing.test.ts
+        cpu-alu.test.ts
+        cpu-bus.test.ts
+        cpu-cycle-stepping.test.ts
+        cpu-interrupts.test.ts
+        cpu-opcodes.test.ts
+        cpu-registers.test.ts
+        cpu-rom-runner.test.ts
+        cpu-single-step-vectors.test.ts  offline runner for the pinned corpus subset
+        cpu-tracing.test.ts
+        dmc-channel.test.ts
+        dmc-dma.test.ts
         fixtures/
-            nes6502/
-                LICENSE
-                README.md
-                vectors.json          selected MIT CPU reference vectors
+            goboscript/
+                opcode_table.json  canonical opcode decode table for the port
+                shared_port_vectors.json  canonical cross-language parity cases
             nes-apu/
                 LICENSE
-                README.md
+                NES_APUTest_NoisePlayer.nes  pinned MIT noise APU smoke ROM
                 NES_APUTest_SquarePlayer.nes  pinned MIT pulse APU smoke ROM
-                NES_APUTest_NoisePlayer.nes   pinned MIT noise APU smoke ROM
-            goboscript/
-                shared_port_vectors.json  canonical cross-language parity cases
+                README.md
+            nes6502/
+                LICENSE
+                README.md  provenance, selection, and results
+                SOURCE_MANIFEST.sha256  hashes of the upstream corpus files
+                vectors.json  1,026 selected MIT CPU reference vectors
+        goboscript-opcode-table.test.ts  opcode table fixture parity and generator protections
+        goboscript-port-algorithms.test.ts  exhaustive mirror-versus-reference comparison
+        goboscript-source.test.ts  GoboScript source lint and contract checks
+        ines.test.ts
+        mapper-000.test.ts
+        mapper-004.test.ts
+        mapper.test.ts
+        nes-console-rom.test.ts
+        nes-console-supplied-rom.test.ts
+        nes-console.test.ts
+        nes-cpu-bus.test.ts
+        ntsc-clock.test.ts
+        oam-dma.test.ts
+        ppu-2c02.test.ts
+        ppu-bus.test.ts
+        ppu-rendering.test.ts
+        scratch-rom-assets.test.ts
+        shared-port-vectors.test.ts
         support/
             FakeCpuBus.ts
             NromTestBus.ts
+            cartridge_projection.ts  reference projection of a header parse onto suite 9
+            cpu_addressing_projection.ts  reference projection of one addressing-mode resolution
+            cpu_control_projection.ts  reference projection of a control-loop record
+            cpu_instruction_projection.ts  reference projection of one whole instruction
+            cpu_opcode_projection.ts  reference projection of one opcode decode
+            cpu_sequence_projection.ts  reference projection of one CPU cycle sequence
+            mapper_projection.ts  reference projection of mapper selection and NROM validation
+            goboscript_port_algorithms.ts  integer-only mirror of the ported helpers
             nestest_runner.ts
+            recording_cpu_bus.ts  bus recorder and absent-device factory shared by the CPU projections
+            shared_port_vectors.ts  fixture loader shared by both vector tests
     scripts/
+        generate_goboscript_opcode_table.mjs
         generate_goboscript_rom_data.mjs
         generate_goboscript_shared_port_vectors.mjs
+        run_cpu_vector_corpus.mjs  opt-in full-corpus runner (not part of npm test)
         run_nestest_trace.mjs
+        select_cpu_vectors.mjs  deterministic fixture selection from a local corpus clone
         serve_browser.mjs
     scratch/
-        goboscript.toml
-        main.gs
-        stage.gs
-        NOTES.md
+        NOTES.md  embedded in the compiled project as its notes
         assets/
             blank.svg
+        goboscript.toml
+        main.gs  display sprite: reports the self-test summary
         src/
-            rom_loader.gs
-            shared_vectors.gs
+            cartridge.gs  iNES and NES 2.0 header parsing with numeric error codes
+            cartridge_loader.gs  boot path: signature, header, board validation, payload, attachment
+            controller.gs  two serial controller ports
+            cpu_addressing.gs  all thirteen addressing modes with dummy reads and page-cross cycles
+            cpu_alu.gs  ADC, SBC, logic, shift, compare, BIT, INC, DEC
+            cpu_bus.gs  RAM mirroring, open bus, controller window, attached-board cartridge window
+            cpu_control.gs  sequence selection, interrupt acceptance, jam vector reads, IRQ poll mask
+            cpu_core.gs  registers, one logged bus transaction per cycle, fetch and stack operations
+            cpu_instruction.gs  one whole instruction: dispatch, operands, ALU, branches, jumps, stack
+            cpu_opcode.gs  mnemonic enum plus the generated opcode table decode
+            cpu_sequence.gs  reset, BRK, JSR, RTI, RTS, interrupt, and branch cycle sequences
+            cpu_status.gs  status normalization and flag updates
+            mapper.gs  exact mapper and submapper routing with numeric error codes
+            mapper_000.gs  NROM validation, payload copy, and the CPU and pattern windows
+            mapper_004.gs  MMC3 validation, banking registers, both modes, and the windows
+            numeric.gs  bit-free byte, word, and bitwise helpers
+            rom_loader.gs  generated ROM list, header load, and signature check
+            shared_vectors.gs  generated port-vector list
+            vector_selftest.gs  walks the vector list, replays it, and reports a summary
+        stage.gs  Stage: owns shared state and runs the self test
     docs/
         ARCHITECTURE.md
         COMPLETION_CRITERIA.md
-        GOBOSCRIPT_RESEARCH.md
         GOBOSCRIPT_PORT_VECTORS.md
+        GOBOSCRIPT_RESEARCH.md
         LLM_CONTEXT.md
         PORTING_PLAN.md
         PROGRESS.md
@@ -146,8 +186,8 @@
         TODO.md
 ```
 
-`scratch/data/test_rom_bytes.txt` and `scratch/data/shared_port_vectors.txt` are generated by their build steps
-and ignored by Git. `scratch/scratch.sb3` and TypeScript's `dist/` output are generated and ignored as well.
+`scratch/data/test_rom_bytes.txt`, `scratch/data/shared_port_vectors.txt`, and
+`scratch/data/opcode_table.txt` are generated by their build steps and ignored by Git. `scratch/scratch.sb3` and TypeScript's `dist/` output are generated and ignored as well.
 
 ## TypeScript source
 
@@ -190,20 +230,100 @@ NES target.
 
 ## GoboScript source
 
-`scratch/` is the root passed to `goboscript build`.
+`scratch/` is the root passed to `goboscript build`. None of these sources has been compiled: the pinned
+toolchain needs Cargo and rustc, which are unavailable here.
 
-- `main.gs` defines the `main` sprite.
-- `stage.gs` defines the Scratch Stage.
-- `src/rom_loader.gs` and `src/shared_vectors.gs` are included by `main.gs`; each is a header, not a sprite.
+- `stage.gs` defines the Scratch Stage. It includes every header, so the Stage owns all shared variables,
+  lists, and enums, and its green-flag handler runs the port-vector self test and broadcasts completion.
+- `main.gs` defines the `main` display sprite. It includes no header and only reads Stage-owned state,
+  because a sprite resolves Stage variable, list, and enum names while a proc or func is compiled separately
+  into each target that includes it.
+- `src/numeric.gs` holds the bit-free byte, word, and bitwise helpers, plus the `cpu_flag` enum. GoboScript
+  has no bitwise operators, so masks and shifts are floor division and modulo.
+- `src/cpu_status.gs` holds status normalization, flag get/set, zero/negative updates, and the stack forms.
+- `src/cpu_alu.gs` holds the thirteen ALU operations; each proc leaves its result in `alu_value` and its
+  status in `alu_status`.
+- `src/controller.gs` holds both serial controller ports.
+- `src/cpu_bus.gs` holds the CPU decoder subset: RAM and mirroring, the open-bus latch with driven masks, the
+  `$4016`/`$4017` window, and the cartridge window an attached NROM or MMC3 board drives. PPU, APU, and OAM
+  DMA behave as absent devices, and the cartridge window stays undriven until a board validates, so its reads
+  return the latch and its writes are dropped.
+- `src/mapper_004.gs` holds the MMC3 board: the creation checks, the eight banking registers with the masks
+  bank data applies to each of them, PRG and CHR bank selection in both modes, the PRG RAM enable and
+  write-protect bits, the mirroring register with its four-screen override, the payload and trainer copies,
+  the CPU and pattern windows, the four IRQ registers, the PPU A12 observation whose ten-dot low filter
+  decides which rising edges clock the scanline counter, and the nonvolatile memory snapshot procs that copy
+  the declared NVRAM tail out of each mapped window and restore it back when the buffer holds exactly the
+  declared size. The observation itself has no caller yet: the ported PPU that would report addresses and
+  dots is not written.
+- `src/cartridge_loader.gs` composes the boot path: check the embedded image's signature, copy and parse its
+  header, route the mapper selection, then validate, copy, and attach whichever ported board that selection
+  names, recording one summary line for the report and reporting the IRQ line the attached cartridge drives.
+  The embedded default image is an MMC3 cartridge, so it attaches through the MMC3 path.
+- `src/cpu_core.gs` holds the six CPU registers, one logged bus transaction per cycle in `cpu_access_log`,
+  fetch byte/word, and push/pop byte/word with status push and restore.
+- `src/cpu_addressing.gs` resolves all thirteen addressing modes, including the zero-page and indexed dummy
+  reads, the extra cycle when an indexed access crosses a page or writes, and the JMP indirect pointer wrap
+  inside one page. An illegal mode and access pair records an error code instead of stopping the project,
+  where the TypeScript reference throws.
+- `src/cpu_sequence.gs` holds the cycle sequences that do not need opcode decoding: reset, BRK, JSR, RTI,
+  RTS, the NMI and IRQ/BRK hardware interrupts, and a relative branch. Opcode fetch stays with the caller,
+  because the reference reaches the four instruction sequences through `execute_instruction_cycles`.
+- `src/cpu_instruction.gs` executes one instruction: fetch and decode the opcode, then run the sequence for
+  the mnemonic. Every official mnemonic is dispatched, including the loads and stores across all twelve memory
+  addressing modes, the ALU group, the shifts, rotates, and counters on the accumulator and in memory, the
+  transfers, the flag instructions, the stack instructions, the branches, both JMP forms, BRK, JSR, RTI, RTS,
+  NOP, and the KIL jam flag. It reports `cpu_instruction_error` for an undecodable opcode, an unofficial
+  opcode, an unresolved operand, or an operand kind a mnemonic cannot use. Unofficial opcodes other than KIL
+  and the unstable high-byte stores are not ported.
+- `src/cpu_control.gs` picks the next sequence: a jam, a latched NMI, an asserted IRQ line the
+  interrupt-disable flag does not mask, or one instruction. It holds the NMI latch, the level-sensitive IRQ
+  input, the jam vector reads (three the first time the CPU jams, one afterwards), the reset-shaped state
+  clear, and the one-instruction IRQ poll mask that CLI, SEI, and PLP leave behind, which is what delays an
+  IRQ after CLI and lets an already pending IRQ through after SEI. DMA stalls and the yield policy a frame
+  loop needs are not ported.
+- `src/mapper.gs` routes a cartridge by an exact mapper and submapper pair, never by a default, and reports
+  whether the mapper or the submapper is the unsupported half. It also sums two declared memory sizes and
+  reports -1 when either one is unusable, which stands in for the reference's null sum.
+- `src/mapper_000.gs` validates a parsed header as an NROM board in the reference's check order: board
+  family, 16 KiB or 32 KiB of PRG ROM, at most 8 KiB of summed PRG RAM and NVRAM, a trainer that needs PRG
+  RAM, and either exactly 8 KiB of CHR ROM with no CHR RAM or up to 8 KiB of CHR RAM with no CHR ROM. It
+  reports the two memory sizes an accepted board would map. The reference's 512-byte trainer length check is
+  not ported, because the parser only ever reports a 512-byte trainer. The same header holds the board's
+  memory: both ROM lists are sized to the declared payload and zero-filled, both RAM regions are allocated at
+  their full window and alias modulo the mapped size, `nrom_load_payload` copies PRG ROM, CHR ROM, and the
+  trainer into PRG RAM at offset `$1000`, and the CPU and pattern windows report a mapped flag, a byte, and
+  the driven bits instead of returning a null read. The NVRAM snapshots and the `cpu_bus.gs` hookup are not
+  ported.
+- `src/cpu_opcode.gs` decodes one opcode byte through the generated `data/opcode_table.txt`: the 76-name
+  mnemonic enum whose ids come from the canonical fixture, the record offset `3 + opcode * 6`, a length and
+  header check that reports a table which failed to load, and the six decoded fields. Dispatch and
+  per-instruction execution are not ported.
+- `src/cartridge.gs` parses both header versions into the `cartridge_*` result globals: signature, version,
+  mapper and submapper, mirroring, battery, trainer, PRG/CHR ROM sizes including the NES 2.0 exponent form,
+  the four RAM/NVRAM sizes, and the trainer/PRG/CHR offsets. Failures set one numeric error code and leave
+  every field at zero. Payload copying, RAM backing storage, and mapper dispatch are not ported.
+- `src/rom_loader.gs` loads the generated ROM list, checks the iNES signature, copies the embedded header into
+  the parser, and writes the summary text the self test reports.
+- `src/shared_vectors.gs` loads the generated port-vector list.
+- `src/vector_selftest.gs` walks that list, executes suites 1, 3, 7, 8, 9, 10, and 11, counts suites 2, 4, 5,
+  and 6 as skipped, and writes the summary variables the sprite reports.
 - `assets/` holds costume and other compiler-packaged assets.
 - `data/test_rom_bytes.txt` is generated from the default fixture or an explicitly selected build-time ROM
   before a build.
-- `data/shared_port_vectors.txt` is generated from the canonical JSON fixture; the list is loaded but not yet
-  executed by GoboScript.
+- `data/shared_port_vectors.txt` is generated from the canonical JSON fixture and executed by the self test
+  once the project can be compiled.
+- `data/opcode_table.txt` is generated from `tests/fixtures/goboscript/opcode_table.json`, the integer form of
+  `CPU_OPCODE_TABLE`, and is not read by any `.gs` source yet.
 - `goboscript.toml` pins the standard library and requests TurboWarp settings.
+- `NOTES.md` is embedded in the compiled project as its notes and records the current port scope.
 
 Keep helper `.gs` files in subdirectories. A new `.gs` file in the project root becomes a new sprite unless
-it is the special `stage.gs` file.
+it is the special `stage.gs` file. `tests/goboscript-source.test.ts` enforces the layout rules above, the
+upstream grammar shape, proc and func call shapes and argument counts, the rules that a cycle-spending helper is
+never nested inside another call's arguments and that an argument is only read through `$`, and name/arity
+parity with
+`tests/support/goboscript_port_algorithms.ts`.
 
 ## Build products and ownership
 
@@ -216,6 +336,8 @@ it is the special `stage.gs` file.
 | `test_rom.nes` | supplied fixture | Yes, pre-existing |
 | `scratch/data/test_rom_bytes.txt` | selected ROM plus generator script (default: `test_rom.nes`) | No |
 | `scratch/data/shared_port_vectors.txt` | canonical JSON fixture plus generator script | No |
+| `scratch/data/opcode_table.txt` | canonical JSON fixture plus generator script | No |
+| `tests/fixtures/goboscript/opcode_table.json` | `src/nes/cpu/opcode_table.ts`, checked by a parity test | Yes |
 | `scratch/*.sb3` | GoboScript compiler output | No |
 | `dist/` | TypeScript compiler output | No |
 | `node_modules/` | npm dependencies | No |

@@ -1,0 +1,141 @@
+# Frame loop with bounded yield policy for the GoboScript port.
+#
+# The NES runs at 60 frames per second, with each frame consisting of approximately 29,780 CPU
+# cycles (NTSC timing). In Scratch, running all of these cycles in a single no-refresh block
+# would freeze the project and make it unresponsive. Instead, we split each frame into smaller
+# chunks and yield between them.
+#
+# This module implements a chunked frame loop that:
+# - Runs a bounded number of CPU cycles per chunk (default: 1000)
+# - Advances the PPU in sync (3 PPU dots per CPU cycle)
+# - Handles OAM DMA stalls
+# - Checks for IRQ/NMI at instruction boundaries
+# - Yields after each chunk so the caller can process input, update display, etc.
+#
+# The chunk size is a tradeoff: larger chunks are more efficient but less responsive; smaller
+# chunks are more responsive but slower due to yield overhead. The default of 1000 cycles per
+# chunk gives ~30 chunks per frame, which is responsive enough for input handling while keeping
+# overhead reasonable.
+#
+# Usage:
+#   frame_loop_reset;                    # Initialize at frame start
+#   while frame_loop_frame_complete == 0 {
+#       frame_loop_run_chunk;            # Run one chunk
+#       # ... yield, process input, update display ...
+#   }
+#   # Frame is complete, ready for next frame
+
+%include src/numeric
+%include src/cpu_core
+%include src/cpu_control
+%include src/cpu_bus
+%include src/ppu_2c02
+%include src/apu_2a03
+%include src/cartridge_loader
+
+# NTSC timing constants
+var FRAME_LOOP_CYCLES_PER_FRAME = 29780;
+var FRAME_LOOP_CYCLES_PER_CHUNK = 1000;
+
+# Frame loop state
+var frame_loop_cycles_run = 0;
+var frame_loop_frame_complete = 0;
+var frame_loop_chunk_cycles_run = 0;
+var frame_loop_dma_cycles = 0;
+var frame_loop_cycles_before = 0;
+var frame_loop_cycles_after = 0;
+var frame_loop_sequence_cycles = 0;
+var frame_loop_dma_done = 0;
+
+# Resets the frame loop at the start of a new frame.
+proc frame_loop_reset {
+    frame_loop_cycles_run = 0;
+    frame_loop_frame_complete = 0;
+    frame_loop_chunk_cycles_run = 0;
+}
+
+# Runs one chunk of CPU cycles, advancing PPU and APU in sync.
+# Each chunk runs up to FRAME_LOOP_CYCLES_PER_CHUNK cycles, but stops at instruction
+# boundaries to avoid corrupting state.
+proc frame_loop_run_chunk {
+    frame_loop_chunk_cycles_run = 0;
+
+    repeat FRAME_LOOP_CYCLES_PER_CHUNK {
+        if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
+            frame_loop_frame_complete = 1;
+        } else {
+            # Check for OAM DMA stall
+            frame_loop_check_dma;
+
+            if frame_loop_dma_cycles > 0 {
+                frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_dma_cycles;
+                frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_dma_cycles;
+
+                # Advance PPU and APU for DMA cycles
+                repeat frame_loop_dma_cycles {
+                    ppu_clock_cpu_cycle;
+                    apu_clock_cpu_cycle;
+                }
+            } else {
+                # Run one CPU sequence (instruction, IRQ, NMI, or jam)
+                frame_loop_cycles_before = cpu_cycles;
+                cpu_begin_next_sequence;
+                frame_loop_cycles_after = cpu_cycles;
+                frame_loop_sequence_cycles = frame_loop_cycles_after - frame_loop_cycles_before;
+
+                frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_sequence_cycles;
+                frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_sequence_cycles;
+
+                # Advance PPU and APU for the CPU cycles
+                repeat frame_loop_sequence_cycles {
+                    ppu_clock_cpu_cycle;
+                    apu_clock_cpu_cycle;
+                }
+
+                # Check for PPU NMI and forward to CPU
+                if ppu_take_nmi_edge() == 1 {
+                    cpu_request_nmi;
+                }
+
+                # Check for APU IRQ and forward to CPU
+                if apu_is_irq_asserted() == 1 {
+                    cpu_set_irq_line 1;
+                } else {
+                    cpu_set_irq_line 0;
+                }
+            }
+        }
+    }
+
+    if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
+        frame_loop_frame_complete = 1;
+    }
+}
+
+# Checks if OAM DMA is active and runs the DMA cycles.
+# Sets frame_loop_dma_cycles to the number of DMA cycles run (0 if no DMA).
+proc frame_loop_check_dma {
+    frame_loop_dma_cycles = 0;
+    frame_loop_dma_done = 0;
+
+    # Run DMA cycles until the DMA is complete or we've run a bounded number
+    repeat 520 {
+        if frame_loop_dma_done == 0 {
+            if cpu_clock_dma_cycle() == 0 {
+                frame_loop_dma_done = 1;
+            } else {
+                frame_loop_dma_cycles = frame_loop_dma_cycles + 1;
+            }
+        }
+    }
+}
+
+# Returns the total number of CPU cycles run in the current frame.
+func frame_loop_get_cycles_run() {
+    return frame_loop_cycles_run;
+}
+
+# Returns whether the current frame is complete.
+func frame_loop_is_frame_complete() {
+    return frame_loop_frame_complete;
+}

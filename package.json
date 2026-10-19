@@ -8,11 +8,13 @@
         "typecheck": "tsc --noEmit",
         "test": "npm run typecheck && node --import tsx --test --test-timeout=10000 tests/*.test.ts",
         "test:nestest": "node --import tsx scripts/run_nestest_trace.mjs",
+        "test:cpu-corpus": "node --import tsx scripts/run_cpu_vector_corpus.mjs",
         "build:ts": "tsc",
         "browser:dev": "npm run build:ts && node scripts/serve_browser.mjs",
         "scratch:assets": "node scripts/generate_goboscript_rom_data.mjs",
         "scratch:vectors": "node scripts/generate_goboscript_shared_port_vectors.mjs",
-        "build:scratch": "npm run scratch:assets && npm run scratch:vectors && cd scratch && goboscript build"
+        "scratch:opcode": "node scripts/generate_goboscript_opcode_table.mjs",
+        "build:scratch": "npm run scratch:assets && npm run scratch:vectors && npm run scratch:opcode && cd scratch && goboscript build"
     },
     "devDependencies": {
         "@types/node": "^22.0.0",

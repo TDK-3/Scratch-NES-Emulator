@@ -1,7 +1,9 @@
 # Supported Features and Known Limits
 
 This page describes the current TypeScript/browser implementation, not a claim of full NES compatibility.
-The Scratch/TurboWarp project is still a ROM-data and parity-vector scaffold; it does not run NES games.
+The Scratch/TurboWarp project is still a scaffold: it embeds ROM data, ports the numeric, status, ALU,
+controller, and CPU-bus helper layer, and runs a shared port-vector self test, but it does not run NES games
+and none of its sources have ever been compiled.
 The current implementation targets an initial NTSC NES slice.
 
 ## Region, ROM formats, and mapper routes
@@ -42,7 +44,11 @@ The current implementation targets an initial NTSC NES slice.
   rendering, background and sprite output, scrolling, priority, sprite-zero hit, palette indices, and color
   emphasis. The 256 by 240 host palette is an RGB approximation. Sprite evaluation is aggregated rather than
   dot-by-dot; PPU open-bus decay, register races, exact pixel-pipeline delay, sprite-overflow false positives/
-  negatives, and some CPU/PPU phase behavior are not fully modeled.
+  negatives, and some CPU/PPU phase behavior are not fully modeled. Two render-time register quirks are
+  modeled: OAMADDR is forced to zero during dots 257-320 of pre-render and visible scanlines, and OAMDATA
+  writes during rendering are ignored. Evaluation starting at dot 65, glitchy OAMADDR high-bit increments on
+  suppressed OAMDATA writes, 2C02G OAM corruption on OAMADDR writes, and I/O latch decay are deliberately not
+  modeled.
 - **Audio:** native pulse, triangle, noise, and DMC channels with deterministic mono core samples. The
   TypeScript console uses a 44.1 kHz default. The browser applies a separate approximate output filter before
   Web Audio playback; neither the filter nor device playback is calibrated to an analog NES or validated
@@ -76,9 +82,34 @@ warnings. TurboWarp persistence and full-console save/load states are not implem
 ## Scratch/TurboWarp ROM deployment
 
 The GoboScript scaffold embeds one selected ROM at build time as a decimal list (`test_rom.nes` by default;
-`--rom` selects another file). The generated project checks the iNES signature but does not yet parse or run
-the game. It has no runtime ROM file picker, controls, rendering, audio, NVRAM persistence, or console
-save states. A GoboScript compiler and successful `.sb3`/TurboWarp validation are still outstanding.
+`--rom` selects another file). The generated project checks the iNES signature, parses the header, validates
+the board, and copies and maps an NROM payload, but it does not yet run the game. It has no runtime ROM file
+picker, controls, rendering, audio, NVRAM persistence, or console save states. A GoboScript compiler and
+successful `.sb3`/TurboWarp validation are still outstanding.
+
+What the project does contain today: bit-free numeric and status helpers, thirteen ALU operations, both serial
+controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`, and a
+cartridge window an attached board drives), iNES 1.0
+and NES 2.0 cartridge header parsing (mapper and submapper, mirroring, battery, trainer, ROM and RAM sizes,
+payload offsets, and six numeric error codes), CPU register state with one logged bus transaction per cycle,
+fetch and stack operations, all thirteen addressing modes including dummy reads and the JMP indirect pointer
+wrap, the reset, BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, the generated opcode
+decode, one whole instruction for all 151 official opcodes, the control loop that selects jam, NMI, IRQ, or an
+instruction with the jam vector reads and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection,
+the NROM board checks with the memory sizes an accepted board would map, the NROM payload and trainer copies,
+the NROM CPU and pattern address windows with PRG ROM mirroring and aliasing RAM, and a boot path that
+validates a board, copies its payload, and attaches it to the bus, both boards' nonvolatile memory snapshots
+with their declared-size restore gate, the MMC3 board checks with both bank modes and the bank-data masks,
+the MMC3 CPU and pattern windows, the MMC3 scanline IRQ with its four registers and the ten-dot A12 low
+filter, and a Stage-run self test
+that replays 587 shared vectors from
+`scratch/data/shared_port_vectors.txt`, counting the CPU state, mapper, PPU, and APU suites as
+skipped. The green flag broadcasts a summary that the display sprite reports.
+Those sources have never been compiled or run: the pinned toolchain needs Cargo and rustc, which are not
+obtainable here. The ported algorithms are instead validated by an integer-only TypeScript mirror compared
+exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic
+upstream codegen, reserved block names, and name resolution. See
+[`GOBOSCRIPT_PORT_VECTORS.md`](GOBOSCRIPT_PORT_VECTORS.md) and [`PORTING_PLAN.md`](PORTING_PLAN.md).
 
 ## Compatibility evidence and caveats
 
@@ -90,5 +121,9 @@ save states. A GoboScript compiler and successful `.sb3`/TurboWarp validation ar
 - The first 5,003 entries of an externally supplied `nestest` trace matched the documented PC, instruction
   bytes, registers, stack pointer, and cycle counts. That external ROM/log is not bundled. The historical trace
   stopped at `$04`, now implemented as an unofficial NOP; this trace has not been rerun since that change.
+- The CPU cycle sequencer matches 1,026 pinned MIT single-step vectors covering all 256 opcode bytes, and the
+  opt-in `npm run test:cpu-corpus` runner matched all 2,560,000 scenarios of the same upstream corpus. That
+  validates this implementation against a recorded reference, not against silicon, and the corpus is not
+  checked in.
 - The automated TypeScript suite and its known gaps are listed in [`TESTING.md`](TESTING.md). No interactive
   browser/TurboWarp runtime validation or general commercial-ROM compatibility result is claimed.

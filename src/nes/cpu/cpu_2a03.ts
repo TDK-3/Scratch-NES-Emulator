@@ -75,6 +75,7 @@ export class Cpu2A03 implements CpuRegisters {
     private irq_line_asserted = false;
     private nmi_pending = false;
     private jammed = false;
+    private jam_vector_reads_issued = false;
     private irq_poll_mask_override: boolean | undefined = undefined;
     private cycle_generator: CpuCycleGenerator | undefined = undefined;
     private next_cycle_request: CpuCycleRequest | undefined = undefined;
@@ -96,6 +97,7 @@ export class Cpu2A03 implements CpuRegisters {
     /** Starts reset without consuming CPU cycles; use clock_cycle() to expose all seven bus accesses. */
     request_reset(): void {
         this.jammed = false;
+        this.jam_vector_reads_issued = false;
         this.nmi_pending = false;
         this.irq_poll_mask_override = undefined;
         this.program_counter = normalize_word(this.program_counter);
@@ -287,13 +289,22 @@ export class Cpu2A03 implements CpuRegisters {
     }
 
     /**
-     * Emulator convention for a jammed 2A03: keep the PC at the KIL byte and repeat its two reads.
-     * The lock-until-reset behavior is documented; the exact external bus pattern is not hardware-verified.
+     * Reference-corpus convention for a jammed 2A03: the first jam sequence reads `$FFFF`, `$FFFE`, and
+     * `$FFFE`, and every later jam sequence reads `$FFFF`. A jammed chip's external bus pattern is not
+     * hardware-verified, so this matches the pinned MIT SingleStepTests vectors instead of claiming measured
+     * hardware behavior. Each sequence stays bounded so `step()` cannot loop forever on a jam.
      */
     private *execute_jammed_cycles(): CpuCycleGenerator {
-        const jam_address = this.program_counter;
-        yield* this.read_cycle(jam_address);
-        yield* this.read_cycle(normalize_word(jam_address + 1));
+        if (!this.jam_vector_reads_issued) {
+            this.jam_vector_reads_issued = true;
+
+            yield* this.read_cycle(IRQ_BRK_VECTOR_HIGH);
+            yield* this.read_cycle(IRQ_BRK_VECTOR_LOW);
+            yield* this.read_cycle(IRQ_BRK_VECTOR_LOW);
+            return;
+        }
+
+        yield* this.read_cycle(IRQ_BRK_VECTOR_HIGH);
     }
 
     private *execute_reset_cycles(): CpuCycleGenerator {
@@ -322,8 +333,9 @@ export class Cpu2A03 implements CpuRegisters {
 
         switch (definition.mnemonic) {
             case "KIL":
+                // The reference corpus leaves the PC past the KIL byte and then reads the IRQ/BRK vector
+                // bytes forever; hardware behavior for a jam is undefined.
                 yield* this.read_cycle(this.program_counter);
-                this.program_counter = normalize_word(this.program_counter - 1);
                 this.jammed = true;
                 break;
             case "BRK":

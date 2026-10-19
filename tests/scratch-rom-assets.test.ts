@@ -67,6 +67,29 @@ test("bundles a selected ROM byte-exactly and refuses to overwrite its source", 
         assert.equal(hardlink_result.status, 1);
         assert.match(hardlink_result.stderr, /must not overwrite the source ROM/);
         assert.deepEqual(readFileSync(input_path), Buffer.from(rom_bytes));
+
+        assert.equal(result.stderr.trim(), "", "a licensed selection must not emit a rights notice");
+    } finally {
+        rmSync(temporary_directory, { recursive: true, force: true });
+    }
+});
+
+test("warns that the supplied fixture cannot be redistributed inside a compiled project", () => {
+    const temporary_directory = mkdtempSync(join(tmpdir(), "scratch-rom-rights-"));
+    const output_path = join(temporary_directory, "supplied_bytes.txt");
+
+    try {
+        const result = spawnSync(
+            process.execPath,
+            [GENERATOR_PATH, "--output", output_path],
+            { encoding: "utf8", timeout: 8_000, cwd: fileURLToPath(new URL("..", import.meta.url)) },
+        );
+
+        assert.equal(result.error, undefined, result.error?.message);
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stderr, /rom-rights: this image is a Nintendo-derived Super Mario Bros\. 2/);
+        assert.match(result.stderr, /Do not distribute a compiled project/);
+        assert.ok(readFileSync(output_path, "ascii").length > 0, "the list is still generated");
     } finally {
         rmSync(temporary_directory, { recursive: true, force: true });
     }

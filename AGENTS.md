@@ -50,6 +50,21 @@ architectural or GoboScript changes. Keep `docs/PROGRESS.md` and `docs/TODO.md` 
   settings and do not silently imply they work on the Scratch website.
 - Keep GoboScript algorithms simple and independently testable. Lists are 1-indexed; write and test index
   conversions explicitly.
+- Never write `return` inside a `proc`: upstream codegen panics on it. Structure procs as `if` / `elif` /
+  `else` chains. Only a `func` returns, and its last statement must be a `return`.
+- Declare shared `var`, `list`, and `enum` state only in headers that the Stage includes. Sprites resolve
+  Stage-owned names, but each target compiles its own copies of included procs and funcs, so a header included
+  by a sprite must not declare state.
+- GoboScript has no bitwise operators: `&` joins strings, `%` is floored modulo, and `//` is floor division.
+  Express masks, shifts, and flag tests through the tested helpers in `scratch/src/numeric.gs`.
+- Do not name a proc, func, var, list, or enum after a GoboScript keyword or a Scratch block shape; a matching
+  name and arity compiles into the builtin block instead of a custom block.
+- Declare `local` values before loop bodies, not inside them.
+- Keep `tests/support/goboscript_port_algorithms.ts` in lockstep with any changed helper. It mirrors the
+  ported arithmetic in integer-only TypeScript, and `tests/goboscript-source.test.ts` enforces name and arity
+  parity plus the source rules above.
+- Never describe the `.gs` project as compiling, running, or meeting a performance target. No source in
+  `scratch/` has been compiled, so the in-project self test has never executed.
 
 ## Text and generated files
 

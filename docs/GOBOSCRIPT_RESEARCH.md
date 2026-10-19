@@ -237,6 +237,75 @@ other available headers. The upstream docs say an unset `std` selects the latest
 seven days; pin a version in `goboscript.toml` when a project depends on it. This scaffold pins `std =
 "2.1.0"` and currently has no standard-library include.
 
+### Findings verified in the upstream compiler source
+
+The following were read out of the v3.3.0 source snapshot under `/tmp/goboscript-research/goboscript-main`
+(not from the prose docs) and directly shape how this project writes `.gs`. They are the reason the source
+lint in `tests/goboscript-source.test.ts` exists.
+
+- `return` inside a `proc` is not a warning, it is a crash: `src/codegen/sb3.rs` handles `Stmt::Return` with
+  `panic!()`. Procs must be structured as `if` / `elif` / `else` chains. In a `func`, `src/visitor/pass1.rs`
+  rewrites `return X;` into an assignment to `<func>:return` followed by a stop, so early and multiple
+  returns are safe there.
+- `%include` is deduplicated per translation unit (`src/translation_unit.rs` returns early when the resolved
+  path is already in `unit.included`), so headers may include a common header without producing duplicate
+  declarations. Paths resolve relative to the root file unless prefixed with `./` or `../`, the `.gs`
+  extension is added when missing, and a directive only counts at the start of a line.
+- Scratch `%` and `//` are not ECMAScript operators: `%` compiles to `operator_mod`, which is floored, and
+  `a // b` compiles to `floor(a / b)` (`src/visitor/transformations.rs`). `&` is the join block. Any
+  arithmetic that must match a bitwise TypeScript reference has to be written with those semantics; the
+  project mirror uses explicit floored helpers for exactly this reason.
+- A sprite resolves variable, list, enum, and struct names from the Stage (`src/visitor/pass2.rs` passes
+  `stage.vars`, `stage.lists`, `stage.enums`, and `stage.structs` as globals), but procs and funcs are not
+  global: each target compiles its own copies from the headers it includes. Shared state therefore belongs in
+  Stage-included headers only, and a header included by a sprite must not declare `var` or `list`.
+- Call shapes are not interchangeable. A proc call is the statement rule `<name:NAME> <args:Kwargs> ";"`,
+  which becomes `Stmt::ProcCall` unless `Block::from_shape` matches a builtin, while a func call is the
+  expression rule `<name:NAME> "(" <args:Kwargs> ")"`. Since `"(" <Expr> ")"` only groups a single
+  expression, `write_ram(0, 1);` does not parse at all, while `write_ram(1);` parses by accident as one
+  grouped argument, and a func used as a statement becomes an unknown-proc call. Reading that rule out of the
+  grammar found 39 parenthesized proc call sites in this project's `.gs` sources, all now written as
+  `name arg1, arg2;` and guarded by a lint that also checks argument counts.
+- A bare argument name is not the argument: only `$name` compiles to the `argument_reporter_string_number`
+  block for that parameter, while a bare `name` resolves like any other identifier, to a variable, list, enum,
+  proc, or func. Writing `cpu_resolve_operand operation, access;` inside a proc whose parameter is `operation`
+  therefore reads an unrelated name instead of failing to compile. Two such call sites existed in this project
+  and a source lint now rejects any bare occurrence of a parameter name inside its own body unless a `local`
+  deliberately shadows it.
+- An expression-position func call is lowered, not inlined: `src/visitor/pass1.rs` pushes a `Stmt::FuncCall`
+  into the enclosing statement's hoisted prefix and replaces the expression with a fresh callsite variable
+  (`@1`, `@2`, ...), so the call runs before the statement that reads its result. Arguments are visited before
+  the outer call, which keeps inner-first order, but a func that spends cycles or touches the bus must never be
+  nested inside another call: the emitted access order then depends on a lowering detail instead of reading off
+  the source. This project writes every cycle-spending helper as a `proc` that leaves its result in a
+  documented global (`cpu_cycle_value`, `cpu_fetched_byte`, `cpu_fetched_word`, `cpu_popped_byte`,
+  `cpu_popped_word`) and lints for any cycle-spending name inside another call's arguments.
+- A `func` compiles to a warp custom block rather than a Scratch reporter: `Codegen::func` emits
+  `procedures_definition` with `Mutation::prototype(name, args, warp = true, compact = false)`, and
+  `Stmt::Return` becomes `data_setvariableto`. Its body may therefore contain stack blocks, including proc
+  calls, assignments, and control flow. An expression-position call whose name is not a declared func is an
+  `UnrecognizedFunction` diagnostic in `src/codegen/sb3.rs`, so a misspelled helper fails at compile time
+  rather than silently.
+- Any proc or func whose name and arity match a builtin is emitted as that builtin
+  (`Block::from_shape` / `Repr::from_shape` in `src/blocks.rs`): 130 block and reporter shapes plus 64
+  keyword tokens from `src/lexer/token.rs`. The lint forbids all of them as declaration names.
+- `local` compiles to a variable named `procname:x`, so it is undefined behavior in recursive or non-warp
+  procs; the first `local` declares it and later plain assignments refer to it. Declaring locals before loop
+  bodies keeps one variable per proc.
+- Operator precedence, from `src/parser/grammar.lalrpop`: unary (`-`, `not`, `length`, `round`, `abs`,
+  `floor`, `ceil`, `sqrt`, trig/log), then `* / // %`, then `+ -`, then comparisons, then `&` (right
+  associative), then `in` / `not in` / `==` / `!=`, then `and`, then `or`. A ternary `if (c) t else f`
+  expression exists only in the newer snapshot, so this project does not use it while `std = "2.1.0"` is
+  pinned.
+- GoboScript has no show-variable or show-list block; the only `visible` control in `src/codegen/sb3.rs` is
+  the sprite's own. The Stage also has no `say`. Stage-side reporting therefore has to go through variables
+  that a sprite reads, or through a broadcast that a sprite reports.
+- The pinned standard library (`github.com/goboscript/std` v2.1.0) provides `math.gs` as macros over floats,
+  including `BIT(N, V)` built from `ln` / `antiln`. That is unsuitable for byte-exact emulator arithmetic, so
+  this project keeps its own integer-only helpers and does not include `std/math`.
+- An empty spinning `until cond { }` in a sprite never yields, which starves other threads (including the
+  Stage's), so cross-target handoff uses `broadcast` plus `on "message"` rather than polling.
+
 ### Costumes and assets
 
 A sprite or Stage declares costumes with a top-level `costumes` statement. Paths are project-root-relative.
@@ -294,6 +363,23 @@ assets, run `goboscript build`, open or reload the emitted `.sb3`, and test it i
    algorithm and keep the optimized result checked against the TypeScript reference.
 8. Treat graphics and audio as separate integration projects. A correct CPU core alone does not make a
    playable emulator.
+
+Position as of 2026-10-18: steps 1 through 4 are done for the helper layer (numeric, status, ALU, controller,
+a CPU-bus subset, cartridge header parsing, the CPU register/fetch/stack/addressing scaffolding, the reset,
+BRK, JSR, RTI, RTS, IRQ, NMI, and relative-branch cycle sequences, the generated opcode decode, one whole
+instruction for all 151 official opcodes, the control loop with interrupt acceptance, the jam vector reads,
+and the CLI/SEI/PLP IRQ poll mask, exact mapper and submapper selection, and the NROM board with its
+validation, payload and trainer copies, CPU and pattern windows, and the boot path that attaches a validated
+board to the ported CPU bus), and step 6 is written but unrun, because the project cannot be compiled here.
+What step 5 still lacks is the yield policy a frame loop needs and the DMA stall path; the save/load wiring
+that would actually use the ported snapshot buffers is the next porting work, and step 7 remains entirely
+blocked on a toolchain. The in-project
+self test replays suites 1, 3, and 7 through 19 of the shared fixture and counts the CPU state, mapper, PPU,
+and APU suites as skipped rather than passing. The loader attaches either ported board, so the embedded MMC3
+image now drives the cartridge window and can raise a scanline IRQ: the board carries the four IRQ registers
+and the PPU A12 observation with its ten-dot low filter, the loader reports the line through
+`cartridge_board_irq_line()`, and both ported boards expose their nonvolatile memory snapshot procs. Nothing
+in the port observes PPU addresses or clocks PPU dots yet, because the ported PPU itself is not ported.
 
 The main technical risk is throughput, not syntax. A NES frame spans tens of thousands of CPU cycles and
 over 61,000 visible pixels. TurboWarp settings can help, but the project needs measured frame-time budgets
