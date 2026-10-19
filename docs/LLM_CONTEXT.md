@@ -108,7 +108,14 @@ compatibility requires. `src/nes/browser/` provides a separate TypeScript keyboa
 integer-scale sizing, one-frame-per-animation callback scheduler, approximate stateful audio filter, Web Audio
 sink, and ROM-SHA-keyed local-storage PRG/CHR-NVRAM persistence with legacy PRG-only record support.
 Browser/device behavior remains unvalidated; the
-Scratch/TurboWarp runtime still needs its own adapters and validation.
+Scratch/TurboWarp runtime still needs its own adapters and validation. The GoboScript port now has one of
+them: `scratch/src/keyboard_input.gs` polls the built-in "key () pressed?" reporter for the same sixteen
+keys the browser adapter binds and writes the two live button masks the ported `controller.gs` reports,
+sampled once per chunk of emulated cycles so a press reaches the console in milliseconds rather than the
+seconds an emulated frame costs at roughly 300 chunks per frame. Its key table, button weights, and single
+call site are pinned by tests against the browser adapter, `CONTROLLER_BUTTON_MASKS`, and the run loop, but
+no compiled project has seen a real key event, and the Shift-to-Select binding relies on TurboWarp because
+the Scratch website's keyboard device drops modifier keys.
 
 Tests cover parser success/failures, register helpers, all ADC/SBC operand pairs with both carry inputs,
 fake-bus ordering/validation, reset/stack sequencing, all addressing modes, every official opcode, per-cycle
@@ -118,9 +125,9 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,275 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+suite has 1,286 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
 test, 588 cross-domain parity cases, 97 GoboScript port-algorithm comparisons against an integer-only mirror of
-the ported modules, 26 GoboScript source-lint checks, two
+the ported modules, 26 GoboScript source-lint checks, eleven GoboScript keyboard-input checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
 six focused controller tests, and

@@ -21,10 +21,10 @@
 # maps to pixel centers pen_display_first_x + x * pen_display_scale, and NES y 0-239
 # (top first) to pen_display_first_y - y * pen_display_scale. A stroke between the
 # first and last centers of a run covers exactly the run's band because pen strokes
-# end in round caps of radius half the pen size. By default the scale is 1, one stage
-# unit per NES pixel; setting the global pen_fit_to_screen variable to 1 raises it to
-# 1.5, the largest uniform scale at which the 256 by 240 picture fits the default 480
-# by 360 stage. Every frame starts by erasing the pen layer, so no pixel of a previous
+# end in round caps of radius half the pen size. The scale starts at 1.5, the largest
+# uniform scale at which the 256 by 240 picture fits the default 480 by 360 stage;
+# setting the global pen_fit_to_screen variable to 0 returns it to 1, one stage unit
+# per NES pixel. Every frame starts by erasing the pen layer, so no pixel of a previous
 # frame can survive into the next one, including across a scale change.
 costumes "assets/blank.svg";
 

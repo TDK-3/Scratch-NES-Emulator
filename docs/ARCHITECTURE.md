@@ -208,8 +208,8 @@ approximations, and performance has not been benchmarked in a real browser. The 
 is the batched pen path: the ported PPU fills palette-index and emphasis framebuffer lists, and the display
 sprite draws each finished frame as horizontal runs of equal pixels with the pen extension, so the stroke
 count follows color changes rather than the 61,440-pixel count, although it still reads every pixel once.
-The picture is centered on the stage origin; the global `pen_fit_to_screen` variable selects native 1x
-pixels by default, or at 1 a uniform 1.5x scale that fits the default 480 by 360 stage.
+The picture is centered on the stage origin; the global `pen_fit_to_screen` variable selects a uniform 1.5x
+scale that fits the default 480 by 360 stage by default, or at 0 native 1x pixels.
 That is a first strategy, not a measured winner: costume/clone composition and generated assets remain
 candidates, and no frame time, memory use, or runtime compatibility has been recorded for any of them yet,
 because the project has neither been compiled nor timed on a target device.
@@ -247,6 +247,14 @@ remain planned for the full NES target; Zapper support waits for PPU sensor/timi
 expansion audio alongside each supported mapper that requires it. Famicom-only expansion-port devices are
 outside the NES target; evaluate other peripherals individually when compatibility requires them. Host key
 mapping remains a runtime adapter.
+
+The GoboScript port reads its host keyboard in `scratch/src/keyboard_input.gs`, which samples the built-in
+"key () pressed?" reporter for the same sixteen keys the TypeScript adapter binds and writes the resulting
+button masks into the live pad state of `scratch/src/controller.gs`. It polls instead of using key-press
+hats, so a pad button follows the key that is held down rather than a press/release edge pair that a missed
+key-up could leave stuck, and the run loop calls it once per chunk of emulated cycles, because a frame takes
+roughly 300 chunks. The Scratch website's keyboard device drops modifier keys, so the Shift-to-Select
+binding is a TurboWarp extension; every other binding is plain Scratch.
 
 ## Cartridge parsing and mapping
 

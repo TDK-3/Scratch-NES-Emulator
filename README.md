@@ -68,7 +68,10 @@ loading, persistence, and known-limitations statement.
   and mapper suites are counted as skipped. It then boots the embedded image and runs the game. The ported
   PPU renders each frame into palette-index and emphasis framebuffer lists, and the display sprite draws
   every finished frame on the stage with the pen extension in full NES color, one run-length stroke per
-  run of equal pixels; set the `pen_fit_to_screen` variable to 1 to scale the picture to fit the stage. None of its sources have been through the compiler, because
+  run of equal pixels; the picture starts scaled to fit the stage, and setting the global
+  `pen_fit_to_screen` variable to 0 returns it to native 1x pixels. The same project reads the host
+  keyboard with the built-in "key () pressed?" reporter and drives both NES pads from it: arrows, Z, X,
+  Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second. None of its sources have been through the compiler, because
   the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
   source lint for grammar shape and reserved names.

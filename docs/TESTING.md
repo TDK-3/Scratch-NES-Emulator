@@ -23,10 +23,10 @@ npm run scratch:vectors
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 1,275 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
+The 1,286 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
 to source fixtures, 588 cross-domain shared-vector checks (587 records plus the generator regression), 257 pinned
 MIT single-step corpus checks covering all 256 opcode bytes, 97 GoboScript port-algorithm comparisons, 26
-GoboScript source-lint checks, six standard-controller tests, forty-two focused
+GoboScript source-lint checks, eleven GoboScript keyboard-input checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console
 tests, one supplied mapper 4 title-boot test, two NTSC clock tests, four canvas-renderer tests, four browser
@@ -641,6 +641,16 @@ Current parity coverage, in three layers:
    sprite's pen blocks, the PPU bus reporting pattern/nametable accesses to an attached MMC3 board with
    its palette window at $3F00, and every numeric constant the ported PPU shares by name with the
    reference `src/nes/ppu/ppu_2c02.ts` (the audit caught the PPUSCROLL preserve mask at 3099 not 3103).
+5. `tests/goboscript-keyboard-input.test.ts` (11 tests) parses `scratch/src/keyboard_input.gs` and pins the
+   host-input table: every `key_pressed("...")` row the sampler tests, in order, has to equal the mirrored
+   table, no key may be polled without being combined into a mask, every key name has to be one the Scratch
+   runtime's keyboard device reports, and each pad has to bind all eight buttons exactly once. It then
+   presses each ported key through `NesBrowserKeyboardInput` and requires the same pad and button the
+   reference adapter binds, compares the ported button weights with `CONTROLLER_BUTTON_MASKS`, and checks
+   that a polled mask reads back through `NesControllerPorts` in the A/B/Select/Start/Up/Down/Left/Right
+   order the hardware uses. Two source checks keep the sampler wired correctly: it is called from exactly
+   one place in the run loop, once per chunk rather than only at the frame boundary, and it writes both
+   live button masks without touching the strobe or the serial latch.
 
 A valid `.sb3` compile is only a syntax/package check. Also open it in TurboWarp, click the green flag,
 verify expected output, and check that the project remains responsive. If Scratch website compatibility is

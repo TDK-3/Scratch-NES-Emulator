@@ -112,7 +112,12 @@ MMC3 image, reads the reset vector, and runs the game with a bus trace byte-iden
 reference's. The ported PPU now includes the rendering pipeline (background fetch/shift, scrolling, sprite
 evaluation and fetch, priority, palette lookup with greyscale and emphasis), and the display sprite draws each
 finished 256 by 240 frame with the Scratch pen extension in the same 64-color palette the canvas renderer
-uses, at native 1x by default or scaled to fit the stage when the global `pen_fit_to_screen` variable is 1. That renderer is in the `.gs` sources only: the checked-in `.sb3` predates it and still produces no
+uses: the picture starts at the uniform 1.5x fit-the-stage scale, and setting the global `pen_fit_to_screen`
+variable to 0 returns it to native 1x pixels. The port also reads the host keyboard with the built-in "key ()
+pressed?" reporter and drives both pads from it, sampled once per chunk of emulated cycles: arrows, Z, X,
+Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second, the same bindings the table above
+lists for the browser shell. Shift is a TurboWarp extension, because the Scratch website's keyboard device
+drops modifier keys, so Select never presses there. That renderer and that sampler are in the `.gs` sources only: the checked-in `.sb3` predates them and still produces no
 picture until the project is rebuilt with `npm run build:scratch`. The ported algorithms are also
 validated by an integer-only TypeScript mirror compared
 exhaustively with the bitwise reference and by a source lint that checks grammar shape, constructs that panic

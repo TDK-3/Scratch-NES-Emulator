@@ -40,7 +40,7 @@ A pinned MIT SquarePlayer APU ROM is exercised through the browser keyboard adap
 
 ## How to validate changes
 
-Last clean validation on 2026-10-19: `npm test` passed 1,258/1,258 in about 15 seconds, `npx tsc --noEmit` was
+Last clean validation on 2026-10-19: `npm test` passed 1,286/1,286 in about 16 seconds, `npx tsc --noEmit` was
 clean, and all three GoboScript data generators passed (81,936 ROM values; 18,363 vector values for 587
 records; 1,538 opcode table values for 256 opcodes). The
 2026-10-15 clean install reported zero vulnerabilities and 332/332 tests. The browser server test includes a symlink-escape
