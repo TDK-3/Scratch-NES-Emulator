@@ -862,6 +862,52 @@ const MIRROR_CONTRACT: readonly {
             "mirrored controller ports report",
     },
     {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_poll_key",
+        mirror: null,
+        reason: "host input sampling; it reads the Scratch key sensor and reports the press edge",
+    },
+    {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_ask_for_text",
+        mirror: null,
+        reason: "host input; it issues the ask block and keeps the answer the runtime reports",
+    },
+    {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_parse_text",
+        mirror: "GoboscriptRomInput.parse_text",
+    },
+    {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_has_signature",
+        mirror: "GoboscriptRomInput.has_signature",
+    },
+    {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_validate_image",
+        mirror: "GoboscriptRomInput.validate_image",
+    },
+    {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_install_image",
+        mirror: "GoboscriptRomInput.install_image",
+    },
+    {
+        source: "src/rom_input.gs",
+        declaration: "rom_input_error_text",
+        mirror: null,
+        reason: "user-facing report text; the codes it words are mirrored as rom_input_error",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_load_input_image",
+        mirror: null,
+        reason:
+            "host input orchestration; it drives the ask block, the mirrored decode, and the " +
+            "boot path the embedded image uses",
+    },
+    {
         source: "main.gs",
         declaration: "pen_draw_frame",
         mirror: null,
@@ -905,6 +951,7 @@ test("the GoboScript project contains the expected sources", () => {
         "src/pen_display.gs",
         "src/ppu_2c02.gs",
         "src/ppu_bus.gs",
+        "src/rom_input.gs",
         "src/rom_loader.gs",
         "src/rom_run.gs",
         "src/shared_vectors.gs",
@@ -1373,6 +1420,8 @@ test("the ported board enums match the mirror's constants", () => {
         ["src/mapper_004.gs", "mmc3_ppu_access", ported.MMC3_PPU_ACCESS],
         ["src/cpu_core.gs", "cpu_vector_address", ported.CPU_VECTOR_ADDRESS],
         ["src/keyboard_input.gs", "keyboard_button", ported.KEYBOARD_BUTTON],
+        ["src/rom_input.gs", "rom_input_error", ported.ROM_INPUT_ERROR],
+        ["src/rom_input.gs", "rom_input_limit", ported.ROM_INPUT_LIMIT],
     ] as const) {
         const variants = get_enum(get_source(file), enumeration);
         const expected = Object.entries(constants);
@@ -1604,6 +1653,67 @@ test("the Stage boots the embedded ROM after the shared-vector self test", () =>
 
     const sprite = get_source("main.gs");
     assert.match(sprite.text, /say rom_run_state_text;/, "the display sprite must report the ROM status");
+});
+
+test("the run loop services a ROM load request before it runs any more cycles", () => {
+    // A pasted image replaces cartridge_bytes, which the board and the CPU read every cycle,
+    // so the swap has to happen with the console stopped. The loop samples the load key and
+    // services a request at the top of an iteration instead of answering a key-press hat,
+    // which would run while the frame loop kept clocking the console.
+    const rom_run = get_source("src/rom_run.gs");
+    assert.ok(rom_run.includes.includes("src/rom_input.gs"), "the run loop must include the ROM input header");
+
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    assert.ok(loop, "rom_run_loop is missing");
+    const loop_body = loop.body.join("\n");
+    const poll_at = loop_body.indexOf("rom_input_poll_key;");
+    const service_at = loop_body.indexOf("rom_run_load_input_image;");
+    const chunk_at = loop_body.indexOf("frame_loop_run_chunk;");
+
+    assert.ok(poll_at >= 0, "the run loop must sample the ROM load key");
+    assert.match(loop_body, /if rom_input_requested == 1 \{/, "the run loop must service a pending request");
+    assert.ok(service_at > poll_at, "a request is serviced by the sample that recorded it");
+    assert.ok(chunk_at > service_at, "the console must not run cycles while a load is pending");
+
+    // The load itself: ask, decode, validate, and only then install and reboot.
+    const load = rom_run.declarations.find((declaration) => declaration.name === "rom_run_load_input_image");
+    assert.ok(load, "rom_run_load_input_image is missing");
+    const load_body = load.body.join("\n");
+    const ask_at = load_body.indexOf("rom_input_ask_for_text;");
+    const parse_at = load_body.indexOf("rom_input_parse_text;");
+    const validate_at = load_body.indexOf("rom_input_validate_image;");
+    const install_at = load_body.indexOf("rom_input_install_image;");
+    const boot_at = load_body.indexOf("rom_run_start;");
+
+    assert.ok(ask_at >= 0 && parse_at > ask_at, "the decode reads the answer the ask block collected");
+    assert.ok(validate_at > parse_at, "the staged image is validated after it is decoded");
+    assert.ok(install_at > validate_at, "nothing is installed before the staged image validates");
+    assert.ok(boot_at > install_at, "the console reboots from the image the install wrote");
+    assert.match(
+        load_body,
+        /if rom_input_error_code == rom_input_error\.none \{/,
+        "the install has to follow the error check, not precede it",
+    );
+    assert.match(load_body, /broadcast "rom image changed";/, "the display sprite must report the outcome");
+    assert.match(load_body, /rom_input_key_held = 1;/, "the press that opened the prompt must not open another");
+
+    const sprite = get_source("main.gs");
+    assert.match(sprite.text, /on "rom image changed" \{/, "the sprite must answer the image-changed broadcast");
+
+    // A rejected paste has to leave the running image alone, so only the install touches the
+    // embedded list; the decode writes its own staging list.
+    const rom_input = get_source("src/rom_input.gs");
+    const parse = rom_input.declarations.find((declaration) => declaration.name === "rom_input_parse_text");
+    const install = rom_input.declarations.find((declaration) => declaration.name === "rom_input_install_image");
+    assert.ok(parse && install, "the decode and the install are missing");
+    assert.ok(!parse.body.join("\n").includes("cartridge_bytes"), "the decode must not write the embedded image");
+    assert.match(install.body.join("\n"), /delete cartridge_bytes;/, "the install replaces the embedded image");
+    assert.match(parse.body.join("\n"), /rom_input_limit\.max_bytes/, "the decode must respect the list limit");
+    assert.match(parse.body.join("\n"), /rom_input_limit\.max_text_chars/, "the decode must bound the text it reads");
+
+    // The load key has to stay out of the pad bindings, or loading a ROM would press a button.
+    const keyboard = get_source("src/keyboard_input.gs");
+    assert.ok(!keyboard.text.includes('key_pressed("q")'), "the ROM load key must not drive a pad button");
 });
 
 test("the ported pen palette literals match the mirrored palette planes", () => {

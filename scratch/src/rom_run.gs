@@ -26,6 +26,14 @@
 # button masks controller.gs reports, and the console still decides when to look at them, the
 # way a game strobes $4016 when it wants the pad. Sampling here also keeps the masks from
 # changing while a chunk runs, so a chunk never sees half of one sample.
+#
+# The same sample point watches the ROM load key, and a press is serviced at the top of the
+# next iteration instead of from a key-press hat: src/rom_input.gs asks the host for a string
+# of decimal byte values, replaces the embedded image with what it describes, and this loop
+# then boots that image through the same path the embedded one took. Servicing the request
+# here, with the console stopped, is what keeps the byte list from being replaced in the
+# middle of a frame, and it leaves the counters and the report starting over from the new
+# image instead of continuing the old one.
 
 %include src/numeric
 %include src/cpu_core
@@ -33,12 +41,16 @@
 %include src/cpu_bus
 %include src/controller
 %include src/keyboard_input
+%include src/rom_input
 %include src/cartridge_loader
 %include src/frame_loop
 %include src/pen_display
 
 # Whether the console booted and the image is running.
 var rom_run_started = 0;
+
+# The image the report names: the embedded one until a runtime load replaces it.
+var rom_run_image_name = "test_rom.nes";
 
 # The frames the console has run since the boot.
 var rom_run_frame_count = 0;
@@ -100,6 +112,14 @@ proc rom_run_start {
 # drawing.
 nowarp proc rom_run_loop {
     forever {
+        # A pending ROM load is serviced before the console runs any more cycles, so the
+        # image cannot be replaced under a frame that is already half run.
+        rom_input_poll_key;
+
+        if rom_input_requested == 1 {
+            rom_run_load_input_image;
+        }
+
         frame_loop_run_chunk;
         rom_run_cycles = rom_run_cycles + frame_loop_chunk_cycles_run;
 
@@ -132,10 +152,43 @@ nowarp proc rom_run_loop {
     }
 }
 
+# Asks the host for a new image, installs it, and boots it. The console is stopped for the
+# whole exchange: the ask block waits, the decode runs, and only an image that validates
+# reaches cartridge_bytes, so a rejected paste leaves the running game exactly as it was. The
+# display sprite reports the outcome from the state text this leaves behind.
+proc rom_run_load_input_image {
+    rom_input_requested = 0;
+
+    # The press that opened the prompt is still down while the host types, so the key stays
+    # marked as held until a sample sees it up again.
+    rom_input_key_held = 1;
+
+    rom_input_ask_for_text;
+
+    if length rom_input_text == 0 {
+        rom_run_state_text = "load cancelled, still running " & rom_run_image_name;
+        broadcast "rom image changed";
+    } else {
+        rom_input_parse_text;
+        rom_input_validate_image;
+
+        if rom_input_error_code == rom_input_error.none {
+            rom_input_install_image;
+            rom_run_image_name = "pasted image";
+            rom_run_start;
+            broadcast "rom image changed";
+        } else {
+            rom_run_state_text = "load failed, " & rom_input_error_text()
+                & " after " & rom_input_byte_count & " bytes";
+            broadcast "rom image changed";
+        }
+    }
+}
+
 # Rebuilds the summary line the display sprite shows.
 proc rom_run_update_status {
     if rom_run_started == 1 {
-        rom_run_state_text = "test_rom.nes frame " & rom_run_frame_count
+        rom_run_state_text = rom_run_image_name & " frame " & rom_run_frame_count
             & " drawn " & rom_run_frames_drawn
             & " cycles " & rom_run_cycles
             & " pc " & cpu_program_counter

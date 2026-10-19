@@ -23,15 +23,15 @@ npm run scratch:vectors
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 1,286 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
+The 1,302 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
 to source fixtures, 588 cross-domain shared-vector checks (587 records plus the generator regression), 257 pinned
-MIT single-step corpus checks covering all 256 opcode bytes, 97 GoboScript port-algorithm comparisons, 26
-GoboScript source-lint checks, eleven GoboScript keyboard-input checks, six standard-controller tests, forty-two focused
+MIT single-step corpus checks covering all 256 opcode bytes, 103 GoboScript port-algorithm comparisons, 29
+GoboScript source-lint checks, eleven GoboScript keyboard-input checks, nine ROM byte-text checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console
 tests, one supplied mapper 4 title-boot test, two NTSC clock tests, four canvas-renderer tests, four browser
-keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests, and
-two browser frame-scheduler tests. Console tracing is opt-in and has a bounded ring-buffer test for
+keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests, two
+browser frame-scheduler tests, and two converter-page tests. Console tracing is opt-in and has a bounded ring-buffer test for
 interrupt-sample, CPU, APU, PPU-dot ordering, and frame-boundary recording. The parser tests cover
 the supplied mapper 4 ROM; iNES mapper, mirroring, battery, PRG RAM defaults, and zero-CHR CHR RAM; NES 2.0
 mapper/submapper, mirroring, battery, extended and
@@ -400,9 +400,22 @@ The shell loads a user-selected iNES file or either bundled ROM using same-origi
 converts the PPU's 6-bit palette-index/emphasis planes to an RGBA `ImageData`, fixes the backing resolution at
 256 by 240, disables canvas smoothing, and fits the image with integer CSS scaling. The 64-color RGB palette
 and emphasis dimming are approximations, not calibrated 2C02 output. An automated HTTP integration test checks
-both bundled ROM routes byte for byte, verifies the page, stylesheet, `HEAD` and unsupported-method handling,
-and confirms path traversal is rejected. A prior smoke check also
+both bundled ROM routes byte for byte, verifies the page, stylesheet, ROM string converter route, `HEAD` and
+unsupported-method handling, and confirms path traversal is rejected. A prior smoke check also
 verified the compiled entry module. No headless browser automation is installed in this environment.
+
+The ROM string converter (`web/rom_string.html`, `src/nes/browser/rom_string_page.ts`) has two tests that
+install a fake `document`, `navigator`, and object-URL pair, import the real page module, and fire the events
+a browser would: a picked file, a dropped file, a separator change, a copy with the clipboard unavailable, a
+saved file name, and a clear. They assert the textarea holds exactly what `encode_rom_text` produces, that the
+iNES header report and the status line follow the image, and that an image past the 200,000-item Scratch list
+cap is refused rather than handed over. `tests/rom-text.test.ts` covers the format itself: all three
+separators round-trip the supplied ROM byte for byte, the newline encoding equals what
+`scripts/generate_goboscript_rom_data.mjs` writes, mixed and repeated separators decode to the same image,
+leading zeros survive, and empty, out-of-range, over-limit, and over-long inputs return typed errors with the
+byte count decoded so far. Three port-algorithm tests compare `GoboscriptRomInput`, the mirror of
+`scratch/src/rom_input.gs`, against that reference over encoded images, corrupted text, and the validation
+and install gates. None of this executes a real browser or a compiled Scratch project.
 
 `NesBrowserFrameScheduler` uses `requestAnimationFrame` and advances at most one bounded console frame per
 callback; it intentionally does not run a catch-up loop when emulation falls behind. The page includes pause,

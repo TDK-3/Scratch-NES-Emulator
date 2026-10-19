@@ -592,6 +592,24 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   tests pass. Compiling, opening, or timing the project is still unverified, no compiled project has seen
   a real key event, and Shift needs TurboWarp because the Scratch website's keyboard device drops modifier
   keys.
+- Runtime ROM string slice (2026-10-19): the port can replace its cartridge at runtime. `scratch/src/rom_input.gs`
+  samples the Q key in the run loop, asks the host for a string of decimal byte values with the built-in ask
+  block, decodes it one character at a time (any non-digit character separates two values, so a paste of
+  `scratch/data/test_rom_bytes.txt` needs no editing), stages the bytes in its own list, and only replaces
+  `cartridge_bytes` once the staged image carries the iNES signature and at least the payload its header
+  declares; `rom_run.gs` then boots the new image through the same path the embedded one uses and broadcasts
+  the outcome for the display sprite to report. Servicing the request inside the run loop instead of from a
+  key-press hat is what keeps the byte list from being swapped under a half-run frame, and the edge test
+  keeps one press from asking twice. `src/nes/cartridge/rom_text.ts` is the reference definition of the
+  format, mirrored by `GoboscriptRomInput` in `tests/support/goboscript_port_algorithms.ts` and compared with
+  it over encoded images and corrupted text, and `web/rom_string.html` plus
+  `src/nes/browser/rom_string_page.ts` (served at `/rom_string.html`) encode a .nes file into it with an
+  iNES header report, a round-trip check, and a refusal for images past the 200,000-item Scratch list cap.
+  New tests: `tests/rom-text.test.ts` (format, separators, error codes, generator agreement), two page tests
+  in `tests/browser-rom-string-page.test.ts` driving the module through a fake DOM, three mirror-parity tests,
+  and a run-loop wiring lint. `npm test` passes 1,302 tests, up from 1,287. Not verified: a real paste in a
+  compiled project,
+  and the decode's wall-clock cost for a large image, since no compiled project exists to time.
 - Pen display slice (2026-10-19): ported the PPU rendering pipeline and the pen presentation. `ppu_2c02.gs`
   gained the reference background fetch/shift cycle, scroll increments and transfers, sprite evaluation at
   dot 65 with the diagonal overflow path, the eight-slot sprite fetch, sprite/background priority, the

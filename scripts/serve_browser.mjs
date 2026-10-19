@@ -12,6 +12,7 @@ const STATIC_FILES = new Map([
     ["/", resolve(PROJECT_ROOT, "web/index.html")],
     ["/index.html", resolve(PROJECT_ROOT, "web/index.html")],
     ["/styles.css", resolve(PROJECT_ROOT, "web/styles.css")],
+    ["/rom_string.html", resolve(PROJECT_ROOT, "web/rom_string.html")],
     ["/roms/test_rom.nes", resolve(PROJECT_ROOT, "test_rom.nes")],
     [
         "/roms/NES_APUTest_SquarePlayer.nes",

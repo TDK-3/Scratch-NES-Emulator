@@ -549,6 +549,171 @@ export function keyboard_poll_masks(held_keys: ReadonlySet<string>): readonly [n
     return [first_pad, second_pad];
 }
 
+/** Mirror of the `rom_input_error` enum in scratch/src/rom_input.gs. */
+export const ROM_INPUT_ERROR = {
+    NONE: 0,
+    EMPTY: 1,
+    INVALID_BYTE: 2,
+    TOO_MANY_BYTES: 3,
+    TOO_LONG: 4,
+    SIGNATURE: 5,
+    TRUNCATED: 6,
+} as const;
+
+/** Mirror of the `rom_input_limit` enum in scratch/src/rom_input.gs. */
+export const ROM_INPUT_LIMIT = {
+    MAX_BYTES: 200_000,
+    MAX_TEXT_CHARS: 1_000_000,
+} as const;
+
+/**
+ * Mirror of scratch/src/rom_input.gs: the decode that rebuilds a cartridge image from a
+ * pasted string of decimal byte values, the header pre-check that decides whether the staged
+ * bytes may replace the running image, and the copy that installs them.
+ *
+ * The ported decode is the runtime half of the format src/nes/cartridge/rom_text.ts defines,
+ * and the converter page encodes with the other half, so tests/rom-text.test.ts compares this
+ * class against that reference over encoded images and corrupted text.
+ *
+ * Scratch lists and strings are both 1-indexed, so the port reads `rom_input_text[cursor]`
+ * and `rom_input_bytes[index]`; this mirror keeps zero-based arrays and converts at the two
+ * places the port indexes, the way GoboscriptControllerPorts does. A letter index past the end
+ * of a Scratch string reads "", which the decode takes as the separator that flushes the last
+ * value; the mirror reproduces that with an empty slice.
+ */
+export class GoboscriptRomInput {
+    /** Mirror of the `rom_input_text` variable, the pasted answer. */
+    rom_input_text = "";
+
+    /** Mirror of the `rom_input_bytes` staging list. */
+    rom_input_bytes: number[] = [];
+
+    /** Mirror of `cartridge_bytes`, the embedded image list the install replaces. */
+    cartridge_bytes: number[] = [];
+
+    /** Mirror of the `rom_input_byte_count`, `rom_input_error_code`, and declared-size globals. */
+    rom_input_byte_count = 0;
+    rom_input_error_code = 0;
+    rom_input_declared_bytes = 0;
+
+    /** Mirror of `proc rom_input_parse_text`. */
+    parse_text(): void {
+        this.rom_input_error_code = ROM_INPUT_ERROR.NONE;
+        this.rom_input_byte_count = 0;
+        this.rom_input_declared_bytes = 0;
+        this.rom_input_bytes = [];
+
+        const text_length = this.rom_input_text.length;
+
+        if (text_length > ROM_INPUT_LIMIT.MAX_TEXT_CHARS) {
+            this.rom_input_error_code = ROM_INPUT_ERROR.TOO_LONG;
+            return;
+        }
+
+        let cursor = 1;
+        let byte_value = 0;
+        let has_digits = 0;
+
+        while (cursor <= text_length + 1 && this.rom_input_error_code === ROM_INPUT_ERROR.NONE) {
+            const character = this.rom_input_text.slice(cursor - 1, cursor);
+            const digit_value = to_number(character);
+
+            if (digit_value > 0) {
+                byte_value = byte_value * 10 + digit_value;
+                has_digits = 1;
+            } else if (character === "0") {
+                byte_value *= 10;
+                has_digits = 1;
+            } else if (has_digits === 1) {
+                has_digits = 0;
+
+                if (byte_value > 255) {
+                    this.rom_input_error_code = ROM_INPUT_ERROR.INVALID_BYTE;
+                } else if (this.rom_input_bytes.length >= ROM_INPUT_LIMIT.MAX_BYTES) {
+                    this.rom_input_error_code = ROM_INPUT_ERROR.TOO_MANY_BYTES;
+                } else {
+                    this.rom_input_bytes.push(byte_value);
+                    this.rom_input_byte_count += 1;
+                    byte_value = 0;
+                }
+            }
+
+            cursor += 1;
+        }
+
+        if (this.rom_input_error_code === ROM_INPUT_ERROR.NONE && this.rom_input_byte_count === 0) {
+            this.rom_input_error_code = ROM_INPUT_ERROR.EMPTY;
+        }
+    }
+
+    /** Mirror of `func rom_input_has_signature()`. */
+    has_signature(): number {
+        return this.staged_byte(1) === 78
+            && this.staged_byte(2) === 69
+            && this.staged_byte(3) === 83
+            && this.staged_byte(4) === 26
+            ? 1
+            : 0;
+    }
+
+    /** Mirror of `proc rom_input_validate_image`. */
+    validate_image(): void {
+        if (this.rom_input_error_code !== ROM_INPUT_ERROR.NONE) {
+            return;
+        }
+
+        if (this.rom_input_byte_count < CARTRIDGE_LIMIT.HEADER_BYTES) {
+            this.rom_input_error_code = ROM_INPUT_ERROR.TRUNCATED;
+            return;
+        }
+
+        if (this.has_signature() === 0) {
+            this.rom_input_error_code = ROM_INPUT_ERROR.SIGNATURE;
+            return;
+        }
+
+        const prg_banks = this.staged_byte(5);
+        const chr_banks = this.staged_byte(6);
+        const flags6 = this.staged_byte(7);
+        const flags7 = this.staged_byte(8);
+        const trainer_bytes = bit_at(flags6, 4) === 1 ? CARTRIDGE_LIMIT.TRAINER_BYTES : 0;
+        const declared_bytes =
+            CARTRIDGE_LIMIT.HEADER_BYTES
+            + prg_banks * CARTRIDGE_LIMIT.PRG_BANK_BYTES
+            + chr_banks * CARTRIDGE_LIMIT.CHR_BANK_BYTES
+            + trainer_bytes;
+
+        this.rom_input_declared_bytes = declared_bytes;
+
+        // A NES 2.0 header encodes its sizes differently; the port leaves those to the
+        // loader's own header parse instead of guessing here.
+        if (bitwise_and(flags7, 12) !== 8) {
+            if (declared_bytes > ROM_INPUT_LIMIT.MAX_BYTES) {
+                this.rom_input_error_code = ROM_INPUT_ERROR.TOO_MANY_BYTES;
+            } else if (this.rom_input_byte_count < declared_bytes) {
+                this.rom_input_error_code = ROM_INPUT_ERROR.TRUNCATED;
+            }
+        }
+    }
+
+    /** Mirror of `proc rom_input_install_image`. */
+    install_image(): void {
+        const staged_bytes = this.rom_input_bytes.length;
+        this.cartridge_bytes = [];
+
+        for (let index = 1; index <= staged_bytes; index += 1) {
+            this.cartridge_bytes.push(this.staged_byte(index));
+        }
+
+        this.rom_input_bytes = [];
+    }
+
+    /** Reads the staged list at the port's 1-based position. */
+    private staged_byte(position: number): number {
+        return this.rom_input_bytes[position - 1] ?? 0;
+    }
+}
+
 /**
  * Mirror of scratch/src/cpu_bus.gs: RAM with mirroring, the open-bus latch with driven
  * masks, the controller window, and the OAM DMA state machine. The ported PPU and APU have

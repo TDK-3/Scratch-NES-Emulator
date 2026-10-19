@@ -436,6 +436,19 @@ separate from TypeScript success.
       `CONTROLLER_BUTTON_MASKS`, the assembled masks against the reference controller's serial report,
       and the sampler's single call site in the run loop. Not verified: real key events in a compiled
       project; Shift needs TurboWarp, because the Scratch website's keyboard device drops modifier keys.
+- [x] Load a cartridge at runtime from a pasted ROM string, and publish the tool that produces it.
+      `scratch/src/rom_input.gs` samples the Q key in the run loop, asks the host for a string of decimal
+      byte values, decodes it one character at a time into a staging list, and only replaces
+      `cartridge_bytes` when the staged bytes carry the iNES signature and the payload their header
+      declares, so a bad paste leaves the running game alone; `rom_run.gs` then reboots the console through
+      the same boot path the embedded image uses and the display sprite reports the outcome. The format is
+      defined by the new `src/nes/cartridge/rom_text.ts`, whose decode the ported scan is mirrored against
+      in `tests/support/goboscript_port_algorithms.ts`, and `web/rom_string.html` (served at
+      `/rom_string.html` by `scripts/serve_browser.mjs`, driven by `src/nes/browser/rom_string_page.ts`)
+      encodes a .nes file into it with a header report, a round-trip check, and an explicit refusal for
+      images past the 200,000-item Scratch list cap. Tests cover the format, the mirror parity, the page
+      through a fake DOM, and the run-loop wiring in the source lint. Not verified: a real paste in a
+      compiled project, and the decode's wall-clock cost for a large image.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,

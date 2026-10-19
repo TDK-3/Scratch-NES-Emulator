@@ -71,7 +71,11 @@ loading, persistence, and known-limitations statement.
   run of equal pixels; the picture starts scaled to fit the stage, and setting the global
   `pen_fit_to_screen` variable to 0 returns it to native 1x pixels. The same project reads the host
   keyboard with the built-in "key () pressed?" reporter and drives both NES pads from it: arrows, Z, X,
-  Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second. None of its sources have been through the compiler, because
+  Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second. Pressing Q while a game runs
+  asks for a pasted string of decimal byte values, rebuilds the embedded byte list from it, and reboots the
+  console from the new image; the decode stages its bytes and only replaces the running image once the
+  iNES signature and the declared payload check out, so a bad paste leaves the game alone. A Scratch list
+  holds 200,000 items, so longer images are rejected rather than loaded truncated. None of its sources have been through the compiler, because
   the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
   source lint for grammar shape and reserved names.
@@ -87,7 +91,10 @@ loading, persistence, and known-limitations statement.
   or documented gaps.
 - A browser preview is available with `npm run browser:dev`. It includes a pixel-preserving 256 by 240 canvas,
   file and bundled-ROM loading, pause/reset/step controls, two keyboard-mapped pads, per-ROM PRG/CHR-NVRAM saves,
-  and a best-effort Web Audio sink with an approximate filter. The palette is an approximation; browser
+  and a best-effort Web Audio sink with an approximate filter. The same server also serves a ROM string
+  converter at `/rom_string.html`, which turns a .nes file into the decimal byte text the GoboScript project
+  loads at runtime, reports the image's iNES header, decodes its own output as a check, and refuses to hand
+  back text the port could not use. The palette is an approximation; browser
   rendering, audio, and storage have not had hands-on validation. The Scratch/TurboWarp scaffold does not yet
   emulate games. Two pinned MIT APU player ROMs
   pass headless pulse/noise controller-to-sample smoke tests; other licensed suites and actual target-runtime
@@ -108,7 +115,9 @@ npm run browser:dev
 
 Open the local URL printed by the server (port 4173); Arena exposes it as a live preview. Use the bundled
 MIT APU smoke ROM to exercise controller-to-sample output, or choose an iNES ROM with the file picker. After
-loading a ROM, click Run; focus moves to the canvas so the documented pad keys control the game.
+loading a ROM, click Run; focus moves to the canvas so the documented pad keys control the game. Open
+`/rom_string.html` on the same server to convert a .nes file into the byte text the Scratch project pastes in
+when you press Q during a game.
 
 `npm test` type-checks the strict TypeScript project and runs the Node test suite. Tests cover ROM parsing,
 CPU register/ALU behavior, reset and stack state, all 13 addressing modes, all official opcodes, IRQ/NMI
@@ -118,7 +127,8 @@ sample-rate/channel output, register/frame-sequencer/mixer behavior, PPU registe
 output, pinned MIT SquarePlayer and NoisePlayer controller-to-APU smoke tests, browser keyboard mapping,
 Web Audio filtering and sink scheduling, canvas conversion/scaling and frame scheduling,
 optional instruction-level traces, byte-exact build-time Scratch ROM asset generation with source-overwrite
-protection, a 587-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
+protection, ROM byte-text encoding and decoding against the format the GoboScript port pastes in, the
+converter page driven through a fake DOM, a 587-record shared TypeScript/GoboScript port-vector set spanning numeric, CPU, bus, mapper, PPU,
 APU, controller, ALU, cartridge-header, CPU addressing, CPU cycle-sequence, opcode-decode, instruction,
 control-loop, NROM board-validation, NROM memory-and-snapshot, cartridge-bus, MMC3 board-memory, MMC3
 scanline-IRQ, and MMC3 NVRAM behavior, and 1,026 selected

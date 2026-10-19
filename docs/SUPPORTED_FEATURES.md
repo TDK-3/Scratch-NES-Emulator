@@ -82,10 +82,25 @@ warnings. TurboWarp persistence and full-console save/load states are not implem
 ## Scratch/TurboWarp ROM deployment
 
 The GoboScript scaffold embeds one selected ROM at build time as a decimal list (`test_rom.nes` by default;
-`--rom` selects another file). The generated project checks the iNES signature, parses the header, validates
-the board, and copies and maps an NROM payload, but it does not yet run the game. It has no runtime ROM file
-picker, controls, rendering, audio, NVRAM persistence, or console save states. A GoboScript compiler and
-successful `.sb3`/TurboWarp validation are still outstanding.
+`--rom` selects another file). The project checks the iNES signature, parses the header, validates the board,
+and copies and maps the NROM or MMC3 payload the header routes to. It has no ROM file picker, audio output,
+NVRAM persistence, or console save states; changing the cartridge at runtime is the pasted-string path below.
+A GoboScript compiler and successful `.sb3`/TurboWarp validation are still outstanding.
+
+The image can also be replaced at runtime from a pasted string. Pressing Q while the run loop is running asks
+for a string of decimal byte values, and `scratch/src/rom_input.gs` decodes it: any run of characters that is
+not a decimal digit separates two values, so the text `scripts/generate_goboscript_rom_data.mjs` writes is
+paste-ready. The decoded bytes are staged in their own list, and only an image that carries the iNES
+signature and at least the payload its header declares replaces `cartridge_bytes`; the run loop then reboots
+the console through the same boot path the embedded image uses, and the display sprite reports the outcome or
+the reason the load was refused. An empty answer cancels and keeps the running game. Two limits are enforced
+rather than silently truncated: a Scratch list holds 200,000 items, and the decode reads at most 1,000,000
+characters. The format is defined by `src/nes/cartridge/rom_text.ts`, and `web/rom_string.html` (served at
+`/rom_string.html` by `npm run browser:dev`) converts a .nes file into it, reports the iNES header, decodes
+its own output as a check, and refuses to produce text the port could not load. A NES 2.0 header's bank
+sizes are left to the loader's own header parse, so a NES 2.0 image is validated when it boots rather than
+when it is pasted. Neither the paste path nor the converter has been exercised in a compiled project, because
+no compiled project exists yet.
 
 What the project does contain today: bit-free numeric and status helpers, thirteen ALU operations, both serial
 controller ports, a CPU-bus subset (RAM mirroring, open-bus latch with driven masks, `$4016`/`$4017`, and a
