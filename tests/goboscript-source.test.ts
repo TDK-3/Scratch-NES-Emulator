@@ -740,6 +740,12 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_read_data_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_read_oam_data_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_cpu_register", mirror: null, reason: "ppu pending mirror" },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_decode_mask_register",
+        mirror: null,
+        reason: "writes the precomputed PPUMASK fields the renderer and dot loop read per pixel",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_control_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_scroll_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_address_register", mirror: null, reason: "ppu pending mirror" },
@@ -1774,6 +1780,54 @@ test("the ported PPU and pen display constants match the reference values", () =
         pen_display.text,
         /^var pen_display_first_y = 179\.25;$/m,
         "the starting first-pixel y is the fit-scale first pixel center",
+    );
+});
+
+test("mask arithmetic divides by mask-plus-one at every ported use site", () => {
+    // GoboScript has no bitwise operators, so `value & MASK` is spelled `value % (MASK + 1)`:
+    // the floored modulo lands on the same bits only when the divisor is the mask plus one.
+    // Dividing by the mask value itself is wrong for at least one input, and a run of those
+    // hid in the renderer's use sites even though the constants test pinned the masks: fine X
+    // came out as value % 7, the 14-bit VRAM access as vram % 16383, the sprite palette bits
+    // as attributes % 3, and the six-bit color index as palette % 63. A modulo whose divisor
+    // is a named mask is wrong by construction, so none may appear anywhere in the port.
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        for (const [index, line] of source.lines.entries()) {
+            for (const match of strip_comments_and_strings(line).matchAll(/%\s*([\w.]+)/g)) {
+                const divisor = match[1] ?? "";
+
+                if (/mask/i.test(divisor)) {
+                    violations.push(`${source.path}:${index + 1}: % ${divisor} divides by a bit mask`);
+                }
+            }
+        }
+    }
+
+    assert.deepEqual(violations, []);
+
+    // The fixed use sites stay pinned so a literal regression is caught even before the
+    // generic scan could see it, and so a refactor keeps the same mask-plus-one arithmetic.
+    const ppu = get_source("src/ppu_2c02.gs");
+    assert.match(ppu.text, /fine_x = \$value % 8;/, "the fine-X field is value & $07");
+    assert.equal(
+        (ppu.text.match(/ppu_vram_address % 16384/g) ?? []).length,
+        4,
+        "the four VRAM access sites mask the address to $3FFF",
+    );
+    assert.match(ppu.text, /ppu_sprite_pixel_attributes % 4/, "the sprite palette field is attributes & $03");
+    assert.match(
+        ppu.text,
+        /ppu_palette_ram\[palette_offset \+ 1\] % 64/,
+        "the six-bit color index is the palette byte & $3F",
+    );
+
+    const apu = get_source("src/apu_2a03.gs");
+    assert.match(
+        apu.text,
+        /triangle_linear_reload_value = \$value % 128;/,
+        "the triangle linear reload field is value & $7F",
     );
 });
 
