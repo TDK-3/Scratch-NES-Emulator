@@ -63,8 +63,6 @@ var FULL_BYTE = 255;
 # ---- length counter table ----
 
 # The 32-entry length counter table the 2A03 uses for the five-bit length
-# index in registers $4003/$4007/$400B/$400F.
-# The 32-entry length counter table the 2A03 uses for the five-bit length
 # index in registers $4003/$4007/$400B/$400F. Populated at reset time.
 list apu_length_table = [0; 32];
 
@@ -578,12 +576,16 @@ proc apu_write_status value {
         dmc_load_dma_delay = -1;
     } elif dmc_bytes_remaining == 0 {
         apu_dmc_restart_sample;
-        dmc_load_dma_delay = 0;
+        # DMC load delay: 3 cycles if CPU cycle is even, 4 if odd (matches TS reference)
+        local load_delay = 3;
+        if (apu_cpu_cycle_count % 2) != 0 {
+            load_delay = 4;
+        }
+        dmc_load_dma_delay = load_delay;
     }
     dmc_irq = 0;
 }
 
-# Writes $4017: frame counter mode and IRQ inhibit.
 # Writes $4008: linear counter reload value and length halt flag.
 proc apu_write_triangle_control value {
     triangle_length_halt = $value // TRIANGLE_CONTROL_LENGTH_HALT;
@@ -658,6 +660,7 @@ proc apu_write_dmc_sample_length value {
     dmc_sample_length_register = $value;
 }
 
+# Writes $4017: frame counter mode and IRQ inhibit.
 proc apu_write_frame_counter value {
     apu_five_step_mode = bitwise_and($value, FIVE_STEP_MODE) != 0;
     apu_frame_irq_inhibited = bitwise_and($value, FRAME_IRQ_INHIBIT) != 0;
