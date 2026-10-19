@@ -192,7 +192,7 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
     assert.equal(output.value, encode_rom_text(supplied, "newline").text);
     assert.equal(element("rom-name").textContent, "test_rom.nes");
     assert.equal(element("header-mapper").textContent, "4");
-    assert.match(element("header-note").textContent, /supports this mapper/);
+    assert.match(element("header-note").textContent, /routes this mapper/);
 
     // The clipboard is unavailable here, so the page selects the text and says so.
     dispatch("copy-rom-text", "click");
@@ -248,4 +248,20 @@ test("the converter page reports an image the Scratch port cannot use", async ()
     assert.match(status.textContent, /over the 200,000 a Scratch list holds/);
     assert.equal(status.dataset.state, "error");
     assert.match(element("header-note").textContent, /The header does not parse/);
+
+    // A NES 2.0 header with a submapper the port has no board for converts, but the report
+    // says the port will reject it rather than implying every mapper 4 image loads.
+    const submapper_header = Uint8Array.from([
+        0x4e, 0x45, 0x53, 0x1a, 2, 1, 0x40, 0x08, 0x30, 0, 0, 0, 0, 0, 0, 0,
+    ]);
+    const submapper_image = new Uint8Array(16 + 32_768 + 8_192);
+    submapper_image.set(submapper_header, 0);
+    element("rom-file").files = { item: () => new File([submapper_image], "submapper.nes") };
+    dispatch("rom-file", "change");
+    await settle();
+
+    assert.equal(element("header-format").textContent, "NES 2.0");
+    assert.equal(element("header-mapper").textContent, "4 submapper 3");
+    assert.match(element("header-note").textContent, /rejects this mapper or submapper/);
+    assert.match(status.textContent, /decoded back unchanged/);
 });

@@ -98,7 +98,12 @@ async function convert_file(file: File): Promise<void> {
 /** Encodes an image, reports its header, and decodes the text back as a check. */
 function convert_bytes(rom_image: Uint8Array, name: string): void {
     if (rom_image.byteLength === 0) {
+        // Drop whatever the previous conversion left behind, so the output cannot be copied
+        // as if it described this file.
+        output_area.value = "";
+        loaded_rom_name = "";
         set_status(`${name} is empty, so there is nothing to convert.`, true);
+        update_buttons();
         return;
     }
 
@@ -175,9 +180,9 @@ function report_header(rom_image: Uint8Array): void {
     header_mirroring.textContent = rom.mirroring;
     header_battery.textContent = rom.battery_backed ? "yes" : "no";
     set_header_note(
-        rom.mapper_id === 0 || rom.mapper_id === 4
-            ? "The Scratch port supports this mapper and submapper."
-            : "The Scratch port rejects this mapper; the TypeScript emulator may still run it.",
+        (rom.mapper_id === 0 || rom.mapper_id === 4) && rom.submapper === 0
+            ? "The Scratch port routes this mapper and submapper to a board."
+            : "The Scratch port rejects this mapper or submapper; the TypeScript emulator may still run it.",
     );
 }
 

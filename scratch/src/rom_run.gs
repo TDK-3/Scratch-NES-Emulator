@@ -174,6 +174,11 @@ proc rom_run_load_input_image {
 
         if rom_input_error_code == rom_input_error.none {
             rom_input_install_image;
+
+            # The staged bytes are in cartridge_bytes now; dropping the text frees the copy
+            # the host pasted, which is the largest string this project ever holds. A refused
+            # paste keeps it, so its variable monitor still shows what was rejected.
+            rom_input_text = "";
             rom_run_image_name = "pasted image";
             rom_run_start;
             broadcast "rom image changed";
