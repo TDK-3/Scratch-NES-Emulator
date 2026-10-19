@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
+import { decode_rom_text, encode_rom_text } from "../src/nes/cartridge/rom_text.js";
 import { add_with_carry, subtract_with_carry } from "../src/nes/cpu/alu.js";
 import { Cpu2A03 } from "../src/nes/cpu/cpu_2a03.js";
 import { FakeCpuBus } from "./support/FakeCpuBus.js";
@@ -3571,4 +3574,147 @@ test("pen display geometry centers every pixel band on the stage origin", () => 
     assert.equal(ported.pen_display_first_y_for(1), 119, "native goto y keeps the 1x mapping");
     assert.equal(ported.pen_display_first_x_for(1.5), -191.25, "fit goto x centers the 384-wide picture");
     assert.equal(ported.pen_display_first_y_for(1.5), 179.25, "fit goto y centers the 360-tall picture");
+});
+
+const SUPPLIED_ROM_IMAGE = Uint8Array.from(
+    readFileSync(fileURLToPath(new URL("../test_rom.nes", import.meta.url))),
+);
+
+/** The reference decoder's string codes and the numeric codes the port reports for them. */
+const ROM_TEXT_ERROR_CODES: Readonly<Record<string, number>> = {
+    empty: ported.ROM_INPUT_ERROR.EMPTY,
+    "invalid-byte": ported.ROM_INPUT_ERROR.INVALID_BYTE,
+    "too-many-bytes": ported.ROM_INPUT_ERROR.TOO_MANY_BYTES,
+    "too-long": ported.ROM_INPUT_ERROR.TOO_LONG,
+};
+
+test("the mirrored ROM text decode matches the reference decoder", () => {
+    // scratch/src/rom_input.gs rebuilds a cartridge image from a pasted string, and the
+    // converter page encodes that string with the reference module, so the two have to agree
+    // on every byte. The mirror is the ported scan; this compares it with the reference over
+    // the same text the page produces.
+    const images = [
+        Uint8Array.from([0x4e, 0x45, 0x53, 0x1a, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 128, 7]),
+        Uint8Array.from({ length: 256 }, (_, index) => index),
+        Uint8Array.from({ length: 4_096 }, (_, index) => (index * 37 + 11) % 256),
+        SUPPLIED_ROM_IMAGE,
+    ];
+
+    for (const image of images) {
+        for (const separator of ["space", "newline", "comma"] as const) {
+            const text = encode_rom_text(image, separator).text;
+            const reference = decode_rom_text(text);
+            const decoder = new ported.GoboscriptRomInput();
+            decoder.rom_input_text = text;
+            decoder.parse_text();
+
+            assert.equal(reference.ok, true, `the reference must decode ${image.byteLength} bytes`);
+            assert.equal(
+                decoder.rom_input_error_code,
+                ported.ROM_INPUT_ERROR.NONE,
+                `the port must decode ${image.byteLength} bytes with ${separator} separators`,
+            );
+            assert.equal(decoder.rom_input_byte_count, image.byteLength);
+            assert.deepEqual(decoder.rom_input_bytes, Array.from(image));
+        }
+    }
+});
+
+test("the mirrored ROM text decode stops where the reference decoder stops", () => {
+    const failures: readonly (readonly [string, string])[] = [
+        ["", "empty"],
+        ["  ,\n;", "empty"],
+        ["78 69 256 26", "invalid-byte"],
+        ["78 69 83 26 0 255 999", "invalid-byte"],
+        ["x".repeat(ported.ROM_INPUT_LIMIT.MAX_TEXT_CHARS + 1), "too-long"],
+        [`0 ${"0 ".repeat(ported.ROM_INPUT_LIMIT.MAX_BYTES)}`.trim(), "too-many-bytes"],
+    ];
+
+    for (const [text, expected_code] of failures) {
+        const reference = decode_rom_text(text);
+        const decoder = new ported.GoboscriptRomInput();
+        decoder.rom_input_text = text;
+        decoder.parse_text();
+
+        assert.equal(reference.ok, false, `the reference must reject ${text.length} characters of input`);
+        assert.equal(ROM_TEXT_ERROR_CODES[expected_code] !== undefined, true, `${expected_code} is mapped`);
+        assert.equal(
+            decoder.rom_input_error_code,
+            ROM_TEXT_ERROR_CODES[expected_code],
+            `the port must report ${expected_code}`,
+        );
+
+        if (!reference.ok) {
+            assert.equal(decoder.rom_input_byte_count, reference.error.byte_count, "both stop at the same byte");
+            assert.equal(decoder.rom_input_bytes.length, reference.error.byte_count);
+        }
+    }
+});
+
+test("the mirrored image validation gates the install on a complete iNES image", () => {
+    const ines_1_0_header = [0x4e, 0x45, 0x53, 0x1a, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const declared_bytes = 16 + 2 * 16_384 + 1 * 8_192;
+    const complete = [...ines_1_0_header, ...new Array<number>(declared_bytes - 16).fill(0xa5)];
+
+    const accepted = new ported.GoboscriptRomInput();
+    accepted.rom_input_bytes = [...complete];
+    accepted.rom_input_byte_count = complete.length;
+    accepted.validate_image();
+
+    assert.equal(accepted.has_signature(), 1);
+    assert.equal(accepted.rom_input_error_code, ported.ROM_INPUT_ERROR.NONE);
+    assert.equal(accepted.rom_input_declared_bytes, declared_bytes);
+
+    accepted.install_image();
+    assert.deepEqual(accepted.cartridge_bytes, complete, "the install replaces the embedded image");
+    assert.deepEqual(accepted.rom_input_bytes, [], "the install empties the staging list");
+
+    const rejected: readonly (readonly [string, number[], number])[] = [
+        ["a truncated payload", complete.slice(0, declared_bytes - 1), ported.ROM_INPUT_ERROR.TRUNCATED],
+        ["a missing signature", [0x4d, 0x45, 0x53, 0x1a, ...complete.slice(4)], ported.ROM_INPUT_ERROR.SIGNATURE],
+        ["a short header", complete.slice(0, 15), ported.ROM_INPUT_ERROR.TRUNCATED],
+        ["no bytes at all", [], ported.ROM_INPUT_ERROR.TRUNCATED],
+    ];
+
+    for (const [description, staged, expected_code] of rejected) {
+        const decoder = new ported.GoboscriptRomInput();
+        decoder.cartridge_bytes = [...complete];
+        decoder.rom_input_bytes = [...staged];
+        decoder.rom_input_byte_count = staged.length;
+        decoder.validate_image();
+
+        assert.equal(decoder.rom_input_error_code, expected_code, description);
+    }
+
+    // A trainer is 512 bytes of payload the header's flag 6 bit 2 declares.
+    const with_trainer = new ported.GoboscriptRomInput();
+    const trainer_header = [...ines_1_0_header];
+    trainer_header[6] = 4;
+    with_trainer.rom_input_bytes = [...trainer_header, ...new Array<number>(declared_bytes + 512 - 16).fill(0)];
+    with_trainer.rom_input_byte_count = with_trainer.rom_input_bytes.length;
+    with_trainer.validate_image();
+
+    assert.equal(with_trainer.rom_input_error_code, ported.ROM_INPUT_ERROR.NONE, "a trainer is payload too");
+    assert.equal(with_trainer.rom_input_declared_bytes, declared_bytes + 512);
+
+    // A NES 2.0 header encodes its sizes differently, so the pre-check leaves those to the
+    // loader's own header parse instead of guessing from the bank counts.
+    const nes_2_0 = new ported.GoboscriptRomInput();
+    const nes2_header = [...ines_1_0_header];
+    nes2_header[7] = 8;
+    nes_2_0.rom_input_bytes = [...nes2_header, 1, 2, 3];
+    nes_2_0.rom_input_byte_count = nes_2_0.rom_input_bytes.length;
+    nes_2_0.validate_image();
+
+    assert.equal(nes_2_0.rom_input_error_code, ported.ROM_INPUT_ERROR.NONE, "a NES 2.0 size is the loader's call");
+    assert.equal(nes_2_0.rom_input_declared_bytes, declared_bytes);
+
+    // A decode that already failed stays failed: the validation adds no second opinion.
+    const failed = new ported.GoboscriptRomInput();
+    failed.rom_input_bytes = [...complete];
+    failed.rom_input_byte_count = complete.length;
+    failed.rom_input_error_code = ported.ROM_INPUT_ERROR.INVALID_BYTE;
+    failed.validate_image();
+
+    assert.equal(failed.rom_input_error_code, ported.ROM_INPUT_ERROR.INVALID_BYTE);
 });

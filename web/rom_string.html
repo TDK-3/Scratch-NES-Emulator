@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#111827">
+        <title>ROM String Converter - Scratch NES Emulator</title>
+        <link rel="stylesheet" href="/styles.css">
+    </head>
+    <body>
+        <main class="app-shell">
+            <header class="app-header">
+                <div>
+                    <p class="eyebrow">Scratch project input</p>
+                    <h1>ROM String Converter</h1>
+                    <p class="intro">
+                        Turn a .nes file into the decimal byte text the GoboScript project loads at
+                        runtime. Nothing leaves your browser.
+                    </p>
+                </div>
+                <p id="convert-status" class="status" role="status" aria-live="polite">No ROM file loaded.</p>
+            </header>
+
+            <div class="workspace">
+                <section class="screen-panel convert-panel" aria-label="Byte text output">
+                    <div id="rom-drop-zone" class="drop-zone" data-state="idle">
+                        <p class="drop-zone-title">Drop a .nes file here</p>
+                        <p class="drop-zone-note">or use the file picker on the right</p>
+                    </div>
+
+                    <label class="text-output-label" for="rom-text-output">Byte text</label>
+                    <textarea
+                        id="rom-text-output"
+                        class="text-output"
+                        readonly
+                        spellcheck="false"
+                        aria-label="Decimal byte text for the Scratch project"></textarea>
+
+                    <div class="button-grid">
+                        <button id="copy-rom-text" class="button button-primary" type="button" disabled>Copy text</button>
+                        <button id="download-rom-text" class="button button-secondary" type="button" disabled>Save .txt</button>
+                    </div>
+                </section>
+
+                <aside class="control-panel" aria-label="Converter controls">
+                    <section class="control-section">
+                        <h2>Cartridge</h2>
+                        <input id="rom-file" class="file-input" type="file" accept=".nes,application/octet-stream">
+                        <label class="file-picker" for="rom-file">Choose an iNES ROM</label>
+                        <label class="select-label" for="separator-select">Separator</label>
+                        <select id="separator-select" class="select-input">
+                            <option value="space" selected>Space</option>
+                            <option value="newline">Newline</option>
+                            <option value="comma">Comma</option>
+                        </select>
+                        <p id="separator-note" class="control-note"></p>
+                        <div class="button-stack">
+                            <button id="clear-rom" class="button button-secondary" type="button" disabled>Clear</button>
+                        </div>
+                    </section>
+
+                    <section class="control-section">
+                        <h2>Converted image</h2>
+                        <dl class="stats-list">
+                            <div><dt>File</dt><dd id="rom-name">No ROM loaded</dd></div>
+                            <div><dt>ROM bytes</dt><dd id="rom-bytes">-</dd></div>
+                            <div><dt>Text characters</dt><dd id="rom-text-chars">-</dd></div>
+                            <div><dt>Scratch list items</dt><dd id="rom-list-items">-</dd></div>
+                        </dl>
+                    </section>
+
+                    <section class="control-section">
+                        <h2>iNES header</h2>
+                        <dl class="stats-list">
+                            <div><dt>Format</dt><dd id="header-format">-</dd></div>
+                            <div><dt>Mapper</dt><dd id="header-mapper">-</dd></div>
+                            <div><dt>PRG ROM</dt><dd id="header-prg">-</dd></div>
+                            <div><dt>CHR</dt><dd id="header-chr">-</dd></div>
+                            <div><dt>Mirroring</dt><dd id="header-mirroring">-</dd></div>
+                            <div><dt>Battery backed</dt><dd id="header-battery">-</dd></div>
+                        </dl>
+                        <p id="header-note" class="control-note">Load a .nes file to read its header.</p>
+                    </section>
+
+                    <section class="control-section input-section">
+                        <h2>Loading it in Scratch</h2>
+                        <ol class="hint-list">
+                            <li>Copy the byte text, or save it and open it in a text editor.</li>
+                            <li>Start the Scratch project and wait for a game to run.</li>
+                            <li>Press <kbd>Q</kbd>. The stage asks for the ROM byte values.</li>
+                            <li>Paste the text, press Enter, and the console reboots from it.</li>
+                        </ol>
+                        <p>
+                            An empty answer cancels and keeps the running game. Only an image with the
+                            iNES signature and its full declared payload replaces the current one, and a
+                            Scratch list holds 200,000 items, so larger images are rejected.
+                        </p>
+                        <p><a class="page-link" href="/">Open the TypeScript emulator preview</a></p>
+                    </section>
+                </aside>
+            </div>
+
+            <footer class="app-footer">
+                <p>
+                    The text is decimal byte values, separated by any run of characters that is not a
+                    digit; the port decodes the same format
+                    <code>scripts/generate_goboscript_rom_data.mjs</code> writes. Convert only images you
+                    have the rights to share.
+                </p>
+            </footer>
+        </main>
+        <script type="module" src="/build/nes/browser/rom_string_page.js"></script>
+    </body>
+</html>

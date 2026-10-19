@@ -46,6 +46,12 @@ on "rom run started" {
     say rom_run_state_text;
 }
 
+# The Stage loads a pasted image at the run loop's request, so it reports the outcome the
+# same way: the sprite says the state text the boot or the failed load left behind.
+on "rom image changed" {
+    say rom_run_state_text;
+}
+
 on "draw frame" {
     pen_draw_frame;
 }

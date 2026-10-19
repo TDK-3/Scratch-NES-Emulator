@@ -35,11 +35,13 @@
                 frame_scheduler.ts
                 keyboard_input.ts
                 main.ts
+                rom_string_page.ts
             cartridge/
                 ines.ts
                 mapper.ts
                 mapper_000.ts
                 mapper_004.ts
+                rom_text.ts
             core/
                 console_trace.ts
                 nes_console.ts
@@ -61,6 +63,7 @@
                 ppu_bus.ts
     web/
         index.html
+        rom_string.html
         styles.css
     tests/
         apu-2a03.test.ts
@@ -76,6 +79,7 @@
         browser-frame-scheduler.test.ts
         browser-keyboard-input.test.ts
         browser-renderer.test.ts
+        browser-rom-string-page.test.ts
         browser-server.test.ts
         controller.test.ts
         cpu-2a03.test.ts
@@ -121,6 +125,7 @@
         ppu-2c02.test.ts
         ppu-bus.test.ts
         ppu-rendering.test.ts
+        rom-text.test.ts
         scratch-rom-assets.test.ts
         shared-port-vectors.test.ts
         support/
@@ -174,6 +179,7 @@
             numeric.gs  bit-free byte, word, and bitwise helpers
             ppu_2c02.gs  PPU registers, timing, and the framebuffer rendering pipeline
             ppu_bus.gs  pattern, nametable, palette, and OAM routing with mapper observation
+            rom_input.gs  runtime ROM text decode, image validation, and install
             rom_loader.gs  generated ROM list, header load, and signature check
             shared_vectors.gs  generated port-vector list
             vector_selftest.gs  walks the vector list, replays it, and reports a summary
@@ -228,7 +234,9 @@ mono `Float32Array` blocks from the 1,789,773 Hz NTSC clock, defaulting to 44.1 
 browser/runtime audio APIs. `src/nes/input/controller.ts` provides two standard serial controller ports with
 button-state setters, strobe/latch behavior, NES button order, and D0-only reads. `NesConsole` supplies CPU/APU
 clocks and connects APU IRQs to the CPU. `src/nes/browser/` adapts those inputs and APU samples to browser
-keyboard, filtered audio blocks, and Web Audio APIs. ROM-level timing validation, calibrated analog behavior,
+keyboard, filtered audio blocks, and Web Audio APIs, and its `rom_string_page.ts` drives the ROM string
+converter page (`web/rom_string.html`) from `src/nes/cartridge/rom_text.ts`, the host-independent encoder and
+decoder for the decimal byte text the GoboScript port loads at runtime. ROM-level timing validation, calibrated analog behavior,
 live browser playback, and the separate TurboWarp adapters remain future work. Four Score and Zapper are deferred
 but planned for full NES support; mapper
 expansion audio will be added with each compatible mapper. Famicom-only expansion-port devices are outside the
@@ -258,6 +266,11 @@ toolchain needs Cargo and rustc, which are unavailable here.
 - `src/keyboard_input.gs` holds the host keyboard table: the sixteen Scratch key names the two pads are
   driven from, and the sampler that turns the keys held down into the two button masks `controller.gs`
   reports. The run loop calls it once per chunk of emulated cycles.
+- `src/rom_input.gs` holds the runtime ROM load path: the load-key edge sample, the ask/answer exchange, the
+  character-by-character decode of a pasted decimal byte string into a staging list, the iNES signature and
+  declared-payload check that gates the swap, and the copy that replaces `cartridge_bytes`. Its decode is
+  mirrored in `tests/support/goboscript_port_algorithms.ts` and compared with
+  `src/nes/cartridge/rom_text.ts`, which defines the format.
 - `src/numeric.gs` holds the bit-free byte, word, and bitwise helpers, plus the `cpu_flag` enum. GoboScript
   has no bitwise operators, so masks and shifts are floor division and modulo, and `src/bitwise_tables.gs`
   fills the 256-entry nibble AND table the helpers read instead of walking a bit loop.
