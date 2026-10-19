@@ -1322,6 +1322,7 @@ func apu_pulse_sweep_target(channel) {
     local shift = 0;
     local negate = 0;
 
+    # $channel uses $ because it is a function parameter
     if $channel == 1 {
         timer = pulse1_timer_period;
         shift = pulse1_sweep_shift;
@@ -1332,7 +1333,8 @@ func apu_pulse_sweep_target(channel) {
         negate = pulse2_sweep_negate;
     }
 
-    local change = timer // apu_power_of_two($shift);
+    # shift and timer do not use $ because they are local variables
+    local change = timer // apu_power_of_two(shift);
 
     if negate == 1 {
         if $channel == 1 {
@@ -1374,11 +1376,11 @@ func apu_sweep_target_would_oor(timer_period, sweep_shift) {
 
 # ---- power of two helper ----
 
-# Computes 2^exponent using integer multiplication in a loop, since
-# GoboScript has no shift operator.
+# Computes 2^exponent using integer multiplication in a loop
 func apu_power_of_two(exponent) {
     local result = 1;
 
+    # $exponent uses $ because it is a function parameter
     repeat $exponent {
         result = result * 2;
     }
