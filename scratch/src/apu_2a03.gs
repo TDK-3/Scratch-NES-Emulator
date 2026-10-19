@@ -1,12 +1,13 @@
-# APU 2A03 register dispatch, frame sequencer, and pulse channel for the
-# GoboScript port.
+# APU 2A03 register dispatch, frame sequencer, and pulse/triangle channels
+# for the GoboScript port.
 #
-# Ports the parts of src/nes/apu/apu_2a03.ts and src/nes/apu/pulse_channel.ts
-# that the current shared vectors cover: the register write dispatch for
-# $4000-$4013, $4015, and $4017, the $4015 status read, both pulse channels
-# (control, sweep, timer, length counter, envelope, output), and the four-step
-# and five-step frame sequencer. Triangle, noise, and DMC channels are not
-# ported yet.
+# Ports the parts of src/nes/apu/apu_2a03.ts, src/nes/apu/pulse_channel.ts,
+# and src/nes/apu/triangle_channel.ts that the current shared vectors cover:
+# the register write dispatch for $4000-$4013, $4015, and $4017, the $4015
+# status read, both pulse channels (control, sweep, timer, length counter,
+# envelope, output), the triangle channel (linear counter, timer, sequencer),
+# and the four-step and five-step frame sequencer. Noise and DMC channels
+# are not ported yet.
 
 %include src/numeric
 
@@ -118,6 +119,33 @@ var pulse2_envelope_start = 0;
 var pulse2_envelope_divider = 0;
 var pulse2_envelope_decay = 0;
 
+# ---- triangle channel constants ----
+
+var TRIANGLE_CONTROL_LENGTH_HALT = 128;
+var TRIANGLE_LINEAR_RELOAD_MASK = 127;
+var TRIANGLE_TIMER_LOW_MASK = 255;
+var TRIANGLE_TIMER_HIGH_MASK = 7;
+var TRIANGLE_TIMER_HIGH_SHIFT = 8;
+var TRIANGLE_TIMER_MAX = 2047;
+var TRIANGLE_TIMER_MIN = 2;
+var TRIANGLE_SEQUENCE_LENGTH = 32;
+
+# Triangle waveform sequence: 0-15 up, 15-0 down
+# Initialized in apu_reset to avoid line length limits.
+list apu_triangle_sequence = [0; 32];
+
+# ---- triangle channel state ----
+
+var triangle_enabled = 0;
+var triangle_length_halt = 0;
+var triangle_linear_reload_value = 0;
+var triangle_linear_counter = 0;
+var triangle_linear_reload_flag = 0;
+var triangle_timer_period = 0;
+var triangle_timer_counter = 0;
+var triangle_sequence_step = 0;
+var triangle_length_counter = 0;
+
 # ---- frame sequencer state ----
 
 var apu_cpu_cycle_count = 0;
@@ -182,6 +210,42 @@ proc apu_reset {
         apu_length_table[32] = 30;
     }
 
+    # Populate the triangle sequence if not already done.
+    if to_number(apu_triangle_sequence[1]) == 0 {
+        apu_triangle_sequence[1] = 0;
+        apu_triangle_sequence[2] = 1;
+        apu_triangle_sequence[3] = 2;
+        apu_triangle_sequence[4] = 3;
+        apu_triangle_sequence[5] = 4;
+        apu_triangle_sequence[6] = 5;
+        apu_triangle_sequence[7] = 6;
+        apu_triangle_sequence[8] = 7;
+        apu_triangle_sequence[9] = 8;
+        apu_triangle_sequence[10] = 9;
+        apu_triangle_sequence[11] = 10;
+        apu_triangle_sequence[12] = 11;
+        apu_triangle_sequence[13] = 12;
+        apu_triangle_sequence[14] = 13;
+        apu_triangle_sequence[15] = 14;
+        apu_triangle_sequence[16] = 15;
+        apu_triangle_sequence[17] = 15;
+        apu_triangle_sequence[18] = 14;
+        apu_triangle_sequence[19] = 13;
+        apu_triangle_sequence[20] = 12;
+        apu_triangle_sequence[21] = 11;
+        apu_triangle_sequence[22] = 10;
+        apu_triangle_sequence[23] = 9;
+        apu_triangle_sequence[24] = 8;
+        apu_triangle_sequence[25] = 7;
+        apu_triangle_sequence[26] = 6;
+        apu_triangle_sequence[27] = 5;
+        apu_triangle_sequence[28] = 4;
+        apu_triangle_sequence[29] = 3;
+        apu_triangle_sequence[30] = 2;
+        apu_triangle_sequence[31] = 1;
+        apu_triangle_sequence[32] = 0;
+    }
+
     pulse1_enabled = 0;
     pulse1_control = 0;
     pulse1_sweep_enabled = 0;
@@ -212,6 +276,15 @@ proc apu_reset {
     pulse2_envelope_start = 0;
     pulse2_envelope_divider = 0;
     pulse2_envelope_decay = 0;
+    triangle_enabled = 0;
+    triangle_length_halt = 0;
+    triangle_linear_reload_value = 0;
+    triangle_linear_counter = 0;
+    triangle_linear_reload_flag = 0;
+    triangle_timer_period = 0;
+    triangle_timer_counter = 0;
+    triangle_sequence_step = 0;
+    triangle_length_counter = 0;
     apu_cpu_cycle_count = 0;
     apu_pulse_timer_phase = 0;
     apu_frame_cycle_count = 0;
@@ -233,12 +306,18 @@ proc apu_write_register address, value {
         apu_write_pulse 1, addr - APU_PULSE_ONE_BASE, byte_value;
     } elif addr >= APU_PULSE_TWO_BASE and addr < APU_PULSE_TWO_BASE + APU_PULSE_WINDOW {
         apu_write_pulse 2, addr - APU_PULSE_TWO_BASE, byte_value;
+    } elif addr == APU_TRI_CONTROL {
+        apu_write_triangle_control byte_value;
+    } elif addr == APU_TRI_TIMER_LOW {
+        apu_write_triangle_timer_low byte_value;
+    } elif addr == APU_TRI_TIMER_HIGH {
+        apu_write_triangle_timer_high byte_value;
     } elif addr == APU_STATUS {
         apu_write_status byte_value;
     } elif addr == APU_FRAME_COUNTER {
         apu_write_frame_counter byte_value;
     }
-    # Triangle, noise, and DMC registers are latched and dropped for now.
+    # Noise and DMC registers are latched and dropped for now.
 }
 
 # Writes one pulse channel register (index 0-3 within the four-byte window).
@@ -312,6 +391,7 @@ proc apu_write_pulse_sweep channel, value {
 proc apu_write_status value {
     local p1 = bitwise_and($value, PULSE_ONE_ENABLE) != 0;
     local p2 = bitwise_and($value, PULSE_TWO_ENABLE) != 0;
+    local tri = bitwise_and($value, TRIANGLE_ENABLE) != 0;
 
     pulse1_enabled = p1;
 
@@ -324,10 +404,39 @@ proc apu_write_status value {
     if p2 == 0 {
         pulse2_length = 0;
     }
-    # Triangle, noise, DMC enable bits are latched but not yet ported.
+
+    triangle_enabled = tri;
+
+    if tri == 0 {
+        triangle_length_counter = 0;
+    }
+    # Noise, DMC enable bits are latched but not yet ported.
 }
 
 # Writes $4017: frame counter mode and IRQ inhibit.
+# Writes $4008: linear counter reload value and length halt flag.
+proc apu_write_triangle_control value {
+    triangle_length_halt = $value // TRIANGLE_CONTROL_LENGTH_HALT;
+    triangle_linear_reload_value = $value % TRIANGLE_LINEAR_RELOAD_MASK;
+}
+
+# Writes $400A: timer low 8 bits.
+proc apu_write_triangle_timer_low value {
+    triangle_timer_period = (triangle_timer_period - (triangle_timer_period % 256)) + $value;
+}
+
+# Writes $400B: timer high 3 bits, length index (5 bits), and sets linear reload flag.
+proc apu_write_triangle_timer_high value {
+    local timer_high = ($value % 8) * 256;
+    triangle_timer_period = (triangle_timer_period % 256) + timer_high;
+    triangle_linear_reload_flag = 1;
+
+    if triangle_enabled == 1 {
+        local length_index = $value // 8;
+        triangle_length_counter = to_number(apu_length_table[length_index + 1]);
+    }
+}
+
 proc apu_write_frame_counter value {
     apu_five_step_mode = bitwise_and($value, FIVE_STEP_MODE) != 0;
     apu_frame_irq_inhibited = bitwise_and($value, FRAME_IRQ_INHIBIT) != 0;
@@ -358,10 +467,14 @@ proc apu_read_status {
         value = value + PULSE_TWO_ENABLE;
     }
 
+    if triangle_length_counter > 0 {
+        value = value + TRIANGLE_ENABLE;
+    }
+
     if apu_frame_irq == 1 {
         value = value + FRAME_IRQ_STATUS;
     }
-    # Triangle, noise, DMC status bits are not ported yet.
+    # Noise, DMC status bits are not ported yet.
 
     apu_status_value = value;
     apu_status_driven_mask = APU_STATUS_DRIVEN;
@@ -380,6 +493,7 @@ proc apu_clock_cpu_cycle {
         apu_clock_pulse_timer 2;
     }
 
+    apu_clock_triangle_timer;
     apu_clock_frame_sequencer;
 
     if apu_frame_reset_delay >= 0 {
@@ -490,12 +604,14 @@ proc apu_clock_frame_sequencer {
 proc apu_clock_quarter_frame {
     apu_clock_pulse_envelope 1;
     apu_clock_pulse_envelope 2;
+    apu_clock_triangle_linear_counter;
 }
 
 # Half-frame event: clocks length counters and sweep.
 proc apu_clock_half_frame {
     apu_clock_pulse_half_frame 1;
     apu_clock_pulse_half_frame 2;
+    apu_clock_triangle_half_frame;
 }
 
 # Clocks one pulse channel's envelope.
@@ -591,6 +707,49 @@ proc apu_clock_pulse_sweep channel {
     }
 }
 
+# ---- triangle channel clocking ----
+
+# Clocks the triangle timer every CPU cycle. When the timer reaches zero, it reloads
+# and advances the sequence step if both the length counter and linear counter are > 0
+# and the timer period is >= 2.
+proc apu_clock_triangle_timer {
+    if triangle_timer_counter == 0 {
+        triangle_timer_counter = triangle_timer_period;
+
+        # Advance sequence only if timer period >= 2 and both counters are active
+        if triangle_timer_period >= TRIANGLE_TIMER_MIN {
+            if triangle_length_counter > 0 and triangle_linear_counter > 0 {
+                triangle_sequence_step = (triangle_sequence_step + 1) % TRIANGLE_SEQUENCE_LENGTH;
+            }
+        }
+    } else {
+        triangle_timer_counter = triangle_timer_counter - 1;
+    }
+}
+
+# Clocks the triangle linear counter on a quarter-frame event.
+proc apu_clock_triangle_linear_counter {
+    if triangle_linear_reload_flag == 1 {
+        triangle_linear_counter = triangle_linear_reload_value;
+    } else if triangle_linear_counter > 0 {
+        triangle_linear_counter = triangle_linear_counter - 1;
+    }
+
+    # Clear the reload flag unless the length halt bit is set
+    if triangle_length_halt == 0 {
+        triangle_linear_reload_flag = 0;
+    }
+}
+
+# Clocks the triangle length counter on a half-frame event.
+proc apu_clock_triangle_half_frame {
+    if triangle_length_counter > 0 {
+        if triangle_length_halt == 0 {
+            triangle_length_counter = triangle_length_counter - 1;
+        }
+    }
+}
+
 # ---- output getters ----
 
 # Returns the pulse output for one channel (0-15).
@@ -665,6 +824,16 @@ func apu_get_pulse_length(channel) {
     }
 
     return pulse2_length;
+}
+
+# Returns the triangle output (0-15) from the waveform sequence.
+func apu_get_triangle_output() {
+    return to_number(apu_triangle_sequence[triangle_sequence_step + 1]);
+}
+
+# Returns the triangle length counter value.
+func apu_get_triangle_length() {
+    return triangle_length_counter;
 }
 
 # Returns whether the frame IRQ line is asserted.
