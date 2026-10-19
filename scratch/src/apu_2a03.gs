@@ -2,13 +2,14 @@
 # for the GoboScript port.
 #
 # Ports the parts of src/nes/apu/apu_2a03.ts, src/nes/apu/pulse_channel.ts,
-# src/nes/apu/triangle_channel.ts, and src/nes/apu/noise_channel.ts that the
-# current shared vectors cover: the register write dispatch for
-# $4000-$4013, $4015, and $4017, the $4015 status read, both pulse channels
-# (control, sweep, timer, length counter, envelope, output), the triangle
-# channel (linear counter, timer, sequencer), the noise channel (LFSR, timer,
-# envelope, length counter), and the four-step and five-step frame sequencer.
-# The DMC channel and audio mixing are not ported yet.
+# src/nes/apu/triangle_channel.ts, src/nes/apu/noise_channel.ts, and
+# src/nes/apu/dmc_channel.ts that the current shared vectors cover: the
+# register write dispatch for $4000-$4013, $4015, and $4017, the $4015
+# status read, both pulse channels (control, sweep, timer, length counter,
+# envelope, output), the triangle channel (linear counter, timer, sequencer),
+# the noise channel (LFSR, timer, envelope, length counter), the DMC channel
+# (sample reader, output unit, timer, IRQ), and the four-step and five-step
+# frame sequencer. Audio mixing is not ported yet.
 
 %include src/numeric
 
@@ -177,6 +178,45 @@ var noise_envelope_start = 0;
 var noise_envelope_divider = 0;
 var noise_envelope_decay = 0;
 
+# ---- DMC channel constants ----
+
+var DMC_IRQ_ENABLE = 128;
+var DMC_LOOP = 64;
+var DMC_RATE_INDEX_MASK = 15;
+var DMC_OUTPUT_LEVEL_MASK = 127;
+var DMC_OUTPUT_BIT_MASK = 1;
+var DMC_OUTPUT_DELTA = 2;
+var DMC_OUTPUT_LEVEL_MAX = 127;
+var DMC_SAMPLE_ADDRESS_BASE = 49152;
+var DMC_SAMPLE_ADDRESS_SHIFT = 6;
+var DMC_SAMPLE_LENGTH_SHIFT = 4;
+var DMC_SAMPLE_LENGTH_BASE = 1;
+var DMC_SAMPLE_ADDRESS_WRAP = 32768;
+var DMC_SAMPLE_ADDRESS_MAX = 65535;
+var DMC_SAMPLE_BITS_PER_BYTE = 8;
+
+# NTSC DMC periods (16 entries). Initialized in apu_reset.
+list apu_dmc_periods = [0; 16];
+
+# ---- DMC channel state ----
+
+var dmc_irq_enabled = 0;
+var dmc_loop = 0;
+var dmc_irq = 0;
+var dmc_timer_period = 0;
+var dmc_timer_reload = 0;
+var dmc_timer_counter = 0;
+var dmc_output_level = 0;
+var dmc_sample_address_register = 0;
+var dmc_sample_length_register = 0;
+var dmc_current_address = 0;
+var dmc_bytes_remaining = 0;
+var dmc_sample_buffer = -1;
+var dmc_shift_register = 0;
+var dmc_bits_remaining = 0;
+var dmc_silence = 1;
+var dmc_load_dma_delay = -1;
+
 # ---- frame sequencer state ----
 
 var apu_cpu_cycle_count = 0;
@@ -297,6 +337,26 @@ proc apu_reset {
         apu_noise_periods[16] = 4068;
     }
 
+    # Populate the DMC periods table if not already done.
+    if to_number(apu_dmc_periods[1]) == 0 {
+        apu_dmc_periods[1] = 428;
+        apu_dmc_periods[2] = 380;
+        apu_dmc_periods[3] = 340;
+        apu_dmc_periods[4] = 320;
+        apu_dmc_periods[5] = 286;
+        apu_dmc_periods[6] = 254;
+        apu_dmc_periods[7] = 226;
+        apu_dmc_periods[8] = 214;
+        apu_dmc_periods[9] = 190;
+        apu_dmc_periods[10] = 160;
+        apu_dmc_periods[11] = 142;
+        apu_dmc_periods[12] = 128;
+        apu_dmc_periods[13] = 106;
+        apu_dmc_periods[14] = 85;
+        apu_dmc_periods[15] = 72;
+        apu_dmc_periods[16] = 54;
+    }
+
     pulse1_enabled = 0;
     pulse1_control = 0;
     pulse1_sweep_enabled = 0;
@@ -347,6 +407,22 @@ proc apu_reset {
     noise_envelope_start = 0;
     noise_envelope_divider = 0;
     noise_envelope_decay = 0;
+    dmc_irq_enabled = 0;
+    dmc_loop = 0;
+    dmc_irq = 0;
+    dmc_timer_period = 428;
+    dmc_timer_reload = 427;
+    dmc_timer_counter = 0;
+    dmc_output_level = 0;
+    dmc_sample_address_register = 0;
+    dmc_sample_length_register = 0;
+    dmc_current_address = 49152;
+    dmc_bytes_remaining = 0;
+    dmc_sample_buffer = -1;
+    dmc_shift_register = 0;
+    dmc_bits_remaining = 0;
+    dmc_silence = 1;
+    dmc_load_dma_delay = -1;
     apu_cpu_cycle_count = 0;
     apu_pulse_timer_phase = 0;
     apu_frame_cycle_count = 0;
@@ -380,12 +456,19 @@ proc apu_write_register address, value {
         apu_write_noise_period byte_value;
     } elif addr == APU_NOISE_LENGTH {
         apu_write_noise_length byte_value;
+    } elif addr == APU_DMC_CONTROL {
+        apu_write_dmc_control byte_value;
+    } elif addr == APU_DMC_OUTPUT {
+        apu_write_dmc_output_level byte_value;
+    } elif addr == APU_DMC_SAMPLE_ADDR {
+        apu_write_dmc_sample_address byte_value;
+    } elif addr == APU_DMC_SAMPLE_LEN {
+        apu_write_dmc_sample_length byte_value;
     } elif addr == APU_STATUS {
         apu_write_status byte_value;
     } elif addr == APU_FRAME_COUNTER {
         apu_write_frame_counter byte_value;
     }
-    # DMC registers are latched and dropped for now.
 }
 
 # Writes one pulse channel register (index 0-3 within the four-byte window).
@@ -485,7 +568,18 @@ proc apu_write_status value {
     if noi == 0 {
         noise_length_counter = 0;
     }
-    # DMC enable bit is latched but not yet ported.
+
+    # DMC enable via $4015 bit 4
+    local dmc = bitwise_and($value, DMC_ENABLE) != 0;
+
+    if dmc == 0 {
+        dmc_bytes_remaining = 0;
+        dmc_load_dma_delay = -1;
+    } elif dmc_bytes_remaining == 0 {
+        apu_dmc_restart_sample;
+        dmc_load_dma_delay = 0;
+    }
+    dmc_irq = 0;
 }
 
 # Writes $4017: frame counter mode and IRQ inhibit.
@@ -535,6 +629,34 @@ proc apu_write_noise_length value {
     }
 }
 
+# Writes $4010: DMC control register (IRQ enable, loop mode, rate index)
+proc apu_write_dmc_control value {
+    dmc_irq_enabled = bitwise_and($value, DMC_IRQ_ENABLE) != 0;
+    dmc_loop = bitwise_and($value, DMC_LOOP) != 0;
+    local rate_index = bitwise_and($value, DMC_RATE_INDEX_MASK);
+    dmc_timer_period = to_number(apu_dmc_periods[rate_index + 1]);
+    dmc_timer_reload = dmc_timer_period - 1;
+
+    if dmc_irq_enabled == 0 {
+        dmc_irq = 0;
+    }
+}
+
+# Writes $4011: DMC output level (direct DAC control)
+proc apu_write_dmc_output_level value {
+    dmc_output_level = bitwise_and($value, DMC_OUTPUT_LEVEL_MASK);
+}
+
+# Writes $4012: DMC sample address (start address in 64-byte steps from $C000)
+proc apu_write_dmc_sample_address value {
+    dmc_sample_address_register = $value;
+}
+
+# Writes $4013: DMC sample length (in 16-byte steps, plus one byte)
+proc apu_write_dmc_sample_length value {
+    dmc_sample_length_register = $value;
+}
+
 proc apu_write_frame_counter value {
     apu_five_step_mode = bitwise_and($value, FIVE_STEP_MODE) != 0;
     apu_frame_irq_inhibited = bitwise_and($value, FRAME_IRQ_INHIBIT) != 0;
@@ -573,10 +695,13 @@ proc apu_read_status {
         value = value + NOISE_ENABLE;
     }
 
+    if dmc_bytes_remaining > 0 {
+        value = value + DMC_ENABLE;
+    }
+
     if apu_frame_irq == 1 {
         value = value + FRAME_IRQ_STATUS;
     }
-    # Noise, DMC status bits are not ported yet.
 
     apu_status_value = value;
     apu_status_driven_mask = APU_STATUS_DRIVEN;
@@ -597,6 +722,7 @@ proc apu_clock_cpu_cycle {
 
     apu_clock_triangle_timer;
     apu_clock_noise_timer;
+    apu_clock_dmc_timer;
     apu_clock_frame_sequencer;
 
     if apu_frame_reset_delay >= 0 {
@@ -916,6 +1042,102 @@ proc apu_clock_noise_length {
     }
 }
 
+# ---- DMC channel clocking ----
+
+# Clocks the DMC timer every CPU cycle. When the timer reaches zero, it reloads
+# and clocks the output unit. Also counts down the load DMA delay.
+proc apu_clock_dmc_timer {
+    if dmc_load_dma_delay >= 0 {
+        dmc_load_dma_delay = dmc_load_dma_delay - 1;
+    }
+
+    if dmc_timer_counter == 0 {
+        dmc_timer_counter = dmc_timer_reload;
+        apu_clock_dmc_output_unit;
+    } else {
+        dmc_timer_counter = dmc_timer_counter - 1;
+    }
+}
+
+# Clocks the DMC output unit: processes one bit from the shift register,
+# adjusting the output level up or down by 2.
+proc apu_clock_dmc_output_unit {
+    if dmc_bits_remaining == 0 {
+        dmc_bits_remaining = 8;
+
+        if dmc_sample_buffer < 0 {
+            dmc_silence = 1;
+        } else {
+            dmc_shift_register = dmc_sample_buffer;
+            dmc_sample_buffer = -1;
+            dmc_silence = 0;
+        }
+    }
+
+    if dmc_silence == 0 {
+        if bitwise_and(dmc_shift_register, DMC_OUTPUT_BIT_MASK) != 0 {
+            if dmc_output_level <= DMC_OUTPUT_LEVEL_MAX - DMC_OUTPUT_DELTA {
+                dmc_output_level = dmc_output_level + DMC_OUTPUT_DELTA;
+            }
+        } elif dmc_output_level >= DMC_OUTPUT_DELTA {
+            dmc_output_level = dmc_output_level - DMC_OUTPUT_DELTA;
+        }
+
+        dmc_shift_register = dmc_shift_register // 2;
+    }
+
+    dmc_bits_remaining = dmc_bits_remaining - 1;
+}
+
+# Restarts the DMC sample from the beginning using the sample address and length registers.
+proc apu_dmc_restart_sample {
+    dmc_current_address = DMC_SAMPLE_ADDRESS_BASE + (dmc_sample_address_register * 64);
+    dmc_bytes_remaining = (dmc_sample_length_register * 16) + DMC_SAMPLE_LENGTH_BASE;
+}
+
+# Returns the address for a pending DMC DMA fetch, or -1 if none is needed.
+# A fetch is needed when: load_dma_delay is done, sample_buffer is empty, and bytes_remaining > 0.
+func apu_dmc_get_dma_request_address() {
+    if dmc_load_dma_delay >= 0 {
+        return -1;
+    }
+
+    if dmc_sample_buffer >= 0 {
+        return -1;
+    }
+
+    if dmc_bytes_remaining == 0 {
+        return -1;
+    }
+
+    return dmc_current_address;
+}
+
+# Supplies a byte fetched by DMC DMA and advances or restarts the sample reader.
+proc apu_dmc_complete_dma_read value {
+    if dmc_bytes_remaining > 0 {
+        if dmc_sample_buffer < 0 {
+            dmc_sample_buffer = $value;
+
+            if dmc_current_address == DMC_SAMPLE_ADDRESS_MAX {
+                dmc_current_address = DMC_SAMPLE_ADDRESS_WRAP;
+            } else {
+                dmc_current_address = dmc_current_address + 1;
+            }
+
+            dmc_bytes_remaining = dmc_bytes_remaining - 1;
+
+            if dmc_bytes_remaining == 0 {
+                if dmc_loop == 1 {
+                    apu_dmc_restart_sample;
+                } elif dmc_irq_enabled == 1 {
+                    dmc_irq = 1;
+                }
+            }
+        }
+    }
+}
+
 # ---- output getters ----
 
 # Returns the pulse output for one channel (0-15).
@@ -1026,14 +1248,29 @@ func apu_get_noise_length() {
     return noise_length_counter;
 }
 
+# Returns the DMC output level (0-127).
+func apu_get_dmc_output() {
+    return dmc_output_level;
+}
+
+# Returns the DMC bytes remaining count.
+func apu_get_dmc_bytes_remaining() {
+    return dmc_bytes_remaining;
+}
+
 # Returns whether the frame IRQ line is asserted.
 func apu_is_frame_irq_asserted() {
     return apu_frame_irq;
 }
 
-# Returns whether any APU IRQ line is asserted.
+# Returns whether the DMC IRQ line is asserted.
+func apu_is_dmc_irq_asserted() {
+    return dmc_irq;
+}
+
+# Returns whether any APU IRQ line is asserted (frame IRQ or DMC IRQ).
 func apu_is_irq_asserted() {
-    return apu_frame_irq;
+    return apu_frame_irq != 0 or dmc_irq != 0;
 }
 
 # ---- sweep helpers ----
