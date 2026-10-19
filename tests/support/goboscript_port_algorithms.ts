@@ -118,9 +118,9 @@ export function bit_at(value: number, weight: number): number {
 /**
  * Mirror of the `bitwise_table_and` list and `bitwise_table_init` proc: the AND of the two
  * nibbles selected by index = high * 16 + low. The TypeScript side can build it with
- * bitwise operators because only the GoboScript port is bit-free; the table content is what
- * the port computes with four per-bit tests, and this construction is checked against those
- * tests by the same exhaustive comparison that exercises bitwise_and below.
+ * bitwise operators because only the GoboScript port is bit-free; the port fills the same
+ * entries at run time from four per-bit tests, and this construction is checked against
+ * those by the same exhaustive comparison that exercises bitwise_and below.
  */
 export const BITWISE_TABLE_AND: readonly number[] = (() => {
     const table: number[] = [];
@@ -147,9 +147,10 @@ export const BITWISE_TABLE_AND: readonly number[] = (() => {
 })();
 
 /**
- * Mirror of `bitwise_and(left, right)`: four nibble-table reads instead of a bit loop, so
- * the ported helper costs a fixed handful of blocks per call. The table is 1-based in the
- * port, so every index here adds one.
+ * Mirror of `bitwise_and(left, right)`: a pair of nibble-table reads for a byte-wide pair
+ * and four for a wider one, so the ported helper costs a fixed handful of blocks per call.
+ * The port keeps the table in a 1-based list and this mirror in a 0-based array; both index
+ * it with high nibble * 16 + low nibble, which is the same entry either way.
  */
 export function bitwise_and(left: number, right: number): number {
     const left_word = scratch_mod(left, 65536);
