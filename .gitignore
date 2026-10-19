@@ -8,3 +8,4 @@ scratch/data/opcode_table.txt
 
 # Goboscript local compiler output and scratch files
 .goboscript/
+packager/
