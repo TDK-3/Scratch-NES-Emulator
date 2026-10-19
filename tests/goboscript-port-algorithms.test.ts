@@ -3146,6 +3146,29 @@ test("the mirrored PPU 2C02 clocks vblank and NMI edges like the reference", () 
     assert.equal(mirror_ppu.take_nmi_edge(), 0, "edge already consumed");
 });
 
+test("the mirrored CPU bus drives an OAM DMA transfer", () => {
+    const bus = new ported.GoboscriptCpuBus();
+
+    // Write some data to RAM at page $03 (these writes increment the cycle counter)
+    for (let i = 0; i < 256; i++) {
+        bus.write(0x0300 + i, i + 0x10);
+    }
+
+    // Trigger OAM DMA from page $03
+    bus.write(0x4014, 0x03);
+
+    // Clock the DMA until it completes, counting only the DMA cycles
+    let dma_cycles = 0;
+    while ((bus as any).clock_dma_cycle() === 1) {
+        dma_cycles++;
+    }
+
+    // OAM DMA takes 513 or 514 cycles (not counting the $4014 write itself)
+    // The DMA state machine: halt (1) -> [align (1)] -> read/write (256 pairs = 512)
+    // Total: 513 if no alignment, 514 if alignment needed
+    assert.ok(dma_cycles === 513 || dma_cycles === 514, `Expected 513 or 514 DMA cycles, got ${dma_cycles}`);
+});
+
 test("the mirrored PPU 2C02 suppresses vblank when PPUSTATUS is read early", () => {
     const mirror_bus = new ported.GoboscriptPpuBus();
     const mirror_ppu = new ported.GoboscriptPpu2C02(mirror_bus);

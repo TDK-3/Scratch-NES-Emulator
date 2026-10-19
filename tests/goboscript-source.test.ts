@@ -169,6 +169,7 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read", mirror: "GoboscriptCpuBus.read" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read_io", mirror: "GoboscriptCpuBus.read_io" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_write", mirror: "GoboscriptCpuBus.write" },
+    { source: "src/cpu_bus.gs", declaration: "cpu_clock_dma_cycle", mirror: "GoboscriptCpuBus.clock_dma_cycle" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_clear_ram", mirror: "GoboscriptCpuBus.clear_ram" },
     {
         source: "src/cpu_core.gs",

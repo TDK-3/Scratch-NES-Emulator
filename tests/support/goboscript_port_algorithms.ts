@@ -426,6 +426,8 @@ export class GoboscriptCpuBus {
 
     reset(): void {
         this.open_bus = 0;
+        this.bus_cycle_count = 0;
+        this.dma_phase = 0;
     }
 
     /**
@@ -452,6 +454,7 @@ export class GoboscriptCpuBus {
 
     read(address: number): number {
         const numeric_address = normalize_word(address);
+        this.bus_cycle_count = this.bus_cycle_count + 1;
 
         if (numeric_address < 8192) {
             return this.apply_driven_value(this.ram[scratch_mod(numeric_address, 2048)] ?? 0, 255);
@@ -486,6 +489,7 @@ export class GoboscriptCpuBus {
         const numeric_address = normalize_word(address);
         const numeric_value = normalize_byte(value);
         this.open_bus = numeric_value;
+        this.bus_cycle_count = this.bus_cycle_count + 1;
 
         if (numeric_address < 8192) {
             this.ram[scratch_mod(numeric_address, 2048)] = numeric_value;
@@ -493,6 +497,16 @@ export class GoboscriptCpuBus {
 
         if (numeric_address === 16406) {
             this.controllers.write_strobe(numeric_value);
+        }
+
+        // $4014 OAM DMA: set up the DMA state machine
+        if (numeric_address === 16404) {
+            this.dma_phase = 1; // halt
+            this.dma_page = numeric_value;
+            this.dma_index = 0;
+            this.dma_data_latch = 0;
+            this.dma_sequence_cycle = 0;
+            this.dma_alignment_cycle_needed = this.bus_cycle_count % 2;
         }
 
         if (this.cartridge_kind === MAPPER_KIND.NROM && this.board !== null) {
@@ -523,6 +537,67 @@ export class GoboscriptCpuBus {
         this.open_bus = merged;
 
         return merged;
+    }
+
+    // OAM DMA state machine
+    private dma_phase: number = 0; // 0=idle, 1=halt, 2=align, 3=read, 4=write
+    private dma_page: number = 0;
+    private dma_index: number = 0;
+    private dma_data_latch: number = 0;
+    private dma_sequence_cycle: number = 0;
+    private dma_alignment_cycle_needed: number = 0;
+    private bus_cycle_count: number = 0;
+
+    /** Mirror of `cpu_clock_dma_cycle`. Returns 1 if a DMA cycle was executed, 0 otherwise. */
+    clock_dma_cycle(): number {
+        if (this.dma_phase === 0) {
+            return 0;
+        }
+
+        this.dma_sequence_cycle = this.dma_sequence_cycle + 1;
+        this.bus_cycle_count = this.bus_cycle_count + 1;
+
+        if (this.dma_phase === 1) {
+            // Halt phase
+            if (this.dma_alignment_cycle_needed === 1) {
+                this.dma_phase = 2;
+            } else {
+                this.dma_phase = 3;
+            }
+            return 1;
+        }
+
+        if (this.dma_phase === 2) {
+            // Align phase
+            this.dma_phase = 3;
+            return 1;
+        }
+
+        if (this.dma_phase === 3) {
+            // Read phase
+            const source_address = this.dma_page * 256 + this.dma_index;
+            this.dma_data_latch = this.read(source_address);
+            this.dma_phase = 4;
+            return 1;
+        }
+
+        if (this.dma_phase === 4) {
+            // Write phase
+            // Write to $2004 (PPU OAMDATA register)
+            this.write(0x2004, this.dma_data_latch);
+            this.dma_index = this.dma_index + 1;
+
+            if (this.dma_index >= 256) {
+                // Transfer complete
+                this.dma_phase = 0;
+            } else {
+                // Continue with next read
+                this.dma_phase = 3;
+            }
+            return 1;
+        }
+
+        return 0;
     }
 }
 

@@ -2,10 +2,11 @@
 #
 # Ports the parts of src/nes/cpu/nes_cpu_bus.ts that the current shared vectors cover:
 # 2 KiB RAM mirrored across $0000-$1FFF, the open-bus data latch with per-device driven
-# masks, the $4016/$4017 controller ports, and the "undriven read returns the retained
-# latch" rule. PPU registers, APU registers, $4014 OAM DMA, and cartridge space are not
-# ported yet: reads of those windows return the retained latch and writes are latched and
-# then dropped, which is exactly what an absent device does in the TypeScript decoder.
+# masks, the $4016/$4017 controller ports, the $4014 OAM DMA stall with alignment cycle,
+# and the "undriven read returns the retained latch" rule. PPU registers, APU registers,
+# and cartridge space are not ported yet: reads of those windows return the retained latch
+# and writes are latched and then dropped, which is exactly what an absent device does in
+# the TypeScript decoder.
 #
 # Scratch lists are 1-indexed, so the RAM window conversion happens in one place here.
 
@@ -20,6 +21,25 @@
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
+var cpu_bus_cycle_count = 0;
+
+# OAM DMA state machine. A write to $4014 triggers a transfer from a 256-byte page to OAM.
+# The state machine has four phases: halt (setup), align (optional alignment cycle),
+# read (read from source), and write (write to $2004). Total cycles: 513 if even, 514 if odd.
+enum cpu_dma_phase {
+    idle = 0,
+    halt = 1,
+    align = 2,
+    read = 3,
+    write = 4
+}
+
+var cpu_dma_phase = 0;
+var cpu_dma_page = 0;
+var cpu_dma_index = 0;
+var cpu_dma_data_latch = 0;
+var cpu_dma_sequence_cycle = 0;
+var cpu_dma_alignment_cycle_needed = 0;
 
 # The board the cartridge loader attached, using mapper_kind. Zero leaves the cartridge window
 # without a device, so its reads return the latch and its writes are dropped, exactly as the
@@ -29,6 +49,7 @@ var cpu_bus_cartridge_kind = 0;
 # Clears the bus latch like NesCpuBus.reset(); RAM contents survive a reset.
 proc cpu_bus_reset {
     cpu_open_bus = 0;
+    cpu_bus_cycle_count = 0;
     ppu_reset;
     apu_reset;
 }
@@ -59,6 +80,7 @@ func cpu_apply_driven_value(value, driven_mask) {
 # Reads one CPU address; mirrors read_cpu() for the ported windows.
 func cpu_bus_read(address) {
     local numeric_address = normalize_word($address);
+    cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
     if numeric_address < 8192 {
         return cpu_apply_driven_value(cpu_ram[(numeric_address % 2048) + 1], 255);
@@ -124,6 +146,7 @@ proc cpu_bus_write address, value {
     local numeric_address = normalize_word($address);
     local numeric_value = normalize_byte($value);
     cpu_open_bus = numeric_value;
+    cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
     if numeric_address < 16384 {
         # $2000-$3FFF: PPU registers, mirrored every 8 bytes.
@@ -135,13 +158,21 @@ proc cpu_bus_write address, value {
         cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
     }
 
-    if numeric_address >= 16384 and numeric_address < 16416 {
-        # $4000-$401F: APU, PPU ($4014 OAM DMA), and controller registers.
-        apu_write_register numeric_address, numeric_value;
-    }
-
     if numeric_address == 16406 {
         controller_write_strobe numeric_value;
+    }
+
+    # $4014 OAM DMA: set up the DMA state machine. The alignment cycle is needed if the write
+    # happens on an odd cycle (cpu_cycle_count % 2 == 1).
+    if numeric_address == 16404 {
+        cpu_dma_phase = cpu_dma_phase.halt;
+        cpu_dma_page = numeric_value;
+        cpu_dma_index = 0;
+        cpu_dma_data_latch = 0;
+        cpu_dma_sequence_cycle = 0;
+
+        # Alignment cycle needed if current cycle count is odd.
+        cpu_dma_alignment_cycle_needed = cpu_bus_cycle_count % 2;
     }
 
     if cpu_bus_cartridge_kind == mapper_kind.nrom {
@@ -149,6 +180,60 @@ proc cpu_bus_write address, value {
     } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
         mmc3_write_cpu numeric_address, numeric_value;
     }
+}
+# Clocks one DMA cycle. Returns 1 if a DMA cycle was executed, 0 if no DMA is active.
+# The DMA state machine: halt -> align (optional) -> read -> write (repeat 256 times).
+func cpu_clock_dma_cycle() {
+    if cpu_dma_phase == cpu_dma_phase.idle {
+        return 0;
+    }
 
-    # $4014 OAM DMA writes are not ported yet.
+    cpu_dma_sequence_cycle = cpu_dma_sequence_cycle + 1;
+    cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
+
+    if cpu_dma_phase == cpu_dma_phase.halt {
+        # Halt cycle: dummy read from the address the CPU was about to read.
+        # The actual address doesn't matter for the port; we just burn a cycle.
+        if cpu_dma_alignment_cycle_needed == 1 {
+            cpu_dma_phase = cpu_dma_phase.align;
+        } else {
+            cpu_dma_phase = cpu_dma_phase.read;
+        }
+
+        return 1;
+    }
+
+    if cpu_dma_phase == cpu_dma_phase.align {
+        # Alignment cycle: another dummy read.
+        cpu_dma_phase = cpu_dma_phase.read;
+
+        return 1;
+    }
+
+    if cpu_dma_phase == cpu_dma_phase.read {
+        # Read cycle: read from (page << 8) | index.
+        local source_address = cpu_dma_page * 256 + cpu_dma_index;
+        cpu_dma_data_latch = cpu_bus_read(source_address);
+        cpu_dma_phase = cpu_dma_phase.write;
+
+        return 1;
+    }
+
+    if cpu_dma_phase == cpu_dma_phase.write {
+        # Write cycle: write to $2004 (OAMDATA).
+        ppu_write_cpu_register 4, cpu_dma_data_latch;
+        cpu_dma_index = cpu_dma_index + 1;
+
+        if cpu_dma_index >= 256 {
+            # Transfer complete.
+            cpu_dma_phase = cpu_dma_phase.idle;
+        } else {
+            # Continue with next read.
+            cpu_dma_phase = cpu_dma_phase.read;
+        }
+
+        return 1;
+    }
+
+    return 0;
 }
