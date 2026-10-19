@@ -23,9 +23,9 @@ npm run scratch:vectors
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 1,258 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
+The 1,275 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
 to source fixtures, 588 cross-domain shared-vector checks (587 records plus the generator regression), 257 pinned
-MIT single-step corpus checks covering all 256 opcode bytes, 77 GoboScript port-algorithm comparisons, 17
+MIT single-step corpus checks covering all 256 opcode bytes, 97 GoboScript port-algorithm comparisons, 26
 GoboScript source-lint checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console
@@ -594,7 +594,7 @@ Current parity coverage, in three layers:
 
 1. `tests/shared-port-vectors.test.ts` executes all 469 fixture records against the production TypeScript
    modules (470 tests including the generator regression).
-2. `tests/goboscript-port-algorithms.test.ts` runs 58 comparisons against
+2. `tests/goboscript-port-algorithms.test.ts` runs 100 comparisons against
    `tests/support/goboscript_port_algorithms.ts`, an integer-only TypeScript mirror of every ported GoboScript
    helper. It sweeps all 256 by 256 operand pairs for ADC/SBC/AND/ORA/EOR/CMP/BIT/INC/DEC and all 256 by 256
    status combinations for the shift and rotate steps, sweeps every status byte against every flag for the
@@ -616,7 +616,13 @@ Current parity coverage, in three layers:
    Instruction dispatch is mirrored by `GoboscriptCpuCore.execute_instruction()` and its helpers, which replay
    all 99 suite-13 records against the fixture, execute all 151 official opcodes while refusing the 104
    unofficial ones other than KIL, report a core with no decode table, and pin the KIL jam flag and its two
-   accesses.
+   accesses. The PPU rendering and pen helpers are swept as pure mirrors: every fine-X shift value, palette
+   priority input, sprite row and pattern address, scroll increment and transfer over all VRAM addresses, the
+   emphasis dimming and hex byte over every channel, and the pen color for all 512 palette/emphasis pairs
+   against `framebuffer_to_rgba`. The pen display geometry helpers are swept too: the fit scale against the
+   limiting stage ratio, the toggle values, and the first-pixel coordinates that must keep every pixel
+   band centered on (0, 0) once the renderer's size-1 pen offset is added back. The stateful pipeline procs themselves are not mirrored yet, like the PPU
+   register and bus slices, so per-pixel framebuffer parity with the reference remains unverified.
 3. `tests/goboscript-opcode-table.test.ts` (4 tests) compares every entry of
    `tests/fixtures/goboscript/opcode_table.json` with `CPU_OPCODE_TABLE`, including the mnemonic, addressing
    mode, base cycles, operand access, page-cross flag, and official flag for all 256 opcodes, checks that the
@@ -630,7 +636,11 @@ Current parity coverage, in three layers:
    them, each with its declared argument count), self-test enum IDs that match the fixture, and the ported
    `cpu_mnemonic` and `cpu_opcode_field` enum IDs that match the generated opcode table, and the mnemonics the
    instruction dispatcher names, which must equal both the mirror's `CPU_MNEMONIC` IDs and the projection's
-   ported set.
+   ported set. It also pins the 192 pen-palette literals against the mirrored channel planes, the
+   finished-frame handoff from the PPU's vblank dot through the waited "draw frame" broadcast to the
+   sprite's pen blocks, the PPU bus reporting pattern/nametable accesses to an attached MMC3 board with
+   its palette window at $3F00, and every numeric constant the ported PPU shares by name with the
+   reference `src/nes/ppu/ppu_2c02.ts` (the audit caught the PPUSCROLL preserve mask at 3099 not 3103).
 
 A valid `.sb3` compile is only a syntax/package check. Also open it in TurboWarp, click the green flag,
 verify expected output, and check that the project remains responsive. If Scratch website compatibility is
@@ -650,8 +660,10 @@ of through the compiler, and it runs headlessly under `scratch-vm`:
   and the same read/write kinds, from the two padding reads and the three stack reads through the reset
   vector and the first game instructions. The comparison covers the first 600 accesses of the run, and
   the port's CPU registers match the reference's at the same cycle count.
-- The run has no PPU renderer, so it produces no picture. The report carries the frame count, the CPU cycle
-  count, and the program counter instead.
+- That compiled project predates the ported PPU renderer and pen display, so its run produces no picture.
+  The report carries the frame count, the CPU cycle count, and the program counter instead. The `.gs`
+  sources now render every frame and draw it with the pen extension, but neither has run anywhere until
+  the project is rebuilt from them.
 
 `scripts/align_compiled_scratch_project.py` applies that alignment. It takes the compiled project as its
 input, patches the blocks the sources describe, and writes the result back. It is idempotent: running it

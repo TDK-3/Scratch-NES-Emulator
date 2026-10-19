@@ -21,9 +21,11 @@ separate from TypeScript success.
   as satisfying the pinned-toolchain task.
 - [ ] Fix any GoboScript syntax, configuration, asset, or file-backed-list errors reported by the
       compiler.
-- [ ] Open the generated `.sb3` in TurboWarp and confirm the green-flag ROM signature result. The port
-      has no PPU renderer, so its run produces no picture; the report carries the frame count, the CPU
-      cycle count, and the program counter instead.
+- [ ] Open the generated `.sb3` in TurboWarp and confirm the green-flag ROM signature result and the
+      pen-drawn color picture. The ported PPU renders every frame and the display sprite presents it
+      with the pen extension, but the checked-in `.sb3` predates that renderer, so it must be rebuilt
+      from the sources before either can be confirmed. The report still carries the frame count, the
+      drawn-frame count, the CPU cycle count, and the program counter.
 - [ ] Record which embedded TurboWarp options work and separately test any claim of Scratch website
       compatibility.
 - [x] Identify the supplied fixture as an MMC3 conversion of Japanese *Super Mario Bros. 2* and establish
@@ -404,10 +406,28 @@ separate from TypeScript success.
       noise, DMC, mixer, frame sequencer), both controller ports, OAM DMA, the frame loop, and the
       NVRAM save/load wiring that routes snapshot procs through the attached board. Compile validation
       stays blocked by the missing GoboScript toolchain.
+- [x] Port the PPU rendering pipeline and draw each frame with the pen extension in color.
+      `scratch/src/ppu_2c02.gs` gained the reference pixel pipeline (background fetch/shift, scroll
+      increments and transfers, sprite evaluation with the diagonal overflow path, sprite fetch,
+      priority, palette lookup with greyscale masking, per-pixel emphasis) writing the
+      `ppu_framebuffer_colors` and `ppu_framebuffer_emphasis` lists, and `ppu_bus.gs` now reports every
+      pattern/nametable access to an attached MMC3 board before running it, so rendering fetches clock
+      the scanline IRQ through the A12 filter the way `PpuMemoryBus` drives them. `scratch/src/nes_palette.gs`
+      holds the canvas renderer's 64-color RGB palette and precomputes all 512 palette/emphasis pairs as
+      cached "#rrggbb" pen colors; at vblank the run loop waits on a "draw frame" broadcast while
+      `main.gs` erases the pen layer and draws the 256 by 240 frame at 1x (or fit-to-stage 1.5x when the
+      global `pen_fit_to_screen` variable is 1), one pen stroke per run of equal pixels, resetting the
+      pen color only when it changes. The pure helpers (fine-X pixel,
+      palette offset, bit reversal, sprite row and pattern address, both scroll increments and
+      transfers, dimming, hex, and the pen color itself) are mirrored and swept exhaustively against
+      the bitwise reference and `framebuffer_to_rgba`; the palette literals are pinned against the
+      mirror by the source lint. Not verified: compiling, opening, or timing the project, and the
+      checked-in `.sb3` predates the renderer. Compile validation stays blocked by the missing toolchain.
 - [ ] Build each port milestone with the pinned compiler and run its parity vectors in the compiled
       project.
 - [ ] Prototype and benchmark at least two video-output strategies in TurboWarp; test clone, costume,
-      pen, and/or generated asset approaches before choosing.
+      pen, and/or generated asset approaches before choosing. The pen strategy above is the first one
+      implemented; it still needs its TurboWarp frame-time measurement and an alternative to compare with.
 - [ ] Implement TurboWarp input, audio, reset, status, and error reporting without coupling those
       adapters to the hardware model.
 - [ ] Measure frame time, memory, list sizes, and responsiveness on documented hardware. Keep the

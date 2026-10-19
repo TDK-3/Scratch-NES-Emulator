@@ -305,6 +305,23 @@ lint in `tests/goboscript-source.test.ts` exists.
   this project keeps its own integer-only helpers and does not include `std/math`.
 - An empty spinning `until cond { }` in a sprite never yields, which starves other threads (including the
   Stage's), so cross-target handoff uses `broadcast` plus `on "message"` rather than polling.
+- Pen blocks need no configuration: codegen adds the `pen` extension to the project JSON whenever an emitted
+  block opcode starts with `pen_` (`Sb3::begin_node` in `src/codegen/sb3.rs`). The statement shapes are
+  `erase_all;`, `pen_down;`, `pen_up;`, `set_pen_color value;`, `set_pen_size value;`, and the hue,
+  saturation, brightness, and transparency variants, and motion uses `goto x, y;` plus the `set_x` / `set_y`
+  keywords. A string literal given to `set_pen_color` is parsed as a CSS color at compile time and emitted
+  as a color shadow, while a computed value (a variable or list item holding a `"#rrggbb"` string) is
+  emitted as a reporter input the VM resolves at runtime, which is what a per-frame palette lookup needs.
+  `broadcast_and_wait "message";` is the waited handoff shape. The Stage has no position, so pen and motion
+  blocks belong in a sprite target; this project keeps them in `main.gs` and hands it Stage-owned lists.
+  The runtime side of this was checked against the published `scratch-vm` 4.0.0 and `scratch-render`
+  packages and the TurboWarp renderer fork: the VM casts a `"#..."` string through `Color.hexToRgb`, so the
+  cached color strings are real pen colors; pen lines are round-capped strokes, so a line between two
+  pixel centers at pen size S covers from half of S before the first center to half after the last; and
+  `PenSkin.drawLine` adds (+0.5, +0.5) to lines whose diameter is exactly 1 (or 3), a Scratch 2 alignment
+  rule both renderers keep. `src/pen_display.gs` pre-subtracts that offset at native scale so the drawn
+  picture stays symmetric about the stage center (0, 0), and pen size accepts the fractional fit scale
+  1.5 unchanged.
 
 ### Costumes and assets
 
@@ -331,8 +348,9 @@ bitmap resolution, and a Stage notes file. It can also emit TurboWarp project co
 
 These are TurboWarp settings, not proof of compatibility with the Scratch website. Keep the intended runtime
 explicit. Test the compiled `.sb3` in the actual target runtime and document which settings are required.
-The configuration in this repository requests 60 FPS and disables miscellaneous limits for the TurboWarp
-target; the renderer and frame budget still need measurement.
+The configuration in this repository requests 60 FPS, disables miscellaneous limits, and enables
+high-quality pen for the TurboWarp target, because the display sprite draws every frame on the pen layer;
+the renderer and frame budget still need measurement.
 
 ## Editor and preview loop
 

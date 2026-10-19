@@ -118,9 +118,9 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,258 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
-test, 588 cross-domain parity cases, 77 GoboScript port-algorithm comparisons against an integer-only mirror of
-the ported modules, 17 GoboScript source-lint checks, two
+suite has 1,275 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+test, 588 cross-domain parity cases, 97 GoboScript port-algorithm comparisons against an integer-only mirror of
+the ported modules, 26 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
 keyboard-input tests, five Web Audio sink tests, five browser audio-filter tests, six battery-store tests,
 six focused controller tests, and
@@ -223,9 +223,14 @@ bank selection in both modes, the PRG RAM enable and write-protect bits, the mir
 four-screen override, the payload and trainer copies, the CPU and pattern windows, the four IRQ registers,
 and the PPU A12 observation whose ten-dot low filter decides which rising edges clock the counter.
 `cartridge_loader.gs` reports the attached board's line through `cartridge_board_irq_line()`.
-Unofficial opcodes other than KIL, DMA stalls, the NVRAM save/load wiring to an actual save path, PPU, APU,
-rendering, sound, save states, and game execution remain unimplemented there, and none of the `.gs` sources has been
-compiled. The TypeScript NROM/MMC3 mapper and
+`ppu_2c02.gs` also ports the rendering pipeline (background fetch/shift, scrolling, sprite evaluation/fetch,
+priority, palette lookup with greyscale and emphasis) into the `ppu_framebuffer_colors` and
+`ppu_framebuffer_emphasis` lists, `ppu_bus.gs` reports every pattern/nametable access to an attached MMC3
+board, and `nes_palette.gs` caches all 512 palette/emphasis pairs as pen colors. At vblank the Stage waits on
+a "draw frame" broadcast while `main.gs` draws the finished 256 by 240 frame with the pen extension in
+run-length strokes; the Stage itself cannot move or draw. Unofficial opcodes other than KIL, sound output,
+save states, and a compiled-project run of the renderer remain unimplemented or unverified there, and none of
+the `.gs` sources has been compiled. The TypeScript NROM/MMC3 mapper and
 `NesConsole` APIs copy/restore declared PRG and CHR NVRAM, excluding volatile RAM; restore validates both sizes
 before mutating either region. The browser shell stores both regions in per-ROM SHA-256 snapshots in local
 storage and accepts legacy PRG-only records. TurboWarp storage and full console save states are not implemented.

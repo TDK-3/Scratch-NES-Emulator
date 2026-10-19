@@ -48,6 +48,7 @@ import {
 } from "./support/cpu_sequence_projection.js";
 import { make_absent_bus_devices } from "./support/recording_cpu_bus.js";
 import { Mmc3Mapper } from "../src/nes/cartridge/mapper_004.js";
+import { NES_FRAME_PIXEL_COUNT, framebuffer_to_rgba } from "../src/nes/browser/canvas_renderer.js";
 import { PpuMemoryBus } from "../src/nes/ppu/ppu_bus.js";
 import { Ppu2C02 } from "../src/nes/ppu/ppu_2c02.js";
 import type { PpuMapperPort } from "../src/nes/ppu/ppu_bus.js";
@@ -3302,4 +3303,272 @@ test("the mirrored PPU 2C02 suppresses vblank when PPUSTATUS is read early", () 
     // Vblank should be suppressed
     assert.equal(mirror_ppu.get_status_register() & 0x80, 0, "vblank suppressed");
     assert.equal(mirror_ppu.take_nmi_edge(), 0, "no NMI edge");
+});
+
+test("nes_palette_dim_channel matches the canvas emphasis dimming for every channel", () => {
+    for (let channel = 0; channel <= 0xff; channel += 1) {
+        assert.equal(ported.nes_palette_dim_channel(channel), Math.round(channel * 0.75));
+    }
+});
+
+test("nes_palette_hex_byte matches two-digit hex for every byte", () => {
+    for (let value = 0; value <= 0xff; value += 1) {
+        assert.equal(ported.nes_palette_hex_byte(value), value.toString(16).padStart(2, "0"));
+    }
+});
+
+test("nes_pen_color matches the canvas renderer for every palette index and emphasis", () => {
+    // One conversion covers all 512 pairs: pixel emphasis * 64 + color holds that pair.
+    const framebuffer = new Uint8Array(NES_FRAME_PIXEL_COUNT);
+    const emphasis = new Uint8Array(NES_FRAME_PIXEL_COUNT);
+
+    for (let pair = 0; pair < 512; pair += 1) {
+        framebuffer[pair] = pair % 64;
+        emphasis[pair] = Math.floor(pair / 64);
+    }
+
+    const rgba = framebuffer_to_rgba(framebuffer, emphasis);
+
+    for (let pair = 0; pair < 512; pair += 1) {
+        const expected =
+            "#" +
+            [rgba[pair * 4], rgba[pair * 4 + 1], rgba[pair * 4 + 2]]
+                .map((channel) => (channel ?? 0).toString(16).padStart(2, "0"))
+                .join("");
+        assert.equal(ported.nes_pen_color(pair % 64, Math.floor(pair / 64)), expected);
+    }
+});
+
+test("ppu_shift_pixel matches the reference fine-X bit test", () => {
+    for (let fine_x = 0; fine_x <= 7; fine_x += 1) {
+        const bit_mask = 0x8000 >>> fine_x;
+
+        for (let shift_low = 0; shift_low <= 0xffff; shift_low += 1) {
+            const shift_high = 0xffff - shift_low;
+            const expected =
+                ((shift_low & bit_mask) === 0 ? 0 : 1) |
+                ((shift_high & bit_mask) === 0 ? 0 : 2);
+            assert.equal(ported.ppu_shift_pixel(shift_low, shift_high, fine_x), expected);
+        }
+    }
+});
+
+test("ppu_select_palette_offset matches the reference priority mix", () => {
+    for (let bg_pixel = 0; bg_pixel <= 3; bg_pixel += 1) {
+        for (let bg_palette = 0; bg_palette <= 3; bg_palette += 1) {
+            for (let has_sprite = 0; has_sprite <= 1; has_sprite += 1) {
+                for (let spr_pixel = 0; spr_pixel <= 3; spr_pixel += 1) {
+                    for (let spr_attributes = 0; spr_attributes <= 0xff; spr_attributes += 1) {
+                        let expected = 0;
+
+                        if (has_sprite === 1 && (bg_pixel === 0 || (spr_attributes & 0x20) === 0)) {
+                            expected = 0x10 + ((spr_attributes & 0x03) << 2) + spr_pixel;
+                        } else if (bg_pixel !== 0) {
+                            expected = (bg_palette << 2) + bg_pixel;
+                        }
+
+                        assert.equal(
+                            ported.ppu_select_palette_offset(
+                                bg_pixel,
+                                bg_palette,
+                                has_sprite,
+                                spr_pixel,
+                                spr_attributes,
+                            ),
+                            expected,
+                        );
+                    }
+                }
+            }
+        }
+    }
+});
+
+test("ppu_reverse_byte_bits matches the reference bit reversal for every byte", () => {
+    for (let value = 0; value <= 0xff; value += 1) {
+        const expected =
+            ((value & 0x01) << 7) |
+            ((value & 0x02) << 5) |
+            ((value & 0x04) << 3) |
+            ((value & 0x08) << 1) |
+            ((value & 0x10) >>> 1) |
+            ((value & 0x20) >>> 3) |
+            ((value & 0x40) >>> 5) |
+            ((value & 0x80) >>> 7);
+        assert.equal(ported.ppu_reverse_byte_bits(value), expected);
+    }
+});
+
+test("ppu_sprite_row matches the reference row wrap for every scanline and Y", () => {
+    for (let target_scanline = 0; target_scanline <= 0xff; target_scanline += 1) {
+        for (let sprite_y = 0; sprite_y <= 0xff; sprite_y += 1) {
+            const expected = (target_scanline - ((sprite_y + 1) & 0xff)) & 0xff;
+            assert.equal(ported.ppu_sprite_row(target_scanline, sprite_y), expected);
+        }
+    }
+});
+
+test("ppu_sprite_pattern_address matches the reference sprite pattern fetch address", () => {
+    const reference_pattern_address = (
+        control: number,
+        tile: number,
+        attributes: number,
+        row: number,
+    ): number => {
+        let effective_row = row;
+        const sprite_height = (control & 0x20) === 0 ? 8 : 16;
+
+        if ((attributes & 0x80) !== 0) {
+            effective_row = sprite_height - row - 1;
+        }
+
+        if (sprite_height === 16) {
+            const pattern_table = (tile & 0x01) << 12;
+            const base_tile = (tile & 0xfe) + (effective_row >= 8 ? 1 : 0);
+            return pattern_table + base_tile * 16 + (effective_row & 0x07);
+        }
+
+        const pattern_table = (control & 0x08) === 0 ? 0 : 0x1000;
+        return pattern_table + tile * 16 + effective_row;
+    };
+
+    for (let control = 0; control <= 0xff; control += 1) {
+        for (const tile of [0, 1, 2, 3, 127, 128, 254, 255]) {
+            for (const attributes of [0, 32, 64, 128, 160, 192, 224, 255]) {
+                for (let row = 0; row <= 15; row += 1) {
+                    assert.equal(
+                        ported.ppu_sprite_pattern_address(control, tile, attributes, row),
+                        reference_pattern_address(control, tile, attributes, row),
+                    );
+                }
+            }
+        }
+    }
+});
+
+test("the mirrored scroll increments match the reference for every VRAM address", () => {
+    const reference_increment_x = (vram_address: number): number => {
+        let result = vram_address;
+
+        if ((result & 0x001f) === 0x001f) {
+            result &= ~0x001f;
+            result ^= 0x0400;
+        } else {
+            result += 1;
+        }
+
+        return result & 0x7fff;
+    };
+    const reference_increment_y = (vram_address: number): number => {
+        let result = vram_address;
+
+        if ((result & 0x7000) !== 0x7000) {
+            return (result + 0x1000) & 0x7fff;
+        }
+
+        result &= ~0x7000;
+        let coarse_y = (result & 0x03e0) >>> 5;
+
+        if (coarse_y === 29) {
+            coarse_y = 0;
+            result ^= 0x0800;
+        } else if (coarse_y === 31) {
+            coarse_y = 0;
+        } else {
+            coarse_y += 1;
+        }
+
+        return ((result & ~0x03e0) | (coarse_y << 5)) & 0x7fff;
+    };
+
+    for (let vram_address = 0; vram_address <= 0x7fff; vram_address += 1) {
+        assert.equal(ported.ppu_increment_scroll_x_for(vram_address), reference_increment_x(vram_address));
+        assert.equal(ported.ppu_increment_scroll_y_for(vram_address), reference_increment_y(vram_address));
+    }
+});
+
+test("the mirrored scroll transfers match the reference bit copies", () => {
+    const counterparts = [0, 0x7fff, 0x1234, 0x2aaa, 0x5555, 0x041f, 0x7be0];
+
+    for (let current = 0; current <= 0x7fff; current += 1) {
+        for (const temporary of counterparts) {
+            assert.equal(
+                ported.ppu_transfer_horizontal_for(current, temporary),
+                (current & ~0x041f) | (temporary & 0x041f),
+            );
+            assert.equal(
+                ported.ppu_transfer_vertical_for(current, temporary),
+                (current & ~0x7be0) | (temporary & 0x7be0),
+            );
+        }
+    }
+
+    for (let temporary = 0; temporary <= 0x7fff; temporary += 1) {
+        for (const current of counterparts) {
+            assert.equal(
+                ported.ppu_transfer_horizontal_for(current, temporary),
+                (current & ~0x041f) | (temporary & 0x041f),
+            );
+            assert.equal(
+                ported.ppu_transfer_vertical_for(current, temporary),
+                (current & ~0x7be0) | (temporary & 0x7be0),
+            );
+        }
+    }
+});
+
+test("pen_display_fit_scale is the largest uniform scale that fits", () => {
+    for (const stage_width of [240, 480, 960]) {
+        for (const stage_height of [180, 360, 720]) {
+            for (const frame_width of [256, 128]) {
+                for (const frame_height of [240, 120]) {
+                    const expected = Math.min(stage_width / frame_width, stage_height / frame_height);
+                    const scale = ported.pen_display_fit_scale(stage_width, stage_height, frame_width, frame_height);
+                    assert.equal(scale, expected);
+                    assert.ok(frame_width * scale <= stage_width, "the scaled width fits");
+                    assert.ok(frame_height * scale <= stage_height, "the scaled height fits");
+                }
+            }
+        }
+    }
+});
+
+test("pen_display_scale_for fits the default stage only when the setting is exactly 1", () => {
+    // The default stage is 480 by 360 and (0, 0) is its center, so the fit scale is
+    // min(480 / 256, 360 / 240) = 1.5: the picture becomes 384 by 360, filling the
+    // height exactly. Any other setting value keeps the native 1x picture.
+    assert.equal(ported.pen_display_scale_for(1), 1.5);
+    assert.equal(256 * ported.pen_display_scale_for(1), 384);
+    assert.equal(240 * ported.pen_display_scale_for(1), 360);
+
+    for (const setting of [0, 2, -1, 0.5]) {
+        assert.equal(ported.pen_display_scale_for(setting), 1, `setting ${setting} stays native`);
+    }
+});
+
+test("pen display geometry centers every pixel band on the stage origin", () => {
+    // Scratch stage coordinates put (0, 0) in the center, and scratch-render adds
+    // (+0.5, +0.5) to pen lines of diameter exactly 1. The stored first-pixel goto
+    // coordinates pre-subtract that offset, so the centers the pen actually draws
+    // must run symmetric about zero at every scale, with each pixel band exactly
+    // one scale wide: the first band starts at -(scaled size) / 2.
+    for (const scale of [0.25, 0.5, 1, 1.5, 2, 2.5]) {
+        const offset = ported.pen_display_renderer_offset(scale);
+        assert.equal(offset, scale === 1 ? 0.5 : 0);
+
+        const first_x = ported.pen_display_first_x_for(scale) + offset;
+        const last_x = first_x + 255 * scale;
+        assert.equal(first_x, -(256 * scale) / 2 + scale / 2, `first column center at scale ${scale}`);
+        assert.equal(last_x, -first_x, `columns are symmetric about x 0 at scale ${scale}`);
+
+        const first_y = ported.pen_display_first_y_for(scale) + offset;
+        const last_y = first_y - 239 * scale;
+        assert.equal(first_y, (240 * scale) / 2 - scale / 2, `top row center at scale ${scale}`);
+        assert.equal(last_y, -first_y, `rows are symmetric about y 0 at scale ${scale}`);
+    }
+
+    assert.equal(ported.pen_display_first_x_for(1), -128, "native goto x keeps the 1x mapping");
+    assert.equal(ported.pen_display_first_y_for(1), 119, "native goto y keeps the 1x mapping");
+    assert.equal(ported.pen_display_first_x_for(1.5), -191.25, "fit goto x centers the 384-wide picture");
+    assert.equal(ported.pen_display_first_y_for(1.5), 179.25, "fit goto y centers the 360-tall picture");
 });
