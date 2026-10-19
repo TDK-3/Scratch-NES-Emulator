@@ -2,14 +2,15 @@
 # for the GoboScript port.
 #
 # Ports the parts of src/nes/apu/apu_2a03.ts, src/nes/apu/pulse_channel.ts,
-# src/nes/apu/triangle_channel.ts, src/nes/apu/noise_channel.ts, and
-# src/nes/apu/dmc_channel.ts that the current shared vectors cover: the
-# register write dispatch for $4000-$4013, $4015, and $4017, the $4015
-# status read, both pulse channels (control, sweep, timer, length counter,
-# envelope, output), the triangle channel (linear counter, timer, sequencer),
-# the noise channel (LFSR, timer, envelope, length counter), the DMC channel
-# (sample reader, output unit, timer, IRQ), and the four-step and five-step
-# frame sequencer. Audio mixing is not ported yet.
+# src/nes/apu/triangle_channel.ts, src/nes/apu/noise_channel.ts,
+# src/nes/apu/dmc_channel.ts, and src/nes/apu/mixer.ts that the current
+# shared vectors cover: the register write dispatch for $4000-$4013, $4015,
+# and $4017, the $4015 status read, both pulse channels (control, sweep,
+# timer, length counter, envelope, output), the triangle channel (linear
+# counter, timer, sequencer), the noise channel (LFSR, timer, envelope,
+# length counter), the DMC channel (sample reader, output unit, timer, IRQ),
+# the nonlinear pulse+TND mixer, and the four-step and five-step frame
+# sequencer.
 
 %include src/numeric
 
@@ -1271,6 +1272,43 @@ func apu_is_dmc_irq_asserted() {
 # Returns whether any APU IRQ line is asserted (frame IRQ or DMC IRQ).
 func apu_is_irq_asserted() {
     return apu_frame_irq != 0 or dmc_irq != 0;
+}
+
+# ---- audio mixer ----
+
+# Nonlinear 2A03 mixer constants. The pulse and TND channels use separate
+# mixing networks with different nonlinear curves.
+var APU_PULSE_MIXER_GAIN = 95.88;
+var APU_PULSE_MIXER_SCALE = 8128;
+var APU_PULSE_MIXER_OFFSET = 100;
+var APU_TND_MIXER_GAIN = 159.79;
+var APU_TND_MIXER_OFFSET = 100;
+var APU_TRIANGLE_MIXER_DIVISOR = 8227;
+var APU_NOISE_MIXER_DIVISOR = 12241;
+var APU_DMC_MIXER_DIVISOR = 22638;
+
+# Returns the nonlinear 2A03 pulse+TND mix, normalized to approximately 0..1.
+# Uses floating-point division internally and rounds to an integer in the 0..1000 range.
+func apu_mix_channels(pulse_one, pulse_two, triangle, noise, dmc) {
+    local pulse_sum = $pulse_one + $pulse_two;
+    local pulse_output = 0;
+
+    if pulse_sum > 0 {
+        pulse_output = APU_PULSE_MIXER_GAIN / (APU_PULSE_MIXER_SCALE / pulse_sum + APU_PULSE_MIXER_OFFSET);
+    }
+
+    local tri_term = $triangle / APU_TRIANGLE_MIXER_DIVISOR;
+    local noise_term = $noise / APU_NOISE_MIXER_DIVISOR;
+    local dmc_term = $dmc / APU_DMC_MIXER_DIVISOR;
+    local tnd_input = tri_term + noise_term + dmc_term;
+    local tnd_output = 0;
+
+    if tnd_input > 0 {
+        tnd_output = APU_TND_MIXER_GAIN / (1 / tnd_input + APU_TND_MIXER_OFFSET);
+    }
+
+    # Scale to 0..1000 range and round to integer
+    return ((pulse_output + tnd_output) * 1000 + 0.5) // 1;
 }
 
 # ---- sweep helpers ----

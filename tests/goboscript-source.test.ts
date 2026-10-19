@@ -623,6 +623,7 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/apu_2a03.gs", declaration: "apu_get_dmc_bytes_remaining", mirror: null, reason: "apu pending mirror" },
     { source: "src/apu_2a03.gs", declaration: "apu_dmc_get_dma_request_address", mirror: null, reason: "apu pending mirror" },
     { source: "src/apu_2a03.gs", declaration: "apu_is_dmc_irq_asserted", mirror: null, reason: "apu pending mirror" },
+    { source: "src/apu_2a03.gs", declaration: "apu_mix_channels", mirror: null, reason: "apu pending mirror" },
     { source: "src/apu_2a03.gs", declaration: "apu_is_frame_irq_asserted", mirror: null, reason: "apu pending mirror" },
     { source: "src/apu_2a03.gs", declaration: "apu_is_irq_asserted", mirror: null, reason: "apu pending mirror" },
     { source: "src/apu_2a03.gs", declaration: "apu_pulse_sweep_target", mirror: null, reason: "apu pending mirror" },
