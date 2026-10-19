@@ -23,7 +23,7 @@ npm run scratch:vectors
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 1,242 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
+The 1,258 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
 to source fixtures, 588 cross-domain shared-vector checks (587 records plus the generator regression), 257 pinned
 MIT single-step corpus checks covering all 256 opcode bytes, 77 GoboScript port-algorithm comparisons, 17
 GoboScript source-lint checks, six standard-controller tests, forty-two focused
@@ -634,14 +634,47 @@ Current parity coverage, in three layers:
 
 A valid `.sb3` compile is only a syntax/package check. Also open it in TurboWarp, click the green flag,
 verify expected output, and check that the project remains responsive. If Scratch website compatibility is
-claimed, test it separately from TurboWarp. None of that is possible in this environment yet: the pinned
-compiler needs Cargo and rustc, so the in-project self test has never executed and its result is unknown.
+claimed, test it separately from TurboWarp. The pinned compiler needs Cargo and rustc, so the sources have
+never been through it.
+
+### Compiled-project behavior
+
+The compiled project in `scratch/scratch.sb3` was brought in line with the sources block by block instead
+of through the compiler, and it runs headlessly under `scratch-vm`:
+
+- The in-project vector self test reports `port vectors 582/582 passed, 5 skipped, rom header ok mapper 4
+  format 1, board mmc3 banks 8`. The five skipped records are the CPU-state suite (3 records) and the
+  mapper-selection suite (2 records); the PPU and APU suites are replayed.
+- The console boots the embedded MMC3 image, reads the reset vector from it, and runs the game. The bus
+  trace of that boot is byte-identical to the TypeScript reference's: the same addresses, the same values,
+  and the same read/write kinds, from the two padding reads and the three stack reads through the reset
+  vector and the first game instructions. The comparison covers the first 600 accesses of the run, and
+  the port's CPU registers match the reference's at the same cycle count.
+- The run has no PPU renderer, so it produces no picture. The report carries the frame count, the CPU cycle
+  count, and the program counter instead.
+
+`scripts/align_compiled_scratch_project.py` applies that alignment. It takes the compiled project as its
+input, patches the blocks the sources describe, and writes the result back. It is idempotent: running it
+on an already-aligned project reports that there is nothing to do and leaves the file untouched. The
+project in Git is the aligned one, so the script is only needed to rebuild it from an older artifact.
+
+Reproduce the headless run with a small driver that loads the project into `scratch-vm`, sets
+`runtime.currentStepTime` so the runtime knows how long a step may take, and then calls
+`runtime._step()` until the `port_self_test_summary` variable on the Stage is filled in:
+
+```
+npm install scratch-vm@4.0.0 --no-save
+node driver.mjs scratch/scratch.sb3
+```
+
+The runtime only steps its threads when it knows its step interval, so a driver that forgets to set
+`runtime.currentStepTime` silently runs nothing.
 
 ### Performance tests
 
-No TurboWarp game-performance result is available: the GoboScript project is still a vector-self-test
-scaffold and does not emulate frames. Even the self test has not been measured, because the project has never
-been compiled. The TypeScript shell's single synthetic-frame timing of about 46 ms in
+No TurboWarp game-performance result is available: the project emulates frames, but it has not been timed on
+a target device, and it advances far more slowly than the TypeScript reference does under `scratch-vm`.
+The TypeScript shell's single synthetic-frame timing of about 46 ms in
 this sandbox is a smoke measurement, not representative of a supported game, target hardware, or TurboWarp.
 There is no verified 60 fps claim or target-device benchmark yet.
 

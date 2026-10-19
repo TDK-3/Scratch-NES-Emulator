@@ -15,7 +15,9 @@
 # boundaries; revisit this note with measurements before claiming cycle-level interleaving.
 #
 # Every bus access appends kind, address, and value to `cpu_access_log` and adds one cycle to
-# `cpu_cycles`, so a vector can pin both the transaction order and the cycle count.
+# `cpu_cycles`, so a vector can pin both the transaction order and the cycle count. The log is
+# written only while `cpu_access_log_enabled` is set: the reference takes an optional trace
+# sink, and the console runs the CPU without one.
 
 %include src/numeric
 %include src/cpu_status
@@ -31,12 +33,12 @@ enum cpu_stack_page {
 }
 
 enum cpu_vector_address {
-    nmi_low = 65476,
-    nmi_high = 65477,
-    reset_low = 65484,
-    reset_high = 65485,
-    irq_brk_low = 65494,
-    irq_brk_high = 65495
+    nmi_low = 65530,
+    nmi_high = 65531,
+    reset_low = 65532,
+    reset_high = 65533,
+    irq_brk_low = 65534,
+    irq_brk_high = 65535
 }
 
 var cpu_program_counter = 0;
@@ -51,6 +53,12 @@ var cpu_fetched_byte = 0;
 var cpu_fetched_word = 0;
 var cpu_popped_byte = 0;
 var cpu_popped_word = 0;
+
+# Whether the bus accesses are logged. The reference takes an optional trace sink and the
+# console runs the CPU without one, so the port keeps the log off while a game runs and
+# turns it on for the shared-vector replay, which compares the access order.
+var cpu_access_log_enabled = 1;
+
 list cpu_access_log;
 
 # Clears the trace and cycle counter without touching registers or bus state.
@@ -79,9 +87,13 @@ proc cpu_reset_registers {
 proc cpu_read_cycle address {
     local numeric_address = normalize_word($address);
     cpu_cycle_value = cpu_bus_read(numeric_address);
-    add cpu_access_kind.read to cpu_access_log;
-    add numeric_address to cpu_access_log;
-    add cpu_cycle_value to cpu_access_log;
+
+    if cpu_access_log_enabled == 1 {
+        add cpu_access_kind.read to cpu_access_log;
+        add numeric_address to cpu_access_log;
+        add cpu_cycle_value to cpu_access_log;
+    }
+
     cpu_cycles++;
 }
 
@@ -90,9 +102,13 @@ proc cpu_write_cycle address, value {
     local numeric_address = normalize_word($address);
     local numeric_value = normalize_byte($value);
     cpu_bus_write numeric_address, numeric_value;
-    add cpu_access_kind.write to cpu_access_log;
-    add numeric_address to cpu_access_log;
-    add numeric_value to cpu_access_log;
+
+    if cpu_access_log_enabled == 1 {
+        add cpu_access_kind.write to cpu_access_log;
+        add numeric_address to cpu_access_log;
+        add numeric_value to cpu_access_log;
+    }
+
     cpu_cycles++;
 }
 

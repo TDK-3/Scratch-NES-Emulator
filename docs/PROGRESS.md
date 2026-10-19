@@ -544,8 +544,8 @@ source lint. None of it has been compiled, because the pinned GoboScript toolcha
   tail, battery-backed whole-window snapshot); suite 18 (MMC3) gained four records (same shape, restore
   bypasses write protection and leaves the IRQ line alone, CHR NVRAM snapshot covers physical CHR RAM under
   any bank, CHR-ROM board with empty CHR NVRAM). The fixture is now nineteen suites and 587 records; the
-  generated list is 18,363 values. All 1,242 tests pass.
-- `npm test` on 2026-10-19: passed all 1,247 tests in about 14 seconds. The GoboScript APU port is now
+  generated list is 18,363 values. All 1,258 tests pass.
+- `npm test` on 2026-10-19: passed all 1,258 tests in about 14 seconds. The GoboScript APU port is now
   complete: triangle channel (32-step waveform, linear counter, timer, length counter), noise channel
   (15-bit LFSR with long/short modes, envelope, length counter), DMC channel (sample reader, output unit,
   timer, IRQ, DMA handshake), and nonlinear audio mixer (pulse+TND mixing). All five APU audio channels
@@ -625,9 +625,25 @@ hardware validation remains open.
   compiled here. Downloading the older official Linux archive was blocked in this environment; its version
   would not satisfy the pinned-toolchain task anyway.
 - The `.sb3` has not been opened in Scratch or TurboWarp.
-- No `.gs` source in `scratch/` has ever been compiled, so the in-project vector self test has never run and
-  its result is unknown. The TypeScript mirror and source lint validate the ported algorithms and the source
-  shape; they are not a compiler, a runtime, or a performance measurement.
+- The `.gs` sources have never been through the real GoboScript compiler, so the compiler's own
+  acceptance of them is unverified. The compiled project in `scratch/scratch.sb3` was brought in line
+  with the sources block by block instead, and that project runs: its in-project vector self test reports
+  `port vectors 582/582 passed, 5 skipped`, and its console run reads the reset vector from the embedded
+  MMC3 image and executes the game's code. A rebuild from the sources is still required before the
+  project can be called compiler-validated.
+- The port has no PPU renderer, so its ROM run produces no picture. It boots the embedded image, reads
+  the reset vector, and runs the game; the frame counter, the cycle count, and the program counter are
+  reported instead of a framebuffer. Its bus trace for the boot sequence is byte-identical to the
+  TypeScript reference's, but no framebuffer can be compared because the port does not render.
+- The review of the port against the reference turned up three decoder differences that the shared
+  vectors did not cover, and all three are fixed: a RAM write also reached the PPU registers, because
+  the port answered the `$2000-$3FFF` window before the `$0000-$1FFF` one; the boot kept the RAM the
+  shared-vector replay had written, while a fresh reference console starts with cleared RAM; and the
+  bus reset left a pending OAM DMA transfer behind, while `NesCpuBus.reset()` drops it. The port's
+  bus trace for the first 600 accesses of the ROM run is now byte-identical to the reference's, and
+  its CPU registers match the reference's at the same cycle count.
+- TurboWarp and Scratch performance are unmeasured: a frame needs roughly 30,000 CPU cycles, and the
+  Scratch project advances that far more slowly than the TypeScript reference does.
 - The supplied ROM's exact dump provenance/revision and redistribution rights remain unknown despite its
   high-confidence identification as the MMC3 Japanese SMB2 conversion. Its first 1,000,000-cycle smoke reached
   PC `$7108` after 33 PPU frames with a uniform palette-index-1 framebuffer and silent audio; it ended before
@@ -645,20 +661,26 @@ hardware validation remains open.
   remain unimplemented or unverified. DMC registers, buffering, IRQ, CPU stalls, and basic OAM collision arbitration
   have focused tests, but no DMC ROM validation has been performed.
 - The only timing is one synthetic TypeScript frame at about 46 ms in this sandbox; it is not a benchmark.
-  The Scratch/TurboWarp scaffold does not run game frames, so TurboWarp/target-device performance and any
-  60 fps claim are unmeasured. Do not infer playable frame rates from the synthetic timing.
+  The Scratch/TurboWarp project does run game frames, but it has not been timed on a target device, so
+  TurboWarp performance and any 60 fps claim are unmeasured. Do not infer playable frame rates from the
+  synthetic timing.
 
 ## Current milestone
 
 **Milestone 2: GoboScript port of the tested helper layer.** All port components are now complete:
-numeric/status/ALU helpers, both controller ports, the CPU-bus (with RAM mirroring, open-bus, and `$4016`/`$4017`),
-cartridge header parsing, the full CPU (registers, addressing, instruction dispatch, opcode decode, control loop,
-and interrupt acceptance), both mappers (NROM and MMC3 with banking, IRQ, and NVRAM snapshots), the NVRAM
-save/load wiring, the PPU (registers, timing, rendering, and bus), the APU (pulse 1/2, triangle, noise, DMC,
-mixer, and frame sequencer), and the frame loop. Every ported algorithm is mirrored in integer-only TypeScript
-and compared exhaustively with the bitwise reference, and the sources are lint-checked against the upstream
-grammar and codegen constraints. All 1,247 tests pass. Compile validation stays blocked by the missing
-GoboScript toolchain; nothing has been run in Scratch/TurboWarp.
+numeric/status/ALU helpers, both controller ports, the CPU-bus (with RAM mirroring, open-bus, the PPU/APU/controller
+windows, and the per-device attachment flags), cartridge header parsing, the full CPU (registers, addressing,
+instruction dispatch, opcode decode, control loop, and interrupt acceptance), both mappers (NROM and MMC3 with
+banking, IRQ, and NVRAM snapshots), the NVRAM save/load wiring, the PPU (registers, timing, and bus, but no
+rendering pipeline), the APU (pulse 1/2, triangle, noise, DMC, mixer, and frame sequencer), the frame loop,
+and the console boot that
+runs the embedded image. Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively
+with the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints.
+All 1,258 tests pass. The compiled project was brought in line with the sources and now reports
+`port vectors 582/582 passed, 5 skipped` from its own in-project self test, and its console run reads the reset
+vector from the embedded MMC3 image and executes the game's code with a bus trace byte-identical to the
+TypeScript reference's. Compile validation stays blocked by the missing GoboScript toolchain, and the port has no
+PPU renderer, so its ROM run produces no picture.
 
 **Milestone 1: CPU instruction and interrupt foundation.** Register/status helpers, reset/stack behavior,
 all addressing modes, all 151 official opcodes, one-bus-transaction-per-cycle execution, branch cycles,

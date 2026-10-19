@@ -116,7 +116,7 @@ func is compiled separately into each target that includes it.
 | `src/mapper.gs` | exact mapper and submapper routing for the two registered boards, the two selection error codes, and the declared-memory size sum | the MMC3 board itself, and any mapper the reference does not register |
 | `src/mapper_000.gs` | every NROM creation check in the reference's order, the PRG RAM and CHR RAM bytes the board would map, the payload and trainer copies, the CPU and pattern address windows with PRG ROM mirroring and aliasing RAM, and the nonvolatile memory snapshot procs | the PPU-side nametable consumer and the save/load wiring that would actually use the snapshots |
 | `src/mapper_004.gs` | the MMC3 creation checks, the eight banking registers with their bank-data masks, PRG and CHR bank selection in both modes, the PRG RAM enable and write-protect bits, the mirroring register with its four-screen override, the payload and trainer copies, the CPU and pattern windows, the IRQ latch/reload/disable/enable registers, the PPU A12 observation with the ten-dot low filter that clocks the scanline counter, and the nonvolatile memory snapshot procs | the save/load wiring that would actually use the snapshots |
-| `src/vector_selftest.gs` | suites 1, 3, and 7 through 19 | suites 2 (CPU state), 4 (mapper), 5 (PPU), 6 (APU) are counted as skipped |
+| `src/vector_selftest.gs` | suites 1, 3, 5, 6, and 7 through 19 | suites 2 (CPU state) and 4 (mapper selection) are counted as skipped |
 
 Overflow for ADC/SBC is derived from signed arithmetic rather than bit masks, and every mask or shift is
 floor division and modulo, because GoboScript exposes no bitwise operators and its `%` and `//` are Scratch's

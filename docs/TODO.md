@@ -9,6 +9,11 @@ separate from TypeScript success.
 - [x] Check local PATH, npm, and upstream release metadata for a usable GoboScript compiler.
 - [ ] Provision the official GoboScript compiler matching the documented source snapshot, record its
       version, and compile `scratch/`.
+- [x] Bring the compiled project in `scratch/scratch.sb3` in line with the sources block by block, and
+      verify it headlessly: the in-project self test reports `port vectors 582/582 passed, 5 skipped`, and
+      the console boots the embedded MMC3 image, reads the reset vector, and runs the game with a bus
+      trace byte-identical to the TypeScript reference's. A real compile is still required before the
+      project counts as compiler-validated.
 - Blocker found in this environment: `cargo`, `rustc`, and `goboscript` are not installed. The npm
   registry has no `goboscript` package. Upstream GitHub release metadata exposes prebuilt assets, but the
   available latest tagged binary (v3.2.1) is older than the researched v3.3.0 source snapshot. A download
@@ -16,7 +21,9 @@ separate from TypeScript success.
   as satisfying the pinned-toolchain task.
 - [ ] Fix any GoboScript syntax, configuration, asset, or file-backed-list errors reported by the
       compiler.
-- [ ] Open the generated `.sb3` in TurboWarp and confirm the green-flag ROM signature result.
+- [ ] Open the generated `.sb3` in TurboWarp and confirm the green-flag ROM signature result. The port
+      has no PPU renderer, so its run produces no picture; the report carries the frame count, the CPU
+      cycle count, and the program counter instead.
 - [ ] Record which embedded TurboWarp options work and separately test any claim of Scratch website
       compatibility.
 - [x] Identify the supplied fixture as an MMC3 conversion of Japanese *Super Mario Bros. 2* and establish

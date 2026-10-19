@@ -306,8 +306,8 @@ toolchain needs Cargo and rustc, which are unavailable here.
 - `src/rom_loader.gs` loads the generated ROM list, checks the iNES signature, copies the embedded header into
   the parser, and writes the summary text the self test reports.
 - `src/shared_vectors.gs` loads the generated port-vector list.
-- `src/vector_selftest.gs` walks that list, executes suites 1, 3, 7, 8, 9, 10, and 11, counts suites 2, 4, 5,
-  and 6 as skipped, and writes the summary variables the sprite reports.
+- `src/vector_selftest.gs` walks that list, executes every ported suite, counts suites 2 (CPU state) and 4
+  (mapper selection) as skipped, and writes the summary variables the sprite reports.
 - `assets/` holds costume and other compiler-packaged assets.
 - `data/test_rom_bytes.txt` is generated from the default fixture or an explicitly selected build-time ROM
   before a build.

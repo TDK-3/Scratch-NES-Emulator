@@ -818,10 +818,17 @@ test("the mirror replays every shared bus vector", () => {
         const bus = new ported.GoboscriptCpuBus();
         const operation_count = vector_input(vector, 0);
         const reads: number[] = [];
+        // The reference replays operation 1 with no devices attached and operation 2 with live
+        // controller ports, so the mirror reproduces that environment before the replay.
+        bus.detach_devices();
         bus.reset();
         bus.controllers.reset();
         bus.controllers.set_button_mask(0, 0);
         bus.controllers.set_button_mask(1, 0);
+
+        if (vector.operation === 2) {
+            bus.controllers_attached = true;
+        }
 
         for (let operation_index = 0; operation_index < operation_count; operation_index += 1) {
             const kind = vector_input(vector, 1 + operation_index * 3);
@@ -838,6 +845,97 @@ test("the mirror replays every shared bus vector", () => {
 
         assert.deepEqual([reads.length, ...reads], [...vector.expected], `bus vector ${vector.id}`);
     }
+});
+
+test("a detached device window stays undriven on both sides", () => {
+    // The TypeScript decoder leaves an absent device's window undriven: reads return the
+    // retained latch and writes are dropped. The port reaches the same state by detaching the
+    // device, which is what the shared-vector replay does.
+    const bus = new ported.GoboscriptCpuBus();
+    bus.detach_devices();
+    bus.reset();
+
+    bus.write(0x2006, 0x40);
+
+    assert.equal(bus.read(0x2006), 0x40, "a detached PPU window returns the retained latch");
+    assert.equal(bus.read(0x4015), 0x40, "a detached APU status register returns the retained latch");
+    assert.equal(bus.read(0x4016), 0x40, "a detached controller port returns the retained latch");
+    assert.equal(bus.read(0x4017), 0x40, "a detached controller port returns the retained latch");
+    assert.equal(bus.read(0x8000), 0x40, "a detached cartridge window returns the retained latch");
+});
+
+test("an attached PPU window never answers a cartridge address", () => {
+    // The PPU register window is $2000-$3FFF and the cartridge window is $4020-$FFFF. A read
+    // of a cartridge address must reach the board even when the PPU is attached, because the
+    // reset vector lives at $FFFC. The PPU mirrors its registers every eight bytes, so a
+    // window that answered every address would answer $FFFC and $FFFF as PPU registers.
+    const bus = new ported.GoboscriptCpuBus();
+    const board = new ported.GoboscriptMmc3Mapper();
+    board.prg_rom_bytes = 65536;
+    board.prg_bank_count = 8;
+    board.prg_rom[65532] = 0x24;
+    board.prg_rom[65533] = 0xee;
+    bus.cartridge_kind = ported.MAPPER_KIND.MMC3;
+    bus.mmc3_board = board;
+    bus.reset();
+
+    assert.equal(bus.read(0xfffc), 0x24, "the reset vector low byte comes from the cartridge");
+    assert.equal(bus.read(0xfffd), 0xee, "the reset vector high byte comes from the cartridge");
+    assert.equal(bus.read(0xffff), 0x00, "the last cartridge byte comes from the cartridge");
+});
+
+test("a RAM write stays in the RAM window", () => {
+    // The reference decoder returns for the RAM window first, so a RAM write never reaches a
+    // PPU register or the cartridge. The mirror stores the byte in the mirrored RAM and
+    // leaves the other windows alone.
+    const bus = new ported.GoboscriptCpuBus();
+    bus.reset();
+
+    bus.write(0x0000, 0x5a);
+    bus.write(0x0100, 0xa5);
+    bus.write(0x0200, 0x3c);
+
+    assert.equal(bus.read(0x0000), 0x5a, "the byte is stored in RAM");
+    assert.equal(bus.read(0x0100), 0xa5, "the byte is stored in RAM");
+    assert.equal(bus.read(0x0200), 0x3c, "the byte is stored in RAM");
+    assert.equal(bus.read(0x2000), 0x3c, "a read outside the RAM window returns the latch");
+    assert.equal(bus.read(0x8000), 0x3c, "a read outside the RAM window returns the latch");
+
+    bus.write(0x0900, 0x11);
+    assert.equal(bus.read(0x0100), 0x11, "the RAM window is mirrored every 2 KiB");
+});
+
+test("a bus reset drops a pending OAM DMA transfer", () => {
+    // `NesCpuBus.reset()` clears the pending DMA state, so a transfer that a record started
+    // does not continue into the next one. The mirror's reset has to do the same.
+    const bus = new ported.GoboscriptCpuBus();
+    bus.reset();
+
+    bus.write(0x4014, 0x20);
+    assert.equal(bus.clock_dma_cycle(), 1, "the DMA transfer is pending");
+
+    bus.reset();
+    assert.equal(bus.clock_dma_cycle(), 0, "the reset dropped the pending transfer");
+});
+
+test("the mirror stops logging the bus accesses when the trace is off", () => {
+    // The reference takes an optional trace sink and the console runs the CPU without one, so
+    // the port keeps the access log empty while a game runs. The cycle count still advances,
+    // because the log and the cycle counter are separate.
+    const core = new ported.GoboscriptCpuCore();
+    core.reset_registers();
+    core.access_log_enabled = false;
+
+    core.read_cycle(0x0200);
+    core.write_cycle(0x0201, 0x42);
+
+    assert.deepEqual(core.access_log, [], "a disabled trace logs nothing");
+    assert.equal(core.cycles, 2, "the cycles still count while the trace is off");
+
+    core.access_log_enabled = true;
+    core.read_cycle(0x0200);
+
+    assert.deepEqual(core.access_log.length, 3, "an enabled trace logs the access again");
 });
 
 test("the mirror reproduces every shared controller vector", () => {
@@ -862,6 +960,7 @@ test("the mirror reproduces every shared controller vector", () => {
 function make_mirror_cpu_core(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
     const core = new ported.GoboscriptCpuCore();
     core.reset_registers();
+    core.bus.detach_devices();
     core.bus.clear_ram();
     core.bus.reset();
     core.program_counter = vector_inputs[1] ?? 0;
@@ -1421,6 +1520,7 @@ function make_mirror_cpu_instruction(vector_inputs: readonly number[]): ported.G
     const core = new ported.GoboscriptCpuCore();
     core.decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
     core.reset_registers();
+    core.bus.detach_devices();
     core.bus.clear_ram();
     core.bus.reset();
     core.program_counter = vector_inputs[0] ?? 0;
@@ -1474,6 +1574,7 @@ function make_mirror_cpu_control(vector_inputs: readonly number[]): ported.Gobos
     const core = new ported.GoboscriptCpuCore();
     core.decoder = new ported.GoboscriptCpuOpcodeDecoder(flat_opcode_table());
     core.reset_registers();
+    core.bus.detach_devices();
     core.bus.clear_ram();
     core.bus.reset();
     core.program_counter = vector_inputs[0] ?? 0;
@@ -1507,6 +1608,7 @@ function make_mirror_cpu_control(vector_inputs: readonly number[]): ported.Gobos
 function make_mirror_cpu_sequence(vector_inputs: readonly number[]): ported.GoboscriptCpuCore {
     const core = new ported.GoboscriptCpuCore();
     core.reset_registers();
+    core.bus.detach_devices();
     core.bus.clear_ram();
     core.bus.reset();
     core.program_counter = vector_inputs[0] ?? 0;

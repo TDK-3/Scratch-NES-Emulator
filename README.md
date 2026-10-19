@@ -64,9 +64,10 @@ loading, persistence, and known-limitations statement.
   bank modes, the PRG RAM protect bits, the mirroring control, the CPU and pattern windows, the four IRQ
   registers, the PPU A12 filter with its ten-dot low window, and the nonvolatile memory snapshots are
   ported. The embedded default image is MMC3 and now attaches and can raise a scanline IRQ.
-  Its Stage runs a self test over the 587 generated parity vectors and reports a summary; the CPU state,
-  mapper, PPU, and APU suites are counted as skipped. It does not emulate games, and none of its sources have
-  been compiled, because the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
+  Its Stage runs a self test over the 587 generated parity vectors and reports a summary; the CPU state
+  and mapper suites are counted as skipped. It then boots the embedded image and runs the game, but it has no
+  PPU renderer, so the run produces no picture. None of its sources have been through the compiler, because
+  the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
   validated instead by an integer-only TypeScript mirror compared exhaustively with the reference, plus a
   source lint for grammar shape and reserved names.
 - `PpuMemoryBus` routes mapper-backed pattern memory, mirrored nametable RAM, palette aliases and six-bit

@@ -29,8 +29,12 @@ costumes "assets/blank.svg";
 %include src/frame_loop
 %include src/shared_vectors
 %include src/vector_selftest
+%include src/rom_run
 
 onflag {
     run_port_self_test;
     broadcast "port self test done";
+    rom_run_start;
+    broadcast "rom run started";
+    rom_run_loop;
 }

@@ -91,9 +91,10 @@ not mistaken for missing work.
       `npm run scratch:vectors`, `npm run scratch:opcode`); `goboscript build` itself has never run.
 - [ ] Run the same shared vectors through TypeScript and GoboScript for every ported subsystem.
       The TypeScript side runs all 587 records. The GoboScript side is written
-      (`scratch/src/vector_selftest.gs` replays suites 1, 3, and 7 through 19 and counts the rest as
-      skipped) but has
-      never executed. Substitute evidence: an integer-only TypeScript mirror of every ported helper is
+      (`scratch/src/vector_selftest.gs` replays suites 1, 3, 5, 6, and 7 through 19 and counts suites 2
+      and 4 as skipped) and the compiled project in `scratch/scratch.sb3` runs it headlessly: it
+      reports `port vectors 582/582 passed, 5 skipped`. The sources have never been through the
+      compiler. Substitute evidence: an integer-only TypeScript mirror of every ported helper is
       compared exhaustively with the bitwise reference and replayed through the same fixture
       (`tests/goboscript-port-algorithms.test.ts`), and the sources are lint-checked against the upstream
       grammar and codegen constraints (`tests/goboscript-source.test.ts`).
@@ -120,7 +121,7 @@ not mistaken for missing work.
 
 ## Completion reporting
 
-As of 2026-10-18, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,242 tests passed
+As of 2026-10-19, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,258 tests passed
 (including 1,026 pinned CPU corpus vectors as 257 grouped tests, 587 shared port-vector records, 77
 GoboScript port-algorithm comparisons, 4 opcode-table checks, and 17 GoboScript source-lint checks),
 `npm run build:ts` and all three data

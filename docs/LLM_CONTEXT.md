@@ -118,7 +118,7 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,242 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+suite has 1,258 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
 test, 588 cross-domain parity cases, 77 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported modules, 17 GoboScript source-lint checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser
@@ -209,9 +209,9 @@ map, the payload copy including the trainer at PRG RAM offset `$1000`, and the C
 with PRG ROM mirroring and the writable RAM regions), and `cartridge_loader.gs` (the boot path that validates
 a board, copies its payload, attaches it to the bus, and reports why an image was rejected). `stage.gs`
 includes every header, so the Stage owns all shared state, and its green-flag handler runs
-`src/vector_selftest.gs`, which executes suites 1, 3, and 7 through 19 of the fixture (suites 16 and 18
-now cover NVRAM snapshots as well as the CPU and pattern windows), counts suites 2, 4, 5,
-and 6 as skipped, and broadcasts a summary that `main.gs` reports. The loader attaches either ported board, so
+`src/vector_selftest.gs`, which executes suites 1, 3, 5, 6, and 7 through 19 of the fixture (suites 16 and 18
+now cover NVRAM snapshots as well as the CPU and pattern windows), counts suites 2 and 4
+as skipped, and broadcasts a summary that `main.gs` reports. The loader attaches either ported board, so
 the embedded MMC3 image now drives the cartridge window and can raise a scanline IRQ; both ported boards
 now also carry their nonvolatile memory snapshots. `mapper_000.gs` and `mapper_004.gs` each expose four
 snapshot procs: `get_prg_nvram_snapshot`, `load_prg_nvram_snapshot`, `get_chr_nvram_snapshot`, and
