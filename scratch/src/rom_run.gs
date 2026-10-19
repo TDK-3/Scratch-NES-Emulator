@@ -29,7 +29,7 @@
 #
 # The same sample point watches the ROM load key, and a press is serviced at the top of the
 # next iteration instead of from a key-press hat: src/rom_input.gs asks the host for a string
-# of decimal byte values, replaces the embedded image with what it describes, and this loop
+# of hexadecimal byte values, replaces the embedded image with what it describes, and this loop
 # then boots that image through the same path the embedded one took. Servicing the request
 # here, with the console stopped, is what keeps the byte list from being replaced in the
 # middle of a frame, and it leaves the counters and the report starting over from the new

@@ -553,7 +553,7 @@ export function keyboard_poll_masks(held_keys: ReadonlySet<string>): readonly [n
 export const ROM_INPUT_ERROR = {
     NONE: 0,
     EMPTY: 1,
-    INVALID_BYTE: 2,
+    ODD_DIGITS: 2,
     TOO_MANY_BYTES: 3,
     TOO_LONG: 4,
     SIGNATURE: 5,
@@ -568,8 +568,8 @@ export const ROM_INPUT_LIMIT = {
 
 /**
  * Mirror of scratch/src/rom_input.gs: the decode that rebuilds a cartridge image from a
- * pasted string of decimal byte values, the header pre-check that decides whether the staged
- * bytes may replace the running image, and the copy that installs them.
+ * pasted string of hexadecimal byte values, the header pre-check that decides whether the
+ * staged bytes may replace the running image, and the copy that installs them.
  *
  * The ported decode is the runtime half of the format src/nes/cartridge/rom_text.ts defines,
  * and the converter page encodes with the other half, so tests/rom-text.test.ts compares this
@@ -577,9 +577,9 @@ export const ROM_INPUT_LIMIT = {
  *
  * Scratch lists and strings are both 1-indexed, so the port reads `rom_input_text[cursor]`
  * and `rom_input_bytes[index]`; this mirror keeps zero-based arrays and converts at the two
- * places the port indexes, the way GoboscriptControllerPorts does. A letter index past the end
- * of a Scratch string reads "", which the decode takes as the separator that flushes the last
- * value; the mirror reproduces that with an empty slice.
+ * places the port indexes, the way GoboscriptControllerPorts does. Two hexadecimal digits make
+ * one byte; any other character is ignored, and a leftover digit at the end is reported as
+ * odd-digits, exactly as the port does.
  */
 export class GoboscriptRomInput {
     /** Mirror of the `rom_input_text` variable, the pasted answer. */
@@ -611,38 +611,42 @@ export class GoboscriptRomInput {
         }
 
         let cursor = 1;
-        let byte_value = 0;
-        let has_digits = 0;
+        let nibble_value = 0;
+        let pending_nibble = 0;
+        let has_pending_nibble = 0;
 
-        while (cursor <= text_length + 1 && this.rom_input_error_code === ROM_INPUT_ERROR.NONE) {
+        while (cursor <= text_length && this.rom_input_error_code === ROM_INPUT_ERROR.NONE) {
             const character = this.rom_input_text.slice(cursor - 1, cursor);
-            const digit_value = to_number(character);
 
-            if (digit_value > 0) {
-                byte_value = byte_value * 10 + digit_value;
-                has_digits = 1;
-            } else if (character === "0") {
-                byte_value *= 10;
-                has_digits = 1;
-            } else if (has_digits === 1) {
-                has_digits = 0;
+            if (character === "0") {
+                nibble_value = 0;
+            } else {
+                nibble_value = to_number(`0x${character}`);
+            }
 
-                if (byte_value > 255) {
-                    this.rom_input_error_code = ROM_INPUT_ERROR.INVALID_BYTE;
+            if (nibble_value > 0 || character === "0") {
+                if (has_pending_nibble === 0) {
+                    pending_nibble = nibble_value;
+                    has_pending_nibble = 1;
                 } else if (this.rom_input_bytes.length >= ROM_INPUT_LIMIT.MAX_BYTES) {
                     this.rom_input_error_code = ROM_INPUT_ERROR.TOO_MANY_BYTES;
                 } else {
-                    this.rom_input_bytes.push(byte_value);
+                    this.rom_input_bytes.push(pending_nibble * 16 + nibble_value);
                     this.rom_input_byte_count += 1;
-                    byte_value = 0;
+                    pending_nibble = 0;
+                    has_pending_nibble = 0;
                 }
             }
 
             cursor += 1;
         }
 
-        if (this.rom_input_error_code === ROM_INPUT_ERROR.NONE && this.rom_input_byte_count === 0) {
-            this.rom_input_error_code = ROM_INPUT_ERROR.EMPTY;
+        if (this.rom_input_error_code === ROM_INPUT_ERROR.NONE) {
+            if (has_pending_nibble === 1) {
+                this.rom_input_error_code = ROM_INPUT_ERROR.ODD_DIGITS;
+            } else if (this.rom_input_byte_count === 0) {
+                this.rom_input_error_code = ROM_INPUT_ERROR.EMPTY;
+            }
         }
     }
 

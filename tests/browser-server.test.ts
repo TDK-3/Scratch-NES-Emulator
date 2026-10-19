@@ -54,6 +54,8 @@ test("browser preview serves its shell and ROMs, supports HEAD, and rejects unsa
     assert.match(converter_response.headers.get("content-type") ?? "", /^text\/html/);
     const converter_page = await converter_response.text();
     assert.match(converter_page, /<textarea\s+id="rom-text-output"/);
+    assert.match(converter_page, /<select id="format-select"/);
+    assert.match(converter_page, /Hexadecimal/);
     assert.match(converter_page, /src="\/build\/nes\/browser\/rom_string_page\.js"/);
 
     const supplied_rom = await readFile(TEST_ROM_PATH);

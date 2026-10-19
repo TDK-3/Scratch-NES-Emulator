@@ -121,7 +121,7 @@ not mistaken for missing work.
 
 ## Completion reporting
 
-As of 2026-10-19, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,286 tests passed
+As of 2026-10-19, the evidence is recorded in `docs/PROGRESS.md` and `docs/TESTING.md`: 1,303 tests passed
 (including 1,026 pinned CPU corpus vectors as 257 grouped tests, 587 shared port-vector records, 97
 GoboScript port-algorithm comparisons, 4 opcode-table checks, 26 GoboScript source-lint checks, and 11
 GoboScript keyboard-input checks),

@@ -136,16 +136,16 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
 
     const output = element("rom-text-output");
     const status = element("convert-status");
-    const separator_select = element("separator-select");
+    const format_select = element("format-select");
 
     assert.equal(status.textContent, "No ROM file loaded.");
     assert.equal(element("copy-rom-text").disabled, true, "the copy button starts disabled");
 
     // A file chosen with the picker.
     const image = ines_image(1, 1);
-    const expected_text = encode_rom_text(image, "space");
+    const expected_text = encode_rom_text(image, "continuous");
     element("rom-file").files = { item: () => new File([image], "chosen.nes", { type: "application/octet-stream" }) };
-    separator_select.value = "space";
+    format_select.value = "continuous";
     dispatch("rom-file", "change");
     await settle();
 
@@ -159,7 +159,8 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
     assert.ok(
         status.textContent.includes(
             `chosen.nes: ${image.byteLength.toLocaleString("en-US")} bytes became ` +
-                `${expected_text.text.length.toLocaleString("en-US")} characters`,
+                `${expected_text.text.length.toLocaleString("en-US")} hexadecimal characters ` +
+                "(2.00 per byte)",
         ),
         status.textContent,
     );
@@ -167,14 +168,13 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
     assert.equal(element("copy-rom-text").disabled, false);
     assert.equal(element("download-rom-text").disabled, false);
 
-    // The separator choice changes the text, not the image.
-    separator_select.value = "newline";
-    dispatch("separator-select", "change");
-    dispatch("rom-file", "change");
+    // The layout choice re-encodes the loaded image without another file pick.
+    format_select.value = "spaced";
+    dispatch("format-select", "change");
     await settle();
 
-    assert.equal(output.value, encode_rom_text(image, "newline").text);
-    assert.match(element("separator-note").textContent, /Separating with a newline\./);
+    assert.equal(output.value, encode_rom_text(image, "spaced").text);
+    assert.match(element("format-note").textContent, /Putting one space between two byte values\./);
 
     // A dropped file takes the same path.
     const supplied = Uint8Array.from(readFileSync(fileURLToPath(new URL("../test_rom.nes", import.meta.url))));
@@ -189,7 +189,7 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
 
     await settle();
 
-    assert.equal(output.value, encode_rom_text(supplied, "newline").text);
+    assert.equal(output.value, encode_rom_text(supplied, "spaced").text);
     assert.equal(element("rom-name").textContent, "test_rom.nes");
     assert.equal(element("header-mapper").textContent, "4");
     assert.match(element("header-note").textContent, /routes this mapper/);
@@ -206,7 +206,7 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
     await settle();
 
     assert.equal(created_anchors.length, 1);
-    assert.equal(created_anchors[0]?.download, "test_rom_bytes.txt");
+    assert.equal(created_anchors[0]?.download, "test_rom_hex.txt");
     assert.equal(created_anchors[0]?.clicked, 1);
 
     // Clearing empties the output and disables the buttons again.
@@ -229,11 +229,11 @@ test("the converter page reports an image the Scratch port cannot use", async ()
     // A header the iNES parser rejects still converts; the report says the header is unread.
     const not_ines = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     element("rom-file").files = { item: () => new File([not_ines], "odd.bin") };
-    element("separator-select").value = "comma";
+    element("format-select").value = "spaced";
     dispatch("rom-file", "change");
     await settle();
 
-    assert.equal(output.value, encode_rom_text(not_ines, "comma").text);
+    assert.equal(output.value, encode_rom_text(not_ines, "spaced").text);
     assert.match(element("header-note").textContent, /The header does not parse/);
     assert.equal(element("header-mapper").textContent, "-");
     assert.match(status.textContent, /decoded back unchanged/);

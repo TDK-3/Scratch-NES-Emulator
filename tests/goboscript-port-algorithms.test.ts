@@ -3583,16 +3583,16 @@ const SUPPLIED_ROM_IMAGE = Uint8Array.from(
 /** The reference decoder's string codes and the numeric codes the port reports for them. */
 const ROM_TEXT_ERROR_CODES: Readonly<Record<string, number>> = {
     empty: ported.ROM_INPUT_ERROR.EMPTY,
-    "invalid-byte": ported.ROM_INPUT_ERROR.INVALID_BYTE,
+    "odd-digits": ported.ROM_INPUT_ERROR.ODD_DIGITS,
     "too-many-bytes": ported.ROM_INPUT_ERROR.TOO_MANY_BYTES,
     "too-long": ported.ROM_INPUT_ERROR.TOO_LONG,
 };
 
 test("the mirrored ROM text decode matches the reference decoder", () => {
-    // scratch/src/rom_input.gs rebuilds a cartridge image from a pasted string, and the
-    // converter page encodes that string with the reference module, so the two have to agree
-    // on every byte. The mirror is the ported scan; this compares it with the reference over
-    // the same text the page produces.
+    // scratch/src/rom_input.gs rebuilds a cartridge image from a pasted hexadecimal string,
+    // and the converter page encodes that string with the reference module, so the two have
+    // to agree on every byte. The mirror is the ported scan; this compares it with the
+    // reference over the same text the page produces.
     const images = [
         Uint8Array.from([0x4e, 0x45, 0x53, 0x1a, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 128, 7]),
         Uint8Array.from({ length: 256 }, (_, index) => index),
@@ -3601,8 +3601,8 @@ test("the mirrored ROM text decode matches the reference decoder", () => {
     ];
 
     for (const image of images) {
-        for (const separator of ["space", "newline", "comma"] as const) {
-            const text = encode_rom_text(image, separator).text;
+        for (const format of ["continuous", "spaced", "lines"] as const) {
+            const text = encode_rom_text(image, format).text;
             const reference = decode_rom_text(text);
             const decoder = new ported.GoboscriptRomInput();
             decoder.rom_input_text = text;
@@ -3612,7 +3612,7 @@ test("the mirrored ROM text decode matches the reference decoder", () => {
             assert.equal(
                 decoder.rom_input_error_code,
                 ported.ROM_INPUT_ERROR.NONE,
-                `the port must decode ${image.byteLength} bytes with ${separator} separators`,
+                `the port must decode ${image.byteLength} bytes in the ${format} layout`,
             );
             assert.equal(decoder.rom_input_byte_count, image.byteLength);
             assert.deepEqual(decoder.rom_input_bytes, Array.from(image));
@@ -3623,11 +3623,11 @@ test("the mirrored ROM text decode matches the reference decoder", () => {
 test("the mirrored ROM text decode stops where the reference decoder stops", () => {
     const failures: readonly (readonly [string, string])[] = [
         ["", "empty"],
-        ["  ,\n;", "empty"],
-        ["78 69 256 26", "invalid-byte"],
-        ["78 69 83 26 0 255 999", "invalid-byte"],
+        ["  ,\n;.-+", "empty"],
+        ["4e45531a0", "odd-digits"],
+        ["f", "odd-digits"],
         ["x".repeat(ported.ROM_INPUT_LIMIT.MAX_TEXT_CHARS + 1), "too-long"],
-        [`0 ${"0 ".repeat(ported.ROM_INPUT_LIMIT.MAX_BYTES)}`.trim(), "too-many-bytes"],
+        ["0a".repeat(ported.ROM_INPUT_LIMIT.MAX_BYTES + 1), "too-many-bytes"],
     ];
 
     for (const [text, expected_code] of failures) {
@@ -3713,8 +3713,8 @@ test("the mirrored image validation gates the install on a complete iNES image",
     const failed = new ported.GoboscriptRomInput();
     failed.rom_input_bytes = [...complete];
     failed.rom_input_byte_count = complete.length;
-    failed.rom_input_error_code = ported.ROM_INPUT_ERROR.INVALID_BYTE;
+    failed.rom_input_error_code = ported.ROM_INPUT_ERROR.ODD_DIGITS;
     failed.validate_image();
 
-    assert.equal(failed.rom_input_error_code, ported.ROM_INPUT_ERROR.INVALID_BYTE);
+    assert.equal(failed.rom_input_error_code, ported.ROM_INPUT_ERROR.ODD_DIGITS);
 });

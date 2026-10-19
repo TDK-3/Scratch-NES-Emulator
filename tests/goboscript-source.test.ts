@@ -1710,6 +1710,13 @@ test("the run loop services a ROM load request before it runs any more cycles", 
     assert.match(install.body.join("\n"), /delete cartridge_bytes;/, "the install replaces the embedded image");
     assert.match(parse.body.join("\n"), /rom_input_limit\.max_bytes/, "the decode must respect the list limit");
     assert.match(parse.body.join("\n"), /rom_input_limit\.max_text_chars/, "the decode must bound the text it reads");
+    assert.match(
+        parse.body.join("\n"),
+        /\(\"0x\" & character\) \+ ""/,
+        "the decode must read one hexadecimal digit at a time through Scratch's number cast",
+    );
+    assert.match(parse.body.join("\n"), /pending_nibble \* 16/, "two hexadecimal nibbles must make one byte");
+    assert.match(parse.body.join("\n"), /rom_input_error\.odd_digits/, "a leftover digit must be a reported error");
 
     // The load key has to stay out of the pad bindings, or loading a ROM would press a button.
     const keyboard = get_source("src/keyboard_input.gs");

@@ -72,8 +72,8 @@ loading, persistence, and known-limitations statement.
   `pen_fit_to_screen` variable to 0 returns it to native 1x pixels. The same project reads the host
   keyboard with the built-in "key () pressed?" reporter and drives both NES pads from it: arrows, Z, X,
   Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second. Pressing Q while a game runs
-  asks for a pasted string of decimal byte values, rebuilds the embedded byte list from it, and reboots the
-  console from the new image; the decode stages its bytes and only replaces the running image once the
+  asks for a pasted hexadecimal byte string (two digits per byte), rebuilds the byte list from it, and
+  reboots the console from the new image; the decode stages its bytes and only replaces the running image once the
   iNES signature and the declared payload check out, so a bad paste leaves the game alone. A Scratch list
   holds 200,000 items, so longer images are rejected rather than loaded truncated. None of its sources have been through the compiler, because
   the pinned GoboScript toolchain needs Cargo and rustc. The ported arithmetic is
@@ -92,7 +92,7 @@ loading, persistence, and known-limitations statement.
 - A browser preview is available with `npm run browser:dev`. It includes a pixel-preserving 256 by 240 canvas,
   file and bundled-ROM loading, pause/reset/step controls, two keyboard-mapped pads, per-ROM PRG/CHR-NVRAM saves,
   and a best-effort Web Audio sink with an approximate filter. The same server also serves a ROM string
-  converter at `/rom_string.html`, which turns a .nes file into the decimal byte text the GoboScript project
+  converter at `/rom_string.html`, which turns a .nes file into the packed hexadecimal byte text the GoboScript project
   loads at runtime, reports the image's iNES header, decodes its own output as a check, and refuses to hand
   back text the port could not use. The palette is an approximation; browser
   rendering, audio, and storage have not had hands-on validation. The Scratch/TurboWarp scaffold does not yet

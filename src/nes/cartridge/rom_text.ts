@@ -1,30 +1,42 @@
 /**
- * Decimal byte text, the string form of a cartridge image.
+ * Hexadecimal byte text, the string form of a cartridge image.
  *
  * The GoboScript port cannot read a file, so `scratch/src/rom_input.gs` rebuilds its byte
- * list from a pasted string: decimal byte values, separated by any run of characters that is
- * not a decimal digit. Spaces, commas, and newlines are all separators, which makes the text
- * that `scripts/generate_goboscript_rom_data.mjs` writes paste-ready without editing.
+ * list from a pasted string: every byte is exactly two hexadecimal digits, most significant
+ * nibble first. The continuous form puts nothing between pairs, so a 40 KiB image is 80,000
+ * characters instead of the 135,000 or so the old decimal format needed.
+ *
+ * Any character that is not a hexadecimal digit is a separator, so spaces, commas, and
+ * newlines pasted in from an editor do not change the decoded bytes. That rule keeps the
+ * format paste-tolerant without asking the Scratch side to recognize whitespace, which has no
+ * direct block. A separator may fall between the two digits of a value; the digits still pair
+ * in order.
  *
  * This module is the reference definition of that format. The browser converter page in
  * `src/nes/browser/rom_string_page.ts` encodes with it, and `tests/rom-text.test.ts` compares
  * the GoboScript decode mirror against it so the two sides cannot drift.
  *
- * The decode walks one character at a time because Scratch offers no split: it folds digits
- * into the byte under construction and treats every other character as the separator that
- * finishes it. One step past the end of the text reads the empty string, which is the
- * separator that flushes a final value, so a text with no trailing separator still decodes.
+ * Scratch has no split block, so the decode walks one character at a time. It reads a
+ * character as a nibble with the Scratch number cast: "0x" joined with one hexadecimal digit
+ * is a number in every Scratch runtime that casts with JavaScript's Number(), and every other
+ * character casts to zero. Zero is also the value of the digit "0", so the decode tests that
+ * character separately before trusting the cast. Two nibbles then make one byte.
  */
 
-/** The separator the encoder puts between two byte values. */
-export type RomTextSeparator = "space" | "newline" | "comma";
+/**
+ * How the encoder lays the hexadecimal pairs out. Every format decodes to the same bytes.
+ *
+ * - `continuous` writes the pairs back to back.
+ * - `spaced` puts one space between two pairs.
+ * - `lines` starts a new line every `ROM_TEXT_BYTES_PER_LINE` bytes.
+ */
+export type RomTextFormat = "continuous" | "spaced" | "lines";
 
-/** The separator text for each encoding choice. */
-export const ROM_TEXT_SEPARATORS: Readonly<Record<RomTextSeparator, string>> = {
-    space: " ",
-    newline: "\n",
-    comma: ",",
-};
+/** The formats the converter page offers, shortest first. */
+export const ROM_TEXT_FORMATS: readonly RomTextFormat[] = ["continuous", "spaced", "lines"];
+
+/** The byte count a `lines` encoding puts on one line. */
+export const ROM_TEXT_BYTES_PER_LINE = 16;
 
 /**
  * The longest image the port accepts. Scratch caps a list at 200,000 items and silently
@@ -33,14 +45,15 @@ export const ROM_TEXT_SEPARATORS: Readonly<Record<RomTextSeparator, string>> = {
 export const MAX_ROM_TEXT_BYTES = 200_000;
 
 /**
- * The longest pasted text the decode accepts. A 200,000-byte image written as three-digit
- * values with one separator each is 800,000 characters, so this bound only rejects input
- * that could not describe an acceptable image.
+ * The longest pasted text the decode accepts. A 200,000-byte image written in the
+ * continuous form is 400,000 characters; the spaced form is 600,000 and the lined form adds
+ * only one character per 16 bytes. This bound leaves room for extra separators while still
+ * rejecting input that could not describe an acceptable image.
  */
 export const MAX_ROM_TEXT_CHARACTERS = 1_000_000;
 
 /** Why a decode stopped, as a result value rather than an exception. */
-export type RomTextErrorCode = "empty" | "invalid-byte" | "too-many-bytes" | "too-long";
+export type RomTextErrorCode = "empty" | "odd-digits" | "too-many-bytes" | "too-long";
 
 export interface RomTextError {
     readonly code: RomTextErrorCode;
@@ -52,7 +65,7 @@ export interface RomTextError {
 export interface RomTextEncoding {
     readonly text: string;
     readonly byte_count: number;
-    readonly separator: RomTextSeparator;
+    readonly format: RomTextFormat;
 }
 
 export type RomTextDecodeResult =
@@ -60,24 +73,38 @@ export type RomTextDecodeResult =
     | { readonly ok: false; readonly error: RomTextError };
 
 /**
- * Writes an image as decimal byte values.
+ * Writes an image as hexadecimal byte values.
  *
  * @param rom_bytes The image to encode; it is not validated here, because the loader that
  *   reads the text back reports header and payload problems.
- * @param separator The text placed between two byte values.
+ * @param format How to lay the pairs out; `continuous` is the shortest.
  */
-export function encode_rom_text(rom_bytes: Uint8Array, separator: RomTextSeparator = "space"): RomTextEncoding {
-    const separator_text = ROM_TEXT_SEPARATORS[separator];
-    const text = Array.from(rom_bytes, (byte) => byte.toString(10)).join(separator_text);
+export function encode_rom_text(rom_bytes: Uint8Array, format: RomTextFormat = "continuous"): RomTextEncoding {
+    const pairs = Array.from(rom_bytes, (byte) => byte.toString(16).padStart(2, "0"));
+    let text: string;
 
-    return { text, byte_count: rom_bytes.byteLength, separator };
+    if (format === "spaced") {
+        text = pairs.join(" ");
+    } else if (format === "lines") {
+        const lines: string[] = [];
+
+        for (let start = 0; start < pairs.length; start += ROM_TEXT_BYTES_PER_LINE) {
+            lines.push(pairs.slice(start, start + ROM_TEXT_BYTES_PER_LINE).join(""));
+        }
+
+        text = lines.join("\n");
+    } else {
+        text = pairs.join("");
+    }
+
+    return { text, byte_count: rom_bytes.byteLength, format };
 }
 
 /**
- * Reads decimal byte text back into an image.
+ * Reads hexadecimal byte text back into an image.
  *
- * @param text The pasted byte values. Any character that is not a decimal digit separates
- *   two values, so whitespace, commas, and stray punctuation are all accepted.
+ * @param text The pasted hexadecimal digits. Any character that is not a hexadecimal digit
+ *   separates two digits, so whitespace, commas, and stray punctuation are all accepted.
  */
 export function decode_rom_text(text: string): RomTextDecodeResult {
     if (text.length === 0) {
@@ -93,41 +120,39 @@ export function decode_rom_text(text: string): RomTextDecodeResult {
     }
 
     const bytes: number[] = [];
-    let byte_value = 0;
-    let has_digits = false;
+    // Negative means no first nibble is waiting; the port mirrors this with a 0/1 flag.
+    let pending_nibble = -1;
 
-    for (let cursor = 0; cursor <= text.length; cursor += 1) {
-        const character = text[cursor] ?? "";
-        const digit_value = digit_value_of_character(character);
+    for (const character of text) {
+        const nibble_value = hex_nibble_of_character(character);
 
-        if (digit_value > 0) {
-            byte_value = byte_value * 10 + digit_value;
-            has_digits = true;
-        } else if (character === "0") {
-            byte_value *= 10;
-            has_digits = true;
-        } else if (has_digits) {
-            has_digits = false;
-
-            if (byte_value > 255) {
-                return decode_failure(
-                    "invalid-byte",
-                    `Byte value ${byte_value} at value ${bytes.length + 1} is outside 0-255.`,
-                    bytes.length,
-                );
-            }
-
-            if (bytes.length >= MAX_ROM_TEXT_BYTES) {
-                return decode_failure(
-                    "too-many-bytes",
-                    `The ROM text describes more than the ${MAX_ROM_TEXT_BYTES} bytes a Scratch list holds.`,
-                    bytes.length,
-                );
-            }
-
-            bytes.push(byte_value);
-            byte_value = 0;
+        if (nibble_value < 0) {
+            continue;
         }
+
+        if (pending_nibble < 0) {
+            pending_nibble = nibble_value;
+            continue;
+        }
+
+        if (bytes.length >= MAX_ROM_TEXT_BYTES) {
+            return decode_failure(
+                "too-many-bytes",
+                `The ROM text describes more than the ${MAX_ROM_TEXT_BYTES} bytes a Scratch list holds.`,
+                bytes.length,
+            );
+        }
+
+        bytes.push(pending_nibble * 16 + nibble_value);
+        pending_nibble = -1;
+    }
+
+    if (pending_nibble >= 0) {
+        return decode_failure(
+            "odd-digits",
+            "The ROM text ends with a hexadecimal digit that has no partner.",
+            bytes.length,
+        );
     }
 
     if (bytes.length === 0) {
@@ -138,18 +163,25 @@ export function decode_rom_text(text: string): RomTextDecodeResult {
 }
 
 /**
- * Scratch's string-to-number cast for one character: a decimal digit keeps its value, and
- * every other character reads as zero. The port casts a single character the same way,
- * which is what lets the decode test one character instead of a table of ten.
+ * Reads one character as a hexadecimal nibble, or returns -1 when it is a separator.
+ *
+ * Scratch's string-to-number cast follows JavaScript's Number(): "0x" followed by one
+ * hexadecimal digit reads as that nibble, while every other character reads as zero. The
+ * digit "0" therefore needs its own test, because zero is also what a separator casts to.
+ * The port's decode performs the same two steps inline.
  */
-export function digit_value_of_character(character: string): number {
+export function hex_nibble_of_character(character: string): number {
     if (character.length !== 1) {
+        return -1;
+    }
+
+    if (character === "0") {
         return 0;
     }
 
-    const numeric = Number(character);
+    const numeric = Number(`0x${character}`);
 
-    return Number.isNaN(numeric) ? 0 : numeric;
+    return Number.isNaN(numeric) ? -1 : numeric;
 }
 
 function decode_failure(code: RomTextErrorCode, message: string, byte_count: number): RomTextDecodeResult {

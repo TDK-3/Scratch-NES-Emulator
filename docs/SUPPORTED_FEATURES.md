@@ -88,10 +88,13 @@ NVRAM persistence, or console save states; changing the cartridge at runtime is 
 A GoboScript compiler and successful `.sb3`/TurboWarp validation are still outstanding.
 
 The image can also be replaced at runtime from a pasted string. Pressing Q while the run loop is running asks
-for a string of decimal byte values, and `scratch/src/rom_input.gs` decodes it: any run of characters that is
-not a decimal digit separates two values, so the text `scripts/generate_goboscript_rom_data.mjs` writes is
-paste-ready. The decoded bytes are staged in their own list, and only an image that carries the iNES
-signature and at least the payload its header declares replaces `cartridge_bytes`; the run loop then reboots
+for a hexadecimal byte string, and `scratch/src/rom_input.gs` decodes it: every byte is two hexadecimal
+digits, and any character that is not a hexadecimal digit separates digits, so spaces and newlines pasted
+from an editor do not change the image. The continuous form needs two characters per byte, so a 40 KiB image
+is 80,000 characters. The build-time list at `scratch/data/test_rom_bytes.txt` is still one decimal value per
+line, because a file-backed Scratch list loads one item per line. The decoded bytes are staged in their own
+list, and only an image that carries the iNES signature and at least the payload its header declares replaces
+`cartridge_bytes`; the run loop then reboots
 the console through the same boot path the embedded image uses, and the display sprite reports the outcome or
 the reason the load was refused. An empty answer cancels and keeps the running game. Two limits are enforced
 rather than silently truncated: a Scratch list holds 200,000 items, and the decode reads at most 1,000,000

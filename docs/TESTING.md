@@ -23,10 +23,10 @@ npm run scratch:vectors
 - `npm run build:scratch` generates both static data lists and requires the GoboScript CLI; this environment
   did not have Rust/Cargo or GoboScript installed when the scaffold was created.
 
-The 1,302 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
+The 1,303 tests include byte-exact generator regressions that reject direct, symlink, and hard-link aliases
 to source fixtures, 588 cross-domain shared-vector checks (587 records plus the generator regression), 257 pinned
 MIT single-step corpus checks covering all 256 opcode bytes, 103 GoboScript port-algorithm comparisons, 29
-GoboScript source-lint checks, eleven GoboScript keyboard-input checks, nine ROM byte-text checks, six standard-controller tests, forty-two focused
+GoboScript source-lint checks, eleven GoboScript keyboard-input checks, ten ROM byte-text checks, six standard-controller tests, forty-two focused
 APU tests, six DMC DMA integration tests, one browser-server HTTP test including lexical-traversal and
 symlink-escape rejection, twenty parser tests, fourteen synthetic console tests, two licensed-ROM console
 tests, one supplied mapper 4 title-boot test, two NTSC clock tests, four canvas-renderer tests, four browser
@@ -406,14 +406,14 @@ verified the compiled entry module. No headless browser automation is installed 
 
 The ROM string converter (`web/rom_string.html`, `src/nes/browser/rom_string_page.ts`) has two tests that
 install a fake `document`, `navigator`, and object-URL pair, import the real page module, and fire the events
-a browser would: a picked file, a dropped file, a separator change, a copy with the clipboard unavailable, a
+a browser would: a picked file, a dropped file, a layout change, a copy with the clipboard unavailable, a
 saved file name, and a clear. They assert the textarea holds exactly what `encode_rom_text` produces, that the
 iNES header report and the status line follow the image, and that an image past the 200,000-item Scratch list
-cap is refused rather than handed over. `tests/rom-text.test.ts` covers the format itself: all three
-separators round-trip the supplied ROM byte for byte, the newline encoding equals what
-`scripts/generate_goboscript_rom_data.mjs` writes, mixed and repeated separators decode to the same image,
-leading zeros survive, and empty, out-of-range, over-limit, and over-long inputs return typed errors with the
-byte count decoded so far. Three port-algorithm tests compare `GoboscriptRomInput`, the mirror of
+cap is refused rather than handed over. `tests/rom-text.test.ts` covers the format itself: the continuous,
+spaced, and lined layouts round-trip the supplied ROM byte for byte, the continuous text is exactly two
+lowercase digits per byte, mixed and repeated separators decode to the same image, uppercase digits decode,
+and empty, odd-digit, over-limit, and over-long inputs return typed errors with the byte count decoded so
+far. Three port-algorithm tests compare `GoboscriptRomInput`, the mirror of
 `scratch/src/rom_input.gs`, against that reference over encoded images, corrupted text, and the validation
 and install gates. None of this executes a real browser or a compiled Scratch project.
 

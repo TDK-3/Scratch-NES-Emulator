@@ -1,11 +1,11 @@
 /**
  * The ROM string converter page.
  *
- * The GoboScript port loads a cartridge from a pasted string of decimal byte values, and
- * nobody writes 80,000 decimal numbers by hand. This page turns a .nes file into that string
- * with the reference encoder in src/nes/cartridge/rom_text.ts, reports what the iNES header
- * says about the image, and decodes its own output again so a conversion that would not load
- * is caught here instead of in the Scratch project.
+ * The GoboScript port loads a cartridge from a pasted string of hexadecimal byte values, and
+ * nobody types 80,000 pairs by hand. This page turns a .nes file into that string with the
+ * reference encoder in src/nes/cartridge/rom_text.ts, reports what the iNES header says about
+ * the image, and decodes its own output again so a conversion that would not load is caught
+ * here instead of in the Scratch project.
  *
  * The page never uploads anything: the file is read in the browser and the text stays local.
  */
@@ -14,17 +14,16 @@ import { parse_ines_rom } from "../cartridge/ines.js";
 import {
     MAX_ROM_TEXT_BYTES,
     MAX_ROM_TEXT_CHARACTERS,
-    ROM_TEXT_SEPARATORS,
+    ROM_TEXT_BYTES_PER_LINE,
+    ROM_TEXT_FORMATS,
     decode_rom_text,
     encode_rom_text,
 } from "../cartridge/rom_text.js";
-import type { RomTextSeparator } from "../cartridge/rom_text.js";
-
-const SEPARATOR_OPTIONS: readonly RomTextSeparator[] = ["space", "newline", "comma"];
+import type { RomTextFormat } from "../cartridge/rom_text.js";
 
 const rom_file_input = get_required_element<HTMLInputElement>("rom-file");
 const drop_zone = get_required_element<HTMLDivElement>("rom-drop-zone");
-const separator_select = get_required_element<HTMLSelectElement>("separator-select");
+const format_select = get_required_element<HTMLSelectElement>("format-select");
 const output_area = get_required_element<HTMLTextAreaElement>("rom-text-output");
 const copy_button = get_required_element<HTMLButtonElement>("copy-rom-text");
 const download_button = get_required_element<HTMLButtonElement>("download-rom-text");
@@ -40,9 +39,10 @@ const header_prg = get_required_element<HTMLElement>("header-prg");
 const header_chr = get_required_element<HTMLElement>("header-chr");
 const header_mirroring = get_required_element<HTMLElement>("header-mirroring");
 const header_battery = get_required_element<HTMLElement>("header-battery");
-const separator_note = get_required_element<HTMLParagraphElement>("separator-note");
+const format_note = get_required_element<HTMLParagraphElement>("format-note");
 
 let loaded_rom_name = "";
+let loaded_rom_image: Uint8Array | null = null;
 
 rom_file_input.addEventListener("change", () => {
     const file = rom_file_input.files?.item(0);
@@ -71,8 +71,14 @@ drop_zone.addEventListener("drop", (event) => {
     }
 });
 
-separator_select.addEventListener("change", () => {
-    separator_note.textContent = separator_description(selected_separator());
+format_select.addEventListener("change", () => {
+    format_note.textContent = format_description(selected_format());
+
+    // Re-encode the image that is already loaded, so the layout choice takes effect on the
+    // text the page is showing instead of only on the next file load.
+    if (loaded_rom_image !== null) {
+        convert_bytes(loaded_rom_image, loaded_rom_name);
+    }
 });
 
 copy_button.addEventListener("click", () => {
@@ -82,7 +88,7 @@ copy_button.addEventListener("click", () => {
 download_button.addEventListener("click", download_output);
 clear_button.addEventListener("click", clear_output);
 
-separator_note.textContent = separator_description(selected_separator());
+format_note.textContent = format_description(selected_format());
 set_status("No ROM file loaded.", false);
 update_buttons();
 
@@ -102,15 +108,16 @@ function convert_bytes(rom_image: Uint8Array, name: string): void {
         // as if it described this file.
         output_area.value = "";
         loaded_rom_name = "";
+        loaded_rom_image = null;
         set_status(`${name} is empty, so there is nothing to convert.`, true);
         update_buttons();
         return;
     }
 
-    const separator = selected_separator();
-    const encoding = encode_rom_text(rom_image, separator);
+    const encoding = encode_rom_text(rom_image, selected_format());
 
     loaded_rom_name = name;
+    loaded_rom_image = rom_image;
     output_area.value = encoding.text;
 
     rom_name.textContent = name;
@@ -148,7 +155,9 @@ function convert_bytes(rom_image: Uint8Array, name: string): void {
     } else {
         set_status(
             `${name}: ${format_count(rom_image.byteLength)} bytes became ` +
-                `${format_count(encoding.text.length)} characters, and the text decoded back unchanged.`,
+                `${format_count(encoding.text.length)} hexadecimal characters ` +
+                `(${format_ratio(encoding.text.length, rom_image.byteLength)} per byte), ` +
+                "and the text decoded back unchanged.",
         );
     }
 
@@ -223,7 +232,7 @@ function download_output(): void {
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${strip_extension(loaded_rom_name) || "rom"}_bytes.txt`;
+    link.download = `${strip_extension(loaded_rom_name) || "rom"}_hex.txt`;
     link.click();
     URL.revokeObjectURL(url);
     set_status(`Saved ${link.download}.`);
@@ -232,6 +241,7 @@ function download_output(): void {
 function clear_output(): void {
     output_area.value = "";
     loaded_rom_name = "";
+    loaded_rom_image = null;
     rom_file_input.value = "";
 
     for (const target of [
@@ -261,17 +271,27 @@ function update_buttons(): void {
     clear_button.disabled = !has_text;
 }
 
-function selected_separator(): RomTextSeparator {
-    const value = separator_select.value;
+function selected_format(): RomTextFormat {
+    const value = format_select.value;
 
-    return SEPARATOR_OPTIONS.find((option) => option === value) ?? "space";
+    return ROM_TEXT_FORMATS.find((option) => option === value) ?? "continuous";
 }
 
-function separator_description(separator: RomTextSeparator): string {
-    const shown = separator === "newline" ? "a newline" : `"${ROM_TEXT_SEPARATORS[separator]}"`;
+function format_description(format: RomTextFormat): string {
+    if (format === "spaced") {
+        return "Putting one space between two byte values. The port ignores any character " +
+            "that is not a hexadecimal digit, so this only changes how the text reads on screen.";
+    }
 
-    return `Separating with ${shown}. The port accepts any separator, so the choice only ` +
-        "changes how the text reads on screen.";
+    if (format === "lines") {
+        return `Starting a new line every ${ROM_TEXT_BYTES_PER_LINE} bytes (${
+            ROM_TEXT_BYTES_PER_LINE * 2
+        } hexadecimal digits). ` +
+            "The port ignores newlines, so this only changes how the text reads on screen.";
+    }
+
+    return "Writing every byte as two hexadecimal digits with nothing between them. This is " +
+        "the shortest form; the port ignores separators, so whitespace is optional.";
 }
 
 function same_bytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -296,6 +316,10 @@ function strip_extension(name: string): string {
 
 function format_count(value: number): string {
     return value.toLocaleString("en-US");
+}
+
+function format_ratio(characters: number, bytes: number): string {
+    return (characters / bytes).toFixed(2);
 }
 
 function set_status(message: string, is_error = false): void {
