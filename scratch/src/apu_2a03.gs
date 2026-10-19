@@ -1,13 +1,14 @@
-# APU 2A03 register dispatch, frame sequencer, and pulse/triangle channels
+# APU 2A03 register dispatch, frame sequencer, and all audio channels
 # for the GoboScript port.
 #
 # Ports the parts of src/nes/apu/apu_2a03.ts, src/nes/apu/pulse_channel.ts,
-# and src/nes/apu/triangle_channel.ts that the current shared vectors cover:
-# the register write dispatch for $4000-$4013, $4015, and $4017, the $4015
-# status read, both pulse channels (control, sweep, timer, length counter,
-# envelope, output), the triangle channel (linear counter, timer, sequencer),
-# and the four-step and five-step frame sequencer. Noise and DMC channels
-# are not ported yet.
+# src/nes/apu/triangle_channel.ts, and src/nes/apu/noise_channel.ts that the
+# current shared vectors cover: the register write dispatch for
+# $4000-$4013, $4015, and $4017, the $4015 status read, both pulse channels
+# (control, sweep, timer, length counter, envelope, output), the triangle
+# channel (linear counter, timer, sequencer), the noise channel (LFSR, timer,
+# envelope, length counter), and the four-step and five-step frame sequencer.
+# The DMC channel and audio mixing are not ported yet.
 
 %include src/numeric
 
@@ -146,6 +147,36 @@ var triangle_timer_counter = 0;
 var triangle_sequence_step = 0;
 var triangle_length_counter = 0;
 
+# ---- noise channel constants ----
+
+var NOISE_LENGTH_HALT_ENVELOPE_LOOP = 32;
+var NOISE_CONSTANT_VOLUME = 16;
+var NOISE_VOLUME_MASK = 15;
+var NOISE_MODE_MASK = 128;
+var NOISE_PERIOD_INDEX_MASK = 15;
+var NOISE_LONG_MODE_FEEDBACK_TAP = 1;
+var NOISE_SHORT_MODE_FEEDBACK_TAP = 6;
+var NOISE_LFSR_REGISTER_MASK = 32767;
+var NOISE_LFSR_OUTPUT_MASK = 1;
+var NOISE_LFSR_FEEDBACK_BIT = 16384;
+
+# NTSC noise timer periods (16 entries). Initialized in apu_reset.
+list apu_noise_periods = [0; 16];
+
+# ---- noise channel state ----
+
+var noise_enabled = 0;
+var noise_control = 0;
+var noise_mode = 0;
+var noise_timer_period = 0;
+var noise_timer_reload = 0;
+var noise_timer_counter = 0;
+var noise_shift_register = 1;
+var noise_length_counter = 0;
+var noise_envelope_start = 0;
+var noise_envelope_divider = 0;
+var noise_envelope_decay = 0;
+
 # ---- frame sequencer state ----
 
 var apu_cpu_cycle_count = 0;
@@ -246,6 +277,26 @@ proc apu_reset {
         apu_triangle_sequence[32] = 0;
     }
 
+    # Populate the noise periods table if not already done.
+    if to_number(apu_noise_periods[1]) == 0 {
+        apu_noise_periods[1] = 4;
+        apu_noise_periods[2] = 8;
+        apu_noise_periods[3] = 16;
+        apu_noise_periods[4] = 32;
+        apu_noise_periods[5] = 64;
+        apu_noise_periods[6] = 96;
+        apu_noise_periods[7] = 128;
+        apu_noise_periods[8] = 160;
+        apu_noise_periods[9] = 202;
+        apu_noise_periods[10] = 254;
+        apu_noise_periods[11] = 380;
+        apu_noise_periods[12] = 508;
+        apu_noise_periods[13] = 762;
+        apu_noise_periods[14] = 1016;
+        apu_noise_periods[15] = 2034;
+        apu_noise_periods[16] = 4068;
+    }
+
     pulse1_enabled = 0;
     pulse1_control = 0;
     pulse1_sweep_enabled = 0;
@@ -285,6 +336,17 @@ proc apu_reset {
     triangle_timer_counter = 0;
     triangle_sequence_step = 0;
     triangle_length_counter = 0;
+    noise_enabled = 0;
+    noise_control = 0;
+    noise_mode = 0;
+    noise_timer_period = 4;
+    noise_timer_reload = 3;
+    noise_timer_counter = 0;
+    noise_shift_register = 1;
+    noise_length_counter = 0;
+    noise_envelope_start = 0;
+    noise_envelope_divider = 0;
+    noise_envelope_decay = 0;
     apu_cpu_cycle_count = 0;
     apu_pulse_timer_phase = 0;
     apu_frame_cycle_count = 0;
@@ -312,12 +374,18 @@ proc apu_write_register address, value {
         apu_write_triangle_timer_low byte_value;
     } elif addr == APU_TRI_TIMER_HIGH {
         apu_write_triangle_timer_high byte_value;
+    } elif addr == APU_NOISE_CONTROL {
+        apu_write_noise_control byte_value;
+    } elif addr == APU_NOISE_PERIOD {
+        apu_write_noise_period byte_value;
+    } elif addr == APU_NOISE_LENGTH {
+        apu_write_noise_length byte_value;
     } elif addr == APU_STATUS {
         apu_write_status byte_value;
     } elif addr == APU_FRAME_COUNTER {
         apu_write_frame_counter byte_value;
     }
-    # Noise and DMC registers are latched and dropped for now.
+    # DMC registers are latched and dropped for now.
 }
 
 # Writes one pulse channel register (index 0-3 within the four-byte window).
@@ -392,6 +460,7 @@ proc apu_write_status value {
     local p1 = bitwise_and($value, PULSE_ONE_ENABLE) != 0;
     local p2 = bitwise_and($value, PULSE_TWO_ENABLE) != 0;
     local tri = bitwise_and($value, TRIANGLE_ENABLE) != 0;
+    local noi = bitwise_and($value, NOISE_ENABLE) != 0;
 
     pulse1_enabled = p1;
 
@@ -410,7 +479,13 @@ proc apu_write_status value {
     if tri == 0 {
         triangle_length_counter = 0;
     }
-    # Noise, DMC enable bits are latched but not yet ported.
+
+    noise_enabled = noi;
+
+    if noi == 0 {
+        noise_length_counter = 0;
+    }
+    # DMC enable bit is latched but not yet ported.
 }
 
 # Writes $4017: frame counter mode and IRQ inhibit.
@@ -434,6 +509,29 @@ proc apu_write_triangle_timer_high value {
     if triangle_enabled == 1 {
         local length_index = $value // 8;
         triangle_length_counter = to_number(apu_length_table[length_index + 1]);
+    }
+}
+
+# Writes $400C: noise control register (length halt, constant volume, volume/envelope period)
+proc apu_write_noise_control value {
+    noise_control = $value;
+}
+
+# Writes $400E: noise period register (mode bit + period index)
+proc apu_write_noise_period value {
+    noise_mode = bitwise_and($value, NOISE_MODE_MASK) != 0;
+    local period_index = bitwise_and($value, NOISE_PERIOD_INDEX_MASK);
+    noise_timer_period = to_number(apu_noise_periods[period_index + 1]);
+    noise_timer_reload = noise_timer_period - 1;
+}
+
+# Writes $400F: noise length register (length index + envelope restart)
+proc apu_write_noise_length value {
+    noise_envelope_start = 1;
+
+    if noise_enabled == 1 {
+        local length_index = $value // 8;
+        noise_length_counter = to_number(apu_length_table[length_index + 1]);
     }
 }
 
@@ -471,6 +569,10 @@ proc apu_read_status {
         value = value + TRIANGLE_ENABLE;
     }
 
+    if noise_length_counter > 0 {
+        value = value + NOISE_ENABLE;
+    }
+
     if apu_frame_irq == 1 {
         value = value + FRAME_IRQ_STATUS;
     }
@@ -494,6 +596,7 @@ proc apu_clock_cpu_cycle {
     }
 
     apu_clock_triangle_timer;
+    apu_clock_noise_timer;
     apu_clock_frame_sequencer;
 
     if apu_frame_reset_delay >= 0 {
@@ -605,6 +708,7 @@ proc apu_clock_quarter_frame {
     apu_clock_pulse_envelope 1;
     apu_clock_pulse_envelope 2;
     apu_clock_triangle_linear_counter;
+    apu_clock_noise_envelope;
 }
 
 # Half-frame event: clocks length counters and sweep.
@@ -612,6 +716,7 @@ proc apu_clock_half_frame {
     apu_clock_pulse_half_frame 1;
     apu_clock_pulse_half_frame 2;
     apu_clock_triangle_half_frame;
+    apu_clock_noise_length;
 }
 
 # Clocks one pulse channel's envelope.
@@ -750,6 +855,67 @@ proc apu_clock_triangle_half_frame {
     }
 }
 
+# ---- noise channel clocking ----
+
+# Clocks the noise timer every CPU cycle. When the timer reaches zero, it reloads
+# and shifts the LFSR.
+proc apu_clock_noise_timer {
+    if noise_timer_counter == 0 {
+        noise_timer_counter = noise_timer_reload;
+        apu_shift_lfsr;
+    } else {
+        noise_timer_counter = noise_timer_counter - 1;
+    }
+}
+
+# Shifts the noise LFSR. XOR bit 0 with the feedback tap bit, shift right,
+# and put the XOR result in bit 14.
+proc apu_shift_lfsr {
+    local low_bit = bitwise_and(noise_shift_register, NOISE_LFSR_OUTPUT_MASK);
+    local feedback_tap = 0;
+
+    if noise_mode == 1 {
+        # Short mode: feedback tap at bit 6
+        feedback_tap = (noise_shift_register // 64) % 2;
+    } else {
+        # Long mode: feedback tap at bit 1
+        feedback_tap = (noise_shift_register // 2) % 2;
+    }
+
+    local feedback = bitwise_xor(low_bit, feedback_tap);
+    # Shift right and put feedback in bit 14
+    noise_shift_register = (noise_shift_register // 2) + (feedback * NOISE_LFSR_FEEDBACK_BIT);
+    noise_shift_register = bitwise_and(noise_shift_register, NOISE_LFSR_REGISTER_MASK);
+}
+
+# Clocks the noise envelope on a quarter-frame event.
+proc apu_clock_noise_envelope {
+    if noise_envelope_start == 1 {
+        noise_envelope_start = 0;
+        noise_envelope_decay = 15;
+        noise_envelope_divider = bitwise_and(noise_control, NOISE_VOLUME_MASK);
+    } elif noise_envelope_divider > 0 {
+        noise_envelope_divider = noise_envelope_divider - 1;
+    } else {
+        noise_envelope_divider = bitwise_and(noise_control, NOISE_VOLUME_MASK);
+
+        if noise_envelope_decay > 0 {
+            noise_envelope_decay = noise_envelope_decay - 1;
+        } elif bitwise_and(noise_control, NOISE_LENGTH_HALT_ENVELOPE_LOOP) != 0 {
+            noise_envelope_decay = 15;
+        }
+    }
+}
+
+# Clocks the noise length counter on a half-frame event.
+proc apu_clock_noise_length {
+    if noise_length_counter > 0 {
+        if bitwise_and(noise_control, NOISE_LENGTH_HALT_ENVELOPE_LOOP) == 0 {
+            noise_length_counter = noise_length_counter - 1;
+        }
+    }
+}
+
 # ---- output getters ----
 
 # Returns the pulse output for one channel (0-15).
@@ -834,6 +1000,30 @@ func apu_get_triangle_output() {
 # Returns the triangle length counter value.
 func apu_get_triangle_length() {
     return triangle_length_counter;
+}
+
+# Returns the noise output (0-15). Output is 0 if length counter is 0 or if
+# LFSR bit 0 is 1 (muted). Otherwise, returns constant volume or envelope decay.
+func apu_get_noise_output() {
+    if noise_length_counter == 0 {
+        return 0;
+    }
+
+    # LFSR bit 0 == 1 means muted
+    if bitwise_and(noise_shift_register, NOISE_LFSR_OUTPUT_MASK) != 0 {
+        return 0;
+    }
+
+    if bitwise_and(noise_control, NOISE_CONSTANT_VOLUME) != 0 {
+        return bitwise_and(noise_control, NOISE_VOLUME_MASK);
+    }
+
+    return noise_envelope_decay;
+}
+
+# Returns the noise length counter value.
+func apu_get_noise_length() {
+    return noise_length_counter;
 }
 
 # Returns whether the frame IRQ line is asserted.
