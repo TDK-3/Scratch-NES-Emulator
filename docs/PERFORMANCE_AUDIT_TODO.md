@@ -994,8 +994,9 @@ reporters. That is the number to attack.
 - [ ] **F8 (P3, S) Drive the frame-skip decision from wall time.**
   - **Blocked (2026-10-20):** the skip decision already reads the frame counter and the measured FPS; a wall-clock rule needs S2's harness to compare.
   - Where: `rom_run.gs:166-190`.
-  - Now: the skip test uses `rom_run_fps < 30` (updated once per 60 emulated frames) and a frame-count lead
-    (`frame_count > frames_drawn + 2`).
+  - Now: skipping turns on below 30 FPS and off at 55 FPS or more (`rom_run_next_skip_state`), and never
+    skips two frames in a row (`rom_run_should_skip`). The old frame-count lead test was removed: it never
+    recovered after a skip, so the display stopped drawing and the measured FPS jumped to about 60.
   - Change: keep a `timer()` delta and skip when the draw cost exceeds one frame period, with hysteresis so
     it cannot oscillate; reset the FPS estimate on a ROM change (it currently is reset, `:109-113`).
   - Effect: avoids both wasted draws and visible stutter when the console is slower than the display.

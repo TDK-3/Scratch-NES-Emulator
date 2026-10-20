@@ -517,6 +517,16 @@ const MIRROR_CONTRACT: readonly {
         reason: "report formatting only",
     },
     {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_should_skip",
+        mirror: "rom_run_should_skip",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_next_skip_state",
+        mirror: "rom_run_next_skip_state",
+    },
+    {
         source: "src/cartridge_loader.gs",
         declaration: "cartridge_load_board",
         mirror: null,
@@ -2816,4 +2826,17 @@ test("the PPU is synced to the CPU before every register, cartridge, and OAM acc
         !bus.text.includes("cpu_cycles"),
         "cpu_bus.gs cannot name cpu_cycles: the DMA base is passed in",
     );
+});
+
+test("the frame-skip policy has no lead test and no parity skip", () => {
+    const rom_run = get_source("src/rom_run.gs");
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    const body = loop?.body.join("\n") ?? "";
+
+    assert.ok(
+        !/rom_run_frames_drawn \+ 2/.test(body) && !/rom_run_frame_count % 2/.test(body),
+        "the lead test and the frame-count parity skip must be gone: neither recovers once frames are skipped",
+    );
+    assert.match(body, /rom_run_should_skip\(rom_run_skip_active, rom_run_last_frame_skipped\)/);
+    assert.match(body, /rom_run_skip_active = rom_run_next_skip_state\(rom_run_skip_active, rom_run_fps\);/);
 });
