@@ -208,6 +208,25 @@ var ppu_sprite_pixel_value = 0;
 var ppu_sprite_pixel_attributes = 0;
 var ppu_sprite_pixel_oam_index = -1;
 
+# The PPUCTRL fields the PPU reads outside a control write, cached by
+# ppu_decode_control_register: the NMI enable the NMI-output refresher tests, and the VRAM
+# increment the $2007 paths add.
+var ppu_nmi_enabled = 0;
+var ppu_vram_increment = 1;
+
+# The greyscale conversion of each six-bit color index, filled once per reset by
+# ppu_greyscale_table_init so a greyscale frame reads a list instead of dividing per pixel.
+list ppu_greyscale_colors = [0; 64];
+
+# Whether the sprites loaded for the current line include sprite zero. Most lines do not, and
+# a line without it can never set the hit flag, so the per-pixel test is two reads instead of
+# an OAM index comparison on every sprite pixel.
+var ppu_sprite_zero_in_line = 0;
+
+# The pattern address the current sprite slot computed at its low-plane phase, reused at the
+# high-plane phase instead of calling ppu_sprite_pattern_address a second time.
+var ppu_sprite_fetch_pattern_address = 0;
+
 # ---- framebuffer output ----
 
 # The emphasis and backdrop terms the pixel path would otherwise recompute 61,440 times a
@@ -248,7 +267,7 @@ enum ppu_register_status {
 # compute per pixel: the emphasis packing of the current PPUMASK, and the universal backdrop
 # color after the greyscale mask.
 proc ppu_refresh_output_terms {
-    local backdrop = ppu_palette_ram[1] % 64;
+    local backdrop = ppu_palette_color[1];
 
     ppu_emphasis_packed = ppu_mask_emphasis * 64;
 
@@ -267,6 +286,9 @@ proc ppu_reset {
     ppu_control_register = 0;
     ppu_mask_register = 0;
     ppu_decode_mask_register;
+    ppu_decode_control_register;
+    ppu_greyscale_table_init;
+    ppu_sprite_zero_in_line = 0;
     ppu_status_register = 0;
     ppu_oam_address = 0;
     ppu_vram_address = 0;
@@ -330,6 +352,18 @@ proc ppu_clear_frame_output {
     ppu_frame_ready = 0;
 }
 
+# Fills the greyscale table: a six-bit color index with its low four bits cleared by the
+# PPUMASK greyscale bit. 64 iterations per reset replace two divisions and a multiply on every
+# pixel of a greyscale frame.
+proc ppu_greyscale_table_init {
+    local index = 0;
+
+    until index == 64 {
+        ppu_greyscale_colors[index + 1] = ((index // 16) % 4) * 16;
+        index = index + 1;
+    }
+}
+
 # ---- status flag helpers ----
 
 # Sets or clears one PPUSTATUS flag bit, masking to the three high flags.
@@ -340,8 +374,10 @@ proc ppu_set_status_flag flag, active {
         ppu_status_register = ppu_status_register - (ppu_status_register % ($flag * 2) - ppu_status_register % $flag);
     }
 
-    ppu_status_register = ppu_status_register % 256;
-    ppu_status_register = bitwise_and(ppu_status_register, PPU_STATUS_FLAGS_MASK);
+    # The mask is $E0 and the byte is normalized, so clearing the low five bits is one
+    # subtraction; the two bitwise_and calls this replaces were a call, two modulos, and two
+    # list reads each.
+    ppu_status_register = (ppu_status_register % 256) - ((ppu_status_register % 256) % 32);
 }
 
 # Reads the level-sensitive NMI output; a rising edge is consumed by
@@ -401,11 +437,11 @@ proc ppu_set_sprite_overflow active {
 # Recomputes the level-sensitive NMI output from the control register's
 # NMI-enable bit and the vblank flag, latching a rising edge.
 proc ppu_refresh_nmi_output {
-    local nmi_enabled = bitwise_and(ppu_control_register, PPU_CONTROL_NMI_ENABLE);
-    local vblank_set = bitwise_and(ppu_status_register, PPU_VBLANK_FLAG);
     local next_output = 0;
 
-    if nmi_enabled != 0 and vblank_set != 0 {
+    # Both bits are already decoded: ppu_nmi_enabled is cached by ppu_decode_control_register
+    # and the vblank flag is bit 7 of a normalized status byte.
+    if ppu_nmi_enabled == 1 and ppu_status_register // PPU_VBLANK_FLAG % 2 == 1 {
         next_output = 1;
     }
 
@@ -470,14 +506,16 @@ proc ppu_read_data_register {
         local palette_value = ppu_bus_read_value;
         local greyscale_value = 0;
 
-        if bitwise_and(ppu_mask_register, PPU_MASK_GREYSCALE) == 0 {
+        # The four masks of the palette read, written as the modulo forms of their mask-plus-one
+        # divisors: $0F keeps the high nibble, $3F keeps six bits, and $C0 keeps the two open-bus
+        # bits the I/O latch contributes, which is the latch minus its low six bits.
+        if ppu_mask_register % 2 == 0 {
             greyscale_value = palette_value;
         } else {
-            greyscale_value = bitwise_and(palette_value, PPU_PALETTE_GREYSCALE_MASK);
+            greyscale_value = palette_value - (palette_value % 16);
         }
 
-        value = bitwise_and(greyscale_value, PPU_PALETTE_VALUE_MASK);
-        value = bitwise_or(value, bitwise_and(ppu_io_latch, PPU_PALETTE_OPEN_BUS_MASK));
+        value = (greyscale_value % 64) + (ppu_io_latch - (ppu_io_latch % 64));
 
         local buffer_address = (address + 16384 - 4096) % 16384;
         ppu_bus_read_ppu buffer_address;
@@ -586,6 +624,20 @@ proc ppu_decode_mask_register {
     ppu_refresh_output_terms;
 }
 
+# Decodes the two PPUCTRL fields the PPU reads outside a register write: the NMI enable the
+# NMI-output refresher tests and the VRAM increment the $2007 paths add. One write per $2000
+# access replaces a divide and a modulo inside the vblank start of every field, on every
+# $2007 access, and inside every NMI-output refresh.
+proc ppu_decode_control_register {
+    ppu_nmi_enabled = (ppu_control_register // PPU_CONTROL_NMI_ENABLE) % 2;
+
+    if (ppu_control_register // PPU_CONTROL_VRAM_INCREMENT) % 2 == 1 {
+        ppu_vram_increment = 32;
+    } else {
+        ppu_vram_increment = 1;
+    }
+}
+
 # PPUCTRL: stores the value, updates the nametable bits in the temporary
 # VRAM address, and refreshes NMI output.
 proc ppu_write_control_register value {
@@ -598,6 +650,7 @@ proc ppu_write_control_register value {
     temporary = ppu_temporary_vram_address % 32768;
     preserved = temporary - (((temporary // 1024) % 4) * 1024);
     ppu_temporary_vram_address = preserved + nt_bits;
+    ppu_decode_control_register;
     ppu_refresh_nmi_output;
 }
 
@@ -662,7 +715,9 @@ proc ppu_write_address_register value {
 
         # The 14-bit address mask is $3FFF; its modulo form divides by 16384, and every
         # VRAM-address access site uses that divisor, never the mask value.
-        ppu_bus_observe_ppu_address ppu_vram_address % 16384;
+        if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+            ppu_bus_observe_ppu_address ppu_vram_address % 16384;
+        }
     }
 }
 
@@ -695,14 +750,13 @@ proc ppu_write_oam_data_register value {
 # Increments the VRAM address by 1 or 32 depending on the PPUCTRL
 # increment bit, then observes the new address through the bus.
 proc ppu_increment_vram_address {
-    local increment = 1;
+    ppu_vram_address = (ppu_vram_address + ppu_vram_increment) % 32768;
 
-    if (ppu_control_register // PPU_CONTROL_VRAM_INCREMENT) % 2 == 1 {
-        increment = 32;
+    # NROM has no observer, so the call is skipped instead of entering a proc that would only
+    # test the board kind. The address is already masked to fourteen bits.
+    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        ppu_bus_observe_ppu_address ppu_vram_address % 16384;
     }
-
-    ppu_vram_address = (ppu_vram_address + increment) % 32768;
-    ppu_bus_observe_ppu_address ppu_vram_address % 16384;
 }
 
 # ---- timing ----
@@ -1096,7 +1150,7 @@ proc ppu_render_pixel {
         ppu_sprite_pixel_found = 0;
     }
 
-    if ppu_sprite_pixel_found == 1 and ppu_sprite_pixel_oam_index == 0 {
+    if ppu_sprite_zero_in_line == 1 and ppu_sprite_pixel_found == 1 and ppu_sprite_pixel_oam_index == 0 {
         if background_pixel != 0 and pixel_x < PPU_FRAME_WIDTH - 1 {
             # The hit flag latches until the pre-render clear, so the setter only has work
             # to do on the first hit of a frame; the test keeps the call off every later
@@ -1128,10 +1182,10 @@ proc ppu_render_pixel {
     # reached. The bus keeps the rule for the CPU's $2007 palette reads. Palette RAM stores
     # six-bit values (every bus write masks them), and the six-bit color mask is $3F, whose
     # modulo form divides by 64.
-    color_index = ppu_palette_ram[palette_offset + 1] % 64;
+    color_index = ppu_palette_color[palette_offset + 1];
 
     if ppu_mask_greyscale == 1 {
-        color_index = ((color_index // 16) % 4) * 16;
+        color_index = ppu_greyscale_colors[color_index + 1];
     }
 
     framebuffer_index = ppu_framebuffer_row_base + ppu_dot;
@@ -1507,8 +1561,10 @@ proc ppu_clock_sprite_fetch {
         if fetch_phase == 0 {
             if sprite_slot == 0 {
                 # The slots about to be loaded are the ones the next visible line draws, so
-                # the renderer's scan bound is captured here, once per line.
+                # the renderer's scan bound is captured here, once per line, and the
+                # sprite-zero flag starts clear for the new line.
                 ppu_sprite_unit_active_count = candidate_count;
+                ppu_sprite_zero_in_line = 0;
             }
 
             ppu_sprite_unit_pattern_low[slot_index] = 0;
@@ -1521,6 +1577,12 @@ proc ppu_clock_sprite_fetch {
         if candidate_found == 1 and fetch_phase == PPU_SPRITE_FETCH_ATTRIBUTE_PHASE {
             ppu_sprite_unit_attributes[slot_index] = candidate_attributes;
             ppu_sprite_unit_oam_index[slot_index] = candidate_oam_index;
+
+            # The renderer's hit test only needs to know whether sprite zero is on this line
+            # at all, which is one comparison per loaded sprite instead of one per pixel.
+            if candidate_oam_index == 0 {
+                ppu_sprite_zero_in_line = 1;
+            }
         }
 
         if candidate_found == 1 and fetch_phase == PPU_SPRITE_FETCH_X_PHASE {
@@ -1534,6 +1596,7 @@ proc ppu_clock_sprite_fetch {
                 candidate_attributes,
                 candidate_row
             );
+            ppu_sprite_fetch_pattern_address = pattern_address;
             ppu_bus_read_pattern_window pattern_address;
             pattern_byte = ppu_bus_read_value;
 
@@ -1547,12 +1610,10 @@ proc ppu_clock_sprite_fetch {
         }
 
         if fetch_phase == PPU_SPRITE_FETCH_PATTERN_HIGH_PHASE {
-            pattern_address = ppu_sprite_pattern_address(
-                ppu_control_register,
-                candidate_tile,
-                candidate_attributes,
-                candidate_row
-            );
+            # The address depends only on the control register, tile, attributes, and row of
+            # this slot, all of which are unchanged since the low-plane phase two dots ago, so
+            # the value computed there is reused instead of calling the func again.
+            pattern_address = ppu_sprite_fetch_pattern_address;
             ppu_bus_read_pattern_window pattern_address + PPU_PATTERN_HIGH_PLANE_OFFSET;
             pattern_byte = ppu_bus_read_value;
 

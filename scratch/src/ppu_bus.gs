@@ -29,6 +29,11 @@ list ppu_nametable_ram = [0; 4096];
 # Palette storage: 32 bytes (6-bit colors in the low bits).
 list ppu_palette_ram = [0; 32];
 
+# The same 32 slots with the six-bit mask already applied. Every write to palette RAM masks
+# to six bits, so the renderer can read the color index without a modulo on all 61,440 pixels
+# of a frame. Kept in lockstep with ppu_palette_ram at the two places that list is written.
+list ppu_palette_color = [0; 32];
+
 # Primary OAM: 256 bytes.
 list ppu_oam = [0; 256];
 
@@ -86,6 +91,7 @@ proc ppu_bus_clear_memory {
 
     repeat 32 {
         ppu_palette_ram[index] = 0;
+        ppu_palette_color[index] = 0;
         index++;
     }
 
@@ -239,7 +245,9 @@ proc ppu_bus_write_ppu address, value {
     } else {
         ppu_bus_last_access_region = ppu_bus_region.palette;
         local pal_index = ppu_bus_map_palette(ppu_address);
-        ppu_palette_ram[pal_index] = byte_value % 64;
+        local palette_value = byte_value % 64;
+        ppu_palette_ram[pal_index] = palette_value;
+        ppu_palette_color[pal_index] = palette_value;
     }
 }
 
@@ -291,9 +299,19 @@ proc ppu_bus_read_pattern_window address {
         # through ppu_bus_observe_access and ppu_bus_read_pattern are pure call overhead on
         # the board the embedded image uses. The fields the generic path would set are set
         # here directly.
-        ppu_bus_pattern_mapped = 1;
-        nrom_read_pattern $address;
-        ppu_bus_read_value = nrom_pattern_value;
+        #
+        # A CHR ROM board is the other common shape, and its read is one list access with no
+        # modulo, so it is taken here instead of inside nrom_read_pattern. A CHR RAM board (or
+        # an empty one) still pays the call, which keeps the RAM modulo and the empty-board
+        # zero in one place.
+        if cartridge_chr_rom_bytes > 0 {
+            ppu_bus_pattern_mapped = 1;
+            ppu_bus_read_value = nrom_chr_rom[$address + 1];
+        } else {
+            ppu_bus_pattern_mapped = 1;
+            nrom_read_pattern $address;
+            ppu_bus_read_value = nrom_pattern_value;
+        }
     } else {
         ppu_bus_observe_access ppu_bus_access.read, $address;
         ppu_bus_read_pattern $address;
@@ -343,14 +361,12 @@ proc ppu_bus_observe_access access_kind, address {
 }
 
 # Reports the PPU address bus value set by a PPUADDR write to the attached
-# mapper, without inventing a memory read or write. NROM has no observer;
-# MMC3 forwards the address to the A12 filter.
+# mapper, without inventing a memory read or write. Only MMC3 forwards the address to the A12
+# filter, and the callers test for it, so NROM pays nothing.
 proc ppu_bus_observe_ppu_address address {
-    local ppu_address = ppu_bus_normalize_address($address);
-
-    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-        mmc3_observe_ppu_address ppu_address;
-    }
+    # Called only by the PPU's own $2006/$2007 paths, which pass `ppu_vram_address % 16384`
+    # and test the board kind first, so the address needs no normalization here.
+    mmc3_observe_ppu_address $address;
 }
 
 # Advances the attached mapper by one PPU dot. NROM ignores the tick; MMC3

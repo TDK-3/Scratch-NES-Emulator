@@ -834,6 +834,18 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_clear_frame_output", mirror: null, reason: "ppu rendering pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_shift_pixel", mirror: "ppu_shift_pixel" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_select_palette_offset", mirror: "ppu_select_palette_offset" },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_decode_control_register",
+        mirror: null,
+        reason: "caches two PPUCTRL fields the rendering pipeline reads; the mirror decodes them where it needs them",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_greyscale_table_init",
+        mirror: null,
+        reason: "fills the 64-entry greyscale list; the mirror has no PPU rendering pipeline to feed",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_reverse_byte_bits", mirror: "ppu_reverse_byte_bits" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_sprite_row", mirror: "ppu_sprite_row" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_sprite_pattern_address", mirror: "ppu_sprite_pattern_address" },
@@ -2006,8 +2018,8 @@ test("mask arithmetic divides by mask-plus-one at every ported use site", () => 
     assert.match(ppu.text, /ppu_sprite_pixel_attributes % 4/, "the sprite palette field is attributes & $03");
     assert.match(
         ppu.text,
-        /ppu_palette_ram\[palette_offset \+ 1\] % 64/,
-        "the six-bit color index is the palette byte & $3F",
+        /ppu_palette_color\[palette_offset \+ 1\]/,
+        "the six-bit color index comes from the masked palette cache",
     );
 
     // APU is stubbed (no triangle channel); the mask-divide-by-plus-one invariant is
