@@ -8,16 +8,16 @@
 # board answers from its last PRG bank.
 #
 # The frame loop runs the console afterwards: one bounded chunk of CPU cycles at a time, with a
-# yield between chunks so the display sprite can report the progress and the project stays
-# responsive. A chunk never runs past the end of a frame, and the frame counter advances when a
-# frame completes. The bus-access log stays off while the game runs, the way the reference runs
-# the CPU without a trace sink, so the log cannot grow without bound.
+# yield between chunks so the project stays responsive. A chunk never runs past the end of a frame,
+# and the frame counter advances when a frame completes. The bus-access log stays off while the game
+# runs, the way the reference runs the CPU without a trace sink, so the log cannot grow without
+# bound.
 #
 # Every time the PPU finishes a visible frame it raises ppu_frame_ready at the vblank-start
 # dot. The loop then hands the framebuffer to the display sprite with a broadcast it waits on,
 # so the sprite draws one stable frame with the pen extension while the console is paused, and
-# no scanline of the next frame can overwrite a row the sprite has not drawn yet. The report
-# still shows the frames, the drawn frames, the CPU cycles, and the program counter reached.
+# no scanline of the next frame can overwrite a row the sprite has not drawn yet. Nothing is
+# reported per frame. Pressing E halts the console and dumps its state once (rom_run_halt_and_dump).
 #
 # The host keyboard is sampled once every four chunks, not once per emulated frame. A frame is
 # about 29,780 cycles, so this loop spends roughly 300 bounded chunks finishing one. Polling every
@@ -32,7 +32,7 @@
 # of hexadecimal byte values, replaces the embedded image with what it describes, and this loop
 # then boots that image through the same path the embedded one took. Servicing the request
 # here, with the console stopped, is what keeps the byte list from being replaced in the
-# middle of a frame, and it leaves the counters and the report starting over from the new
+# middle of a frame, and it leaves the counters starting over from the new
 # image instead of continuing the old one.
 
 %include src/numeric
@@ -49,7 +49,7 @@
 # Whether the console booted and the image is running.
 var rom_run_started = 0;
 
-# The image the report names: the embedded one until a runtime load replaces it.
+# The image the dump names: the embedded one until a runtime load replaces it.
 var rom_run_image_name = "test_rom.nes";
 
 # The frames the console has run since the boot.
@@ -79,14 +79,11 @@ var rom_run_last_frame_skipped = 0;
 var rom_run_poll_interval_chunks = 4;
 var rom_run_poll_countdown = 0;
 
-# Refresh the visible status every 25 chunks while a frame is in progress. Without this, the
-# display keeps saying "running" until a complete 29,780-cycle frame has finished, which hides
-# whether a slow Scratch warp chunk is making forward progress.
-var rom_run_progress_interval_chunks = 25;
-var rom_run_progress_chunk_count = 0;
-
-# One summary line for the display sprite.
+# One summary line for the display sprite: the boot and ROM-load messages.
 var rom_run_state_text = "";
+
+# The state dump the E key writes, shown by the display sprite.
+var rom_run_dump_text = "";
 
 # Decides whether a completed frame is skipped instead of drawn. While skipping is active, every
 # other frame is drawn, so the picture still refreshes at half the emulated rate when the pen
@@ -123,7 +120,6 @@ proc rom_run_start {
     rom_run_frames_drawn = 0;
     rom_run_cycles = 0;
     rom_run_poll_countdown = 0;
-    rom_run_progress_chunk_count = 0;
     rom_run_skip_active = 0;
     rom_run_last_frame_skipped = 0;
     rom_run_state_text = "not started";
@@ -166,7 +162,7 @@ proc rom_run_start {
 
 # Runs the console until the project stops. Every iteration runs one bounded chunk of CPU
 # cycles, samples the host keyboard, counts the frame the chunk finished, presents a frame the
-# PPU completed, refreshes the report, and yields. The block is declared nowarp so the loop
+# PPU completed, and yields. The block is declared nowarp so the loop
 # hands the project back after every chunk instead of holding the screen refresh for a whole
 # warp window, and so the presentation broadcast can wait for the display sprite to finish
 # drawing.
@@ -191,15 +187,19 @@ nowarp proc rom_run_loop {
             # The pads follow the host keyboard between chunks, so a press reaches the
             # console within one poll interval instead of one emulated frame later.
             keyboard_poll_controllers;
+
+            # E halts the console and dumps its state. It is sampled with the pads, and the halt
+            # does not return, so one press is enough.
+            if key_pressed("e") {
+                rom_run_halt_and_dump;
+            }
         }
 
         frame_loop_run_chunk;
         rom_run_cycles = rom_run_cycles + frame_loop_chunk_cycles_run;
-        rom_run_progress_chunk_count = rom_run_progress_chunk_count + 1;
 
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;
-            rom_run_progress_chunk_count = 0;
             rom_run_frame_count = rom_run_frame_count + 1;
 
             # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
@@ -214,13 +214,6 @@ nowarp proc rom_run_loop {
                 rom_run_last_fps_update_timer = timer();
                 rom_run_skip_active = rom_run_next_skip_state(rom_run_skip_active, rom_run_fps);
             }
-
-            # A completed frame always refreshes the report, regardless of the progress interval.
-            rom_run_update_status;
-        } elif rom_run_progress_chunk_count >= rom_run_progress_interval_chunks {
-            # Keep the live cycle and PC counters visible while a slow PPU frame is still running.
-            rom_run_progress_chunk_count = 0;
-            rom_run_update_status;
         }
 
         if ppu_frame_ready == 1 {
@@ -282,27 +275,46 @@ proc rom_run_load_input_image {
     }
 }
 
-# Rebuilds the summary line the display sprite shows.
-proc rom_run_update_status {
-    if rom_run_started == 1 {
-        local fps_text = "";
-        local skip_text = "";
+# Writes the state dump into rom_run_dump_text: the run counters, the CPU registers, the PPU
+# registers, the MMC3 registers and IRQ state, the pad masks, and the board. Pure reporting; it
+# reads the state and changes nothing the console uses.
+proc rom_run_build_dump {
+    rom_run_dump_text = "frame " & rom_run_frame_count & " drawn " & rom_run_frames_drawn
+        & " skipped " & rom_run_frames_skipped & " fps " & (rom_run_fps // 1)
+        & " cycles " & rom_run_cycles & " image " & rom_run_image_name;
 
-        if rom_run_fps > 0 {
-            fps_text = " fps " & (rom_run_fps // 1);
-        }
+    rom_run_dump_text = rom_run_dump_text & " | CPU pc " & cpu_program_counter
+        & " a " & cpu_a & " x " & cpu_x & " y " & cpu_y & " sp " & cpu_stack_pointer
+        & " p " & cpu_status & " cycles " & cpu_cycles & " nmi_pending " & cpu_nmi_pending
+        & " irq " & cpu_irq_line_asserted & " jammed " & cpu_jammed & " dma " & cpu_dma_phase;
 
-        if rom_run_frames_skipped > 0 {
-            skip_text = " skipped " & rom_run_frames_skipped;
-        }
+    rom_run_dump_text = rom_run_dump_text & " | PPU scanline " & ppu_scanline & " dot " & ppu_dot
+        & " frame " & ppu_frame_number & " ctrl " & ppu_control_register
+        & " mask " & ppu_mask_register & " status " & ppu_status_register
+        & " vram " & ppu_vram_address & " nmi_out " & ppu_nmi_output & " dots " & ppu_dots_clocked;
 
-        rom_run_state_text = rom_run_image_name & " frame " & rom_run_frame_count
-            & " drawn " & rom_run_frames_drawn
-            & skip_text
-            & fps_text
-            & " cycles " & rom_run_cycles
-            & " pc " & cpu_program_counter
-            & " " & cartridge_board_state_text;
-        broadcast "rom run progress";
+    rom_run_dump_text = rom_run_dump_text & " | MMC3 select " & mmc3_bank_select
+        & " prg_mode " & mmc3_prg_mode & " chr_mode " & mmc3_chr_mode
+        & " regs " & mmc3_bank_registers[1] & "," & mmc3_bank_registers[2]
+        & "," & mmc3_bank_registers[3] & "," & mmc3_bank_registers[4]
+        & "," & mmc3_bank_registers[5] & "," & mmc3_bank_registers[6]
+        & "," & mmc3_bank_registers[7] & "," & mmc3_bank_registers[8]
+        & " irq latch " & mmc3_irq_latch & " counter " & mmc3_irq_counter
+        & " enabled " & mmc3_irq_enabled & " line " & mmc3_irq_line_asserted;
+
+    rom_run_dump_text = rom_run_dump_text & " | pads " & controller_button_masks[1]
+        & "," & controller_button_masks[2] & " | " & cartridge_board_state_text;
+}
+
+# Halts the console for good and hands the dump to the display sprite. The loop never resumes:
+# only a new green flag, which restarts the boot, runs the console again. Declared nowarp so the
+# wait yields to the project instead of freezing it.
+nowarp proc rom_run_halt_and_dump {
+    rom_run_build_dump;
+    rom_run_state_text = "halted by E at frame " & rom_run_frame_count;
+    broadcast_and_wait "rom run dump";
+
+    forever {
+        wait 0;
     }
 }

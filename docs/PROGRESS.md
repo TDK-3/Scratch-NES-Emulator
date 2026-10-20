@@ -759,6 +759,11 @@ hardware validation remains open.
 
 ## Current milestone
 
+Latest change: the per-frame and per-chunk status broadcast that the display sprite used to say is removed. The E key
+halts the console and broadcasts one state dump (CPU and PPU registers, MMC3 registers and IRQ state, pad masks,
+frame counters) for the sprite to show. The halt is GoboScript-only, with no TypeScript mirror: the dump only reads
+state. Not runtime-verified, because the GoboScript compiler and TurboWarp are unavailable here.
+
 **Milestone 2: GoboScript port of the tested helper layer.** All port components are now complete:
 numeric/status/ALU helpers, both controller ports, the CPU-bus (with RAM mirroring, open-bus, the PPU/APU/controller
 windows, and the per-device attachment flags), cartridge header parsing, the full CPU (registers, addressing,
