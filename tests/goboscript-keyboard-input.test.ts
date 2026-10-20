@@ -213,11 +213,11 @@ test("a polled mask reaches the console through the reference controller's seria
 });
 
 test("the run loop samples the keyboard from one place, at a bounded interval", () => {
-    // A frame costs 29,780 cycles, so the loop runs about 60 chunks of 500 cycles to finish one.
-    // Sampling only when a frame completed would hand the console a press up to 16 ms after it
-    // happened, so the sampler runs on a countdown of a few chunks instead: at the default
-    // interval of four chunks a press lands within about 1.1 ms of emulated time, while the 16
-    // key_pressed device lookups stop running sixty times a frame.
+    // A frame costs 29,780 cycles, so the loop runs about 300 bounded chunks of 100 cycles to
+    // finish one. Sampling only when a frame completed would hand the console a press up to
+    // 16 ms after it happened, so the sampler runs on a countdown of four chunks instead: at
+    // the default interval a press is sampled within 400 emulated CPU cycles. Wall-time latency
+    // depends on the runtime, while the 16 key_pressed device lookups stop running in every chunk.
     assert.match(ROM_RUN_SOURCE, /%include src\/keyboard_input/, "the run loop can call the sampler");
     assert.equal(
         (ROM_RUN_SOURCE.match(/keyboard_poll_controllers;/g) ?? []).length,

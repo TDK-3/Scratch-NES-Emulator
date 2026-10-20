@@ -36,10 +36,10 @@
 %include src/ppu_2c02
 %include src/cartridge_loader
 
-# NTSC timing constants. Chunk size tuned to 500: ~60 chunks/frame vs 300 before, cutting yields
-# 5x while keeping input poll (once/chunk) at ~500Hz (2ms granularity) well below human perception.
+# NTSC timing constants. Keep each warp chunk bounded so Scratch can refresh and service stop/input
+# events while the PPU advances. At 100 cycles this is about 300 yields per emulated frame.
 var FRAME_LOOP_CYCLES_PER_FRAME = 29780;
-var FRAME_LOOP_CYCLES_PER_CHUNK = 500;
+var FRAME_LOOP_CYCLES_PER_CHUNK = 100;
 
 # Frame loop state
 var frame_loop_cycles_run = 0;

@@ -349,6 +349,10 @@ proc mmc3_load_payload {
     mmc3_copy_prg_rom;
     mmc3_copy_chr_rom;
     mmc3_copy_trainer;
+
+    # Loading a fresh cartridge must not inherit bank, mirroring, or IRQ state from the previous run.
+    # The reset changes control state only; it leaves the payload and trainer memory intact.
+    mmc3_reset;
 }
 
 # The PRG bank one CPU slot selects. Slots are $8000, $A000, $C000, and $E000, and the two slots the

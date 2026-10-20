@@ -769,7 +769,15 @@ the console boot that runs the embedded image, the pen display that draws each f
 host keyboard input that polls the built-in key sensors into both pads.
 Every ported algorithm is mirrored in integer-only TypeScript and compared exhaustively
 with the bitwise reference, and the sources are lint-checked against the upstream grammar and codegen constraints.
-All 1,303 tests pass. The compiled project was brought in line with the earlier sources and now reports
+The reported black startup was traced to a misleadingly static status and the large PPU workload: the
+"running mmc3 banks 8" label confirms attachment, while the Stage only draws after vblank. Although Stage
+status values changed at frame boundaries, the display sprite only ran `say` on the initial broadcast, so its
+bubble stayed stale. The Stage now broadcasts throttled progress updates that refresh the sprite's say block;
+chunks are capped at 100 CPU cycles, and status is refreshed every 25 chunks with live cycle/PC values.
+MMC3 cartridge loads also reset bank and IRQ registers rather than carrying state into a restarted run.
+These changes pass source and TypeScript mirror tests; they are not runtime-verified because the pinned
+GoboScript compiler and TurboWarp are unavailable here, and do not establish a measured frame rate.
+All 1,306 tests pass. The compiled project was brought in line with the earlier sources and now reports
 `port vectors 582/582 passed, 5 skipped` from its own in-project self test, and its console run reads the reset
 vector from the embedded MMC3 image and executes the game's code with a bus trace byte-identical to the
 TypeScript reference's. Compile validation stays blocked by the missing GoboScript toolchain; the renderer

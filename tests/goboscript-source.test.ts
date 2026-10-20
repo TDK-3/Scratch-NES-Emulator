@@ -1822,6 +1822,41 @@ test("the Stage boots the embedded ROM after the shared-vector self test", () =>
     assert.match(sprite.text, /say rom_run_state_text;/, "the display sprite must report the ROM status");
 });
 
+test("the frame driver yields in small chunks and reports progress before a full frame finishes", () => {
+    const frame_loop = get_source("src/frame_loop.gs");
+    assert.match(
+        frame_loop.text,
+        /var FRAME_LOOP_CYCLES_PER_CHUNK = 100;/,
+        "the CPU/PPU warp workload must remain bounded to 100 cycles per return",
+    );
+
+    const rom_run = get_source("src/rom_run.gs");
+    assert.match(
+        rom_run.text,
+        /var rom_run_progress_interval_chunks = 25;/,
+        "progress reporting must be throttled rather than updating the say bubble on every chunk",
+    );
+
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    const body = loop?.body.join("\n") ?? "";
+    assert.match(body, /rom_run_progress_chunk_count = rom_run_progress_chunk_count \+ 1;/);
+    assert.match(body, /rom_run_progress_chunk_count >= rom_run_progress_interval_chunks/);
+    assert.match(
+        body,
+        /rom_run_progress_chunk_count = 0;[\s\S]*?rom_run_update_status;/,
+        "the live CPU cycle and PC status must refresh once the configured number of chunks completes",
+    );
+
+    const update = rom_run.declarations.find((declaration) => declaration.name === "rom_run_update_status");
+    assert.match(update?.body.join("\n") ?? "", /broadcast "rom run progress";/);
+    const sprite = get_source("main.gs");
+    assert.match(
+        sprite.text,
+        /on "rom run progress" \{\s*say rom_run_state_text;/,
+        "the display sprite must say the new value when the Stage broadcasts progress",
+    );
+});
+
 test("the run loop services a ROM load request before it runs any more cycles", () => {
     // A pasted image replaces cartridge_bytes, which the board and the CPU read every cycle,
     // so the swap has to happen with the console stopped. The loop samples the load key and
