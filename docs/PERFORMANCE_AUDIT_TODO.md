@@ -520,7 +520,7 @@ The following optimizations from sections 1-4 have been implemented, verified (`
 
 **Motivation:** TurboWarp cannot output NES audio from the pen renderer, and the APU burned ~400k Scratch ops/frame (29,780 `apu_clock_cpu_cycle` per frame + pulse/triangle/noise/DMC timers, envelopes, length counters, sweep, frame sequencer, mixer) for no audible output. The full APU was ~1,483 lines, 15 lists, 50+ vars, 30+ procs — a large compile cost and a hot inner-loop tax. Functionality and performance are key, but audio without an output sink is neither.
 
-**Decision:** Remove audio entirely. Keep minimal bus compatibility so the project still lints/compiles. Preserve full implementation on backup branch `arena/54bc3f09-scratch-nes-emulator-backup` (commit `6b01e7b`, pushed to origin) for reference and future browser-audio work.
+**Decision:** Remove audio entirely. Keep minimal bus compatibility so the project still lints/compiles. Preserve full implementation on audio branch `arena/54bc3f09-scratch-nes-emulator-backup` (commit `c4ca00d`, pushed to origin) — that branch retains the same batch 1-3 optimizations (framebuffer packing, 65k tables, bus fast path, FPS, etc.) with `apu_audio_enabled` gate for fidelity, while this branch stubs the APU for maximum performance. Both branches have every optimization possible; the only difference is audio.
 
 ### What was removed
 - [x] **`scratch/src/apu_2a03.gs` 1,483 → ~200 lines (stub)** — Deleted length/duty (`apu_pulse_duty_tables_*`), triangle/noise/DMC tables, 15 lists, 50+ vars, 30+ timer/envelope/sweep/mixer procs. Stub retains only `apu_frame_irq = 0; dmc_irq = 0; apu_status_value = 0; apu_status_driven_mask = 0; apu_register_error = 0;` plus `apu_register_status` enum and no-op procs for all 54 mirror-contract declarations (`apu_reset`, `apu_write_register`, `apu_read_status`, `apu_clock_cpu_cycle`, `apu_clock_pulse_timer`, `apu_clock_frame_sequencer`, etc.) so `goboscript-source.test.ts` mirror contract still has a declaration for every entry. Header notes `apu_2a03: no-audio stub` and points to backup branch and `docs/PERFORMANCE_AUDIT_TODO.md §8`.
@@ -544,7 +544,7 @@ The following optimizations from sections 1-4 have been implemented, verified (`
 - `port_suite` still defines `apu = 6` (fixture parity) but dispatcher no longer handles it; `goboscript-source.test.ts` confirms `skipped == ["apu","cpu","mapper"]`.
 - `cpu_bus_apu_attached` no longer exists anywhere in `scratch/` (grep 0 hits) — bus correctly treats `$4015`/$4000-$4013 as undriven.
 - `frame_loop_run_chunk` contains 0 occurrences of `apu_clock_cpu_cycle` or `apu_frame_irq`/`dmc_irq`.
-- Backup branch `arena/54bc3f09-scratch-nes-emulator-backup` pushed to origin, verified `git branch -a` shows both branches.
+- Audio branch `arena/54bc3f09-scratch-nes-emulator-backup` (`c4ca00d`) also pushed — same batch 3 optimizations with audio retained (`apu_audio_enabled` gate), versus this branch's stub.
 
 ### Remaining APU-adjacent TODO (if audio re-added later)
 - Re-introduce from backup: pulse channel DAC output `apu_get_pulse_output` needs `ppu_framebuffer` style mixer if browser `AudioWorklet` sink added; DMC DMA stall (currently OAM DMA only) must interleave with `cpu_bus` DMC DMA generator.
@@ -553,7 +553,7 @@ The following optimizations from sections 1-4 have been implemented, verified (`
 
 ## 9. Implemented Optimizations (2026-10-20 Batch 3 — Framebuffer / Bus / Numeric / PPU)
 
-**Scope:** Batch 3 tackles the remaining P0-P2 items that were not blocked on hardware measurement, focusing on per-frame hot loops (framebuffer 122k accesses, bus decode 30k reads, bitwise 12-122k ops, sprite eval 15k checks) plus observability (FPS).
+**Scope:** Batch 3 tackles the remaining P0-P2 items that were not blocked on hardware measurement, focusing on per-frame hot loops (framebuffer 122k accesses, bus decode 30k reads, bitwise 12-122k ops, sprite eval 15k checks) plus observability (FPS). Applied to both branches — this no-audio stub branch and the audio-retained branch `arena/54bc3f09-scratch-nes-emulator-backup` (`c4ca00d`).
 
 ### What was implemented
 - [x] **Framebuffer packing (P1)** — `scratch/src/ppu_2c02.gs` 2×61440 `ppu_framebuffer_colors` + `ppu_framebuffer_emphasis` → 1×61440 `ppu_framebuffer_packed = emphasis*64 + color_index (0-511)`. `ppu_render_pixel` now 1 write (`ppu_mask_emphasis*64+color_index`) vs 2, `ppu_clear_frame_output` 1 write vs 2 per pixel. `scratch/main.gs:pen_draw_frame` now `run_key = ppu_framebuffer_packed[i]` vs `emphasis*64+color` (saves 1 multiply+add+1 list read per pixel). `tests/goboscript-source.test.ts` updated from `ppu_framebuffer_colors`+`emphasis` to `ppu_framebuffer_packed`. Saves 61k writes + 61k reads + 61k mults/frame (~15% of PPU hot path) and 61,440 list slots (one 61440 list removed).
