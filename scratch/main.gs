@@ -51,9 +51,9 @@ on "rom run started" {
     say rom_run_state_text;
 }
 
-# A changed Stage variable does not refresh an existing say block; each progress broadcast does.
-on "rom run progress" {
-    say rom_run_state_text;
+# The E key halts the console and broadcasts the state dump, which the sprite shows as one say block.
+on "rom run dump" {
+    say rom_run_dump_text;
 }
 
 # The Stage loads a pasted image at the run loop's request, so it reports the outcome the

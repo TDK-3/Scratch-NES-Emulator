@@ -512,9 +512,15 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/rom_run.gs",
-        declaration: "rom_run_update_status",
+        declaration: "rom_run_build_dump",
         mirror: null,
-        reason: "report formatting only",
+        reason: "state dump formatting only; it reads the mirrored state and writes one text variable",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_halt_and_dump",
+        mirror: null,
+        reason: "E-key halt; it stops the frame driver and broadcasts the dump the sprite shows",
     },
     {
         source: "src/rom_run.gs",
@@ -1838,7 +1844,7 @@ test("the Stage boots the embedded ROM after the shared-vector self test", () =>
     assert.match(sprite.text, /say rom_run_state_text;/, "the display sprite must report the ROM status");
 });
 
-test("the frame driver yields in small chunks and reports progress before a full frame finishes", () => {
+test("the frame driver yields in small chunks and never writes a per-frame report", () => {
     const frame_loop = get_source("src/frame_loop.gs");
     assert.match(
         frame_loop.text,
@@ -1847,30 +1853,47 @@ test("the frame driver yields in small chunks and reports progress before a full
     );
 
     const rom_run = get_source("src/rom_run.gs");
-    assert.match(
-        rom_run.text,
-        /var rom_run_progress_interval_chunks = 25;/,
-        "progress reporting must be throttled rather than updating the say bubble on every chunk",
-    );
-
     const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
     const body = loop?.body.join("\n") ?? "";
-    assert.match(body, /rom_run_progress_chunk_count = rom_run_progress_chunk_count \+ 1;/);
-    assert.match(body, /rom_run_progress_chunk_count >= rom_run_progress_interval_chunks/);
-    assert.match(
-        body,
-        /rom_run_progress_chunk_count = 0;[\s\S]*?rom_run_update_status;/,
-        "the live CPU cycle and PC status must refresh once the configured number of chunks completes",
-    );
+    assert.ok(!/rom_run_update_status|rom run progress|progress_chunk/.test(body + rom_run.text),
+        "the per-frame and per-chunk status refresh must be gone");
+    assert.ok(!rom_run.text.includes("rom run progress"), "no progress broadcast may remain");
 
-    const update = rom_run.declarations.find((declaration) => declaration.name === "rom_run_update_status");
-    assert.match(update?.body.join("\n") ?? "", /broadcast "rom run progress";/);
     const sprite = get_source("main.gs");
-    assert.match(
-        sprite.text,
-        /on "rom run progress" \{\s*say rom_run_state_text;/,
-        "the display sprite must say the new value when the Stage broadcasts progress",
-    );
+    assert.ok(!sprite.text.includes("rom run progress"), "the display sprite must not say per-frame progress");
+});
+
+test("the E key halts the console and dumps its state once to the display sprite", () => {
+    const rom_run = get_source("src/rom_run.gs");
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    const body = loop?.body.join("\n") ?? "";
+    assert.match(body, /if key_pressed\("e"\) \{\s*rom_run_halt_and_dump;\s*\}/);
+
+    // The halt is declared nowarp and waits forever, so the console never runs again.
+    const halt = rom_run.declarations.find((declaration) => declaration.name === "rom_run_halt_and_dump");
+    assert.ok(halt, "rom_run_halt_and_dump is missing");
+    assert.equal(halt.kind, "proc");
+    assert.equal(halt.warp, false, "the halt must be nowarp so the wait yields");
+    const halt_body = halt.body.join("\n");
+    assert.match(halt_body, /rom_run_build_dump;/);
+    assert.match(halt_body, /broadcast_and_wait "rom run dump";/);
+    assert.match(halt_body, /forever \{\s*wait 0;\s*\}/);
+
+    // The dump names the CPU, PPU, MMC3, pad, and frame state the user asked for.
+    const dump = rom_run.declarations.find((declaration) => declaration.name === "rom_run_build_dump");
+    const dump_body = dump?.body.join("\n") ?? "";
+    for (const name of [
+        "cpu_program_counter", "cpu_a", "cpu_x", "cpu_y", "cpu_stack_pointer", "cpu_status",
+        "ppu_scanline", "ppu_dot", "ppu_control_register", "ppu_status_register",
+        "mmc3_bank_select", "mmc3_bank_registers", "mmc3_irq_counter", "controller_button_masks",
+        "rom_run_frame_count", "rom_run_frames_drawn", "rom_run_frames_skipped",
+        "cartridge_board_state_text",
+    ]) {
+        assert.ok(dump_body.includes(name), `the dump must include ${name}`);
+    }
+
+    const sprite = get_source("main.gs");
+    assert.match(sprite.text, /on "rom run dump" \{\s*say rom_run_dump_text;\s*\}/);
 });
 
 test("the run loop services a ROM load request before it runs any more cycles", () => {

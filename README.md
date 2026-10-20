@@ -71,7 +71,9 @@ loading, persistence, and known-limitations statement.
   run of equal pixels; the picture starts scaled to fit the stage, and setting the global
   `pen_fit_to_screen` variable to 0 returns it to native 1x pixels. The same project reads the host
   keyboard with the built-in "key () pressed?" reporter and drives both NES pads from it: arrows, Z, X,
-  Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second. Pressing Q while a game runs
+  Shift, and Enter on the first pad, and IJKL, U, O, Y, and P on the second. Pressing E halts the console
+  and shows its state (CPU and PPU registers, MMC3 registers, frame counters) in the display sprite; the
+  console stays halted until the green flag restarts it. Pressing Q while a game runs
   asks for a pasted hexadecimal byte string (two digits per byte), rebuilds the byte list from it, and
   reboots the console from the new image; the decode stages its bytes and only replaces the running image once the
   iNES signature and the declared payload check out, so a bad paste leaves the game alone. A Scratch list
