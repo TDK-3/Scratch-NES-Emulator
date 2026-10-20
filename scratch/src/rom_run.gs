@@ -108,8 +108,8 @@ proc rom_run_start {
         rom_run_state_text = "running " & cartridge_board_state_text;
         rom_run_fps = 0;
         rom_run_last_fps_update_frame = 0;
-        rom_run_last_fps_update_timer = timer;
-        rom_run_start_timer = timer;
+        rom_run_last_fps_update_timer = timer();
+        rom_run_start_timer = timer();
         rom_run_frames_skipped = 0;
     } else {
         rom_run_state_text = "boot failed " & cartridge_board_state_text;
@@ -147,14 +147,14 @@ nowarp proc rom_run_loop {
 
             # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
             if rom_run_frame_count - rom_run_last_fps_update_frame >= 60 {
-                elapsed = timer - rom_run_last_fps_update_timer;
+                elapsed = timer() - rom_run_last_fps_update_timer;
 
                 if elapsed > 0 {
                     rom_run_fps = 60 / elapsed;
                 }
 
                 rom_run_last_fps_update_frame = rom_run_frame_count;
-                rom_run_last_fps_update_timer = timer;
+                rom_run_last_fps_update_timer = timer();
             }
 
             # The summary line is rebuilt once per emulated frame instead of once per chunk:
