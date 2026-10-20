@@ -86,12 +86,53 @@ proc cpu_reset_registers {
 # in the trace. Callers read the result from the documented global on the next line.
 proc cpu_read_cycle address {
     local numeric_address = $address % 65536;
-    cpu_cycle_value = cpu_bus_read(numeric_address);
+    local bus_value = 0;
+
+    # Fast windows. Two windows carry almost every access a game makes: 2 KiB of RAM and the
+    # cartidge window's PRG ROM. Both are decoded here instead of in a cpu_bus_read call,
+    # which saves a custom-block call and a second address normalization per cycle; both
+    # devices drive the full byte, so the open-bus merge is one assignment. Every other
+    # address, including the PPU, I/O, and the mirror range of RAM, falls through to the bus
+    # decoder, which owns the reference-complete behavior and the cycle parity of the access.
+    if numeric_address < 8192 {
+        cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+
+        if numeric_address < 2048 {
+            bus_value = cpu_ram[numeric_address + 1];
+        } else {
+            bus_value = cpu_ram[(numeric_address % 2048) + 1];
+        }
+
+        cpu_open_bus = bus_value;
+    } elif numeric_address >= 32768 {
+        cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+        bus_value = cpu_open_bus;
+
+        if cpu_bus_cartridge_kind == mapper_kind.nrom {
+            nrom_read_cpu numeric_address;
+
+            if nrom_cpu_mapped == 1 {
+                bus_value = nrom_cpu_value % 256;
+                cpu_open_bus = bus_value;
+            }
+        } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+            mmc3_read_cpu numeric_address;
+
+            if mmc3_cpu_mapped == 1 {
+                bus_value = mmc3_cpu_value % 256;
+                cpu_open_bus = bus_value;
+            }
+        }
+    } else {
+        bus_value = cpu_bus_read(numeric_address);
+    }
+
+    cpu_cycle_value = bus_value;
 
     if cpu_access_log_enabled == 1 {
         add cpu_access_kind.read to cpu_access_log;
         add numeric_address to cpu_access_log;
-        add cpu_cycle_value to cpu_access_log;
+        add bus_value to cpu_access_log;
     }
 
     cpu_cycles++;
@@ -101,7 +142,31 @@ proc cpu_read_cycle address {
 proc cpu_write_cycle address, value {
     local numeric_address = $address % 65536;
     local numeric_value = $value % 256;
-    cpu_bus_write numeric_address, numeric_value;
+
+    # The same two fast windows as the read path, decoded without a cpu_bus_write call. A
+    # write leaves the byte on the open-bus latch before the device sees it, exactly as the
+    # bus decoder does.
+    if numeric_address < 8192 {
+        cpu_open_bus = numeric_value;
+        cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+
+        if numeric_address < 2048 {
+            cpu_ram[numeric_address + 1] = numeric_value;
+        } else {
+            cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
+        }
+    } elif numeric_address >= 32768 {
+        cpu_open_bus = numeric_value;
+        cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+
+        if cpu_bus_cartridge_kind == mapper_kind.nrom {
+            nrom_write_cpu numeric_address, numeric_value;
+        } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+            mmc3_write_cpu numeric_address, numeric_value;
+        }
+    } else {
+        cpu_bus_write numeric_address, numeric_value;
+    }
 
     if cpu_access_log_enabled == 1 {
         add cpu_access_kind.write to cpu_access_log;
@@ -134,10 +199,14 @@ proc cpu_fetch_byte {
 # with two operators instead of a join_bytes call.
 proc cpu_fetch_word {
     local low_byte = 0;
-    cpu_fetch_byte;
-    low_byte = cpu_fetched_byte % 256;
-    cpu_fetch_byte;
-    cpu_fetched_word = ((cpu_fetched_byte % 256) * 256) + low_byte;
+    local address = cpu_program_counter;
+    cpu_read_cycle address;
+    low_byte = cpu_cycle_value % 256;
+    address = (address + 1) % 65536;
+    cpu_read_cycle address;
+    cpu_fetched_byte = cpu_cycle_value;
+    cpu_fetched_word = ((cpu_cycle_value % 256) * 256) + low_byte;
+    cpu_program_counter = (address + 1) % 65536;
 }
 
 # Pushes one byte and decrements the stack pointer, mirroring push_byte_cycle(). Scratch's
@@ -178,11 +247,20 @@ proc cpu_pop_word {
 # Pushes the status byte, mirroring push_status_cycle(); `break_enabled` is 1 only for BRK,
 # because a hardware interrupt pushes the break bit clear.
 proc cpu_push_status break_enabled {
-    cpu_status = normalize_status(cpu_status);
-    cpu_push_byte pack_status_for_stack(cpu_status, $break_enabled);
+    local byte = cpu_status % 256;
+
+    # normalize_status and pack_status_for_stack inlined: the invariant is one expression, and
+    # the break bit is added rather than OR-ed because normalize_status always leaves bit 4
+    # clear, so the two sets of bits cannot overlap.
+    cpu_status = (byte % 16) + 32 + ((byte // 64) * 64);
+    cpu_push_byte cpu_status + (16 * $break_enabled);
 }
 
 # Restores the status byte from a popped stack byte, clearing BREAK and keeping UNUSED set.
 proc cpu_restore_status_from_stack value {
-    cpu_status = unpack_status_from_stack(normalize_byte($value));
+    local byte = $value % 256;
+
+    # unpack_status_from_stack(normalize_byte(value)) inlined: the two helpers were the same
+    # expression with a call around each.
+    cpu_status = (byte % 16) + 32 + ((byte // 64) * 64);
 }

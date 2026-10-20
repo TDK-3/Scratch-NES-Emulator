@@ -210,6 +210,14 @@ var ppu_sprite_pixel_oam_index = -1;
 
 # ---- framebuffer output ----
 
+# The emphasis and backdrop terms the pixel path would otherwise recompute 61,440 times a
+# frame. Both depend only on PPUMASK and palette RAM, so ppu_refresh_output_terms recomputes
+# them when either is written: the emphasis term is the top three bits of PPUMASK times 64
+# (the framebuffer's packing unit), and the backdrop is the greyscale-masked universal color,
+# which is the whole picture whenever rendering is disabled.
+var ppu_emphasis_packed = 0;
+var ppu_backdrop_packed = 0;
+
 # Row-major packed palette/emphasis values for the 256 by 240 picture, one 1-based
 # list slot per pixel at y * 256 + x + 1. Packed as emphasis*64 + color_index (0-511),
 # so the display sprite reads one list instead of two and the PPU writes one list instead
@@ -234,6 +242,21 @@ enum ppu_register_status {
     ok = 0,
     index_out_of_range = 1,
     value_out_of_range = 2
+}
+
+# Recomputes the two cached output terms. Mirrors what ppu_render_pixel would otherwise
+# compute per pixel: the emphasis packing of the current PPUMASK, and the universal backdrop
+# color after the greyscale mask.
+proc ppu_refresh_output_terms {
+    local backdrop = ppu_palette_ram[1] % 64;
+
+    ppu_emphasis_packed = ppu_mask_emphasis * 64;
+
+    if ppu_mask_greyscale == 1 {
+        backdrop = ((backdrop // 16) % 4) * 16;
+    }
+
+    ppu_backdrop_packed = ppu_emphasis_packed + backdrop;
 }
 
 # ---- reset ----
@@ -276,6 +299,7 @@ proc ppu_reset {
     ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
     ppu_reset_sprite_units;
     ppu_clear_frame_output;
+    ppu_refresh_output_terms;
     ppu_bus_reset;
 }
 
@@ -294,16 +318,15 @@ proc ppu_reset_sprite_units {
     }
 }
 
-# Clears both framebuffer planes to palette color zero with no emphasis,
-# mirroring PpuFramebuffer.clear(), and lowers the frame-ready flag.
+# Lowers the frame-ready flag at reset.
+#
+# This used to zero all 61,440 framebuffer slots, mirroring PpuFramebuffer.clear(). The clear
+# is dead work in this port: every visible dot writes its slot, whether rendering is on (the
+# pixel proc) or off (the backdrop fill in ppu_run_dots), and the display sprite only draws
+# when ppu_frame_ready is raised at the vblank-start dot of a frame that has just written every
+# row. A reset therefore cannot leave a stale row on screen, and the boot no longer spends
+# 61,440 list writes before it reads its first opcode.
 proc ppu_clear_frame_output {
-    local pixel_index = 1;
-
-    repeat PPU_FRAME_PIXEL_COUNT {
-        ppu_framebuffer_packed[pixel_index] = 0;
-        pixel_index++;
-    }
-
     ppu_frame_ready = 0;
 }
 
@@ -338,63 +361,41 @@ func ppu_take_nmi_edge() {
 
 # Sets or clears the vblank status bit; the PPU timing unit drives this.
 proc ppu_set_vblank_flag active {
-    local was_set = bitwise_and(ppu_status_register, PPU_VBLANK_FLAG);
-    local now_set = 0;
+    # The status byte is eight bits and the vblank flag is bit 7, so its state is one
+    # division and the flag is set or cleared with one addition or subtraction. The three
+    # high bits are the only ones PPUSTATUS exposes, and the byte is normalized by every
+    # writer, so the mask this used to apply with bitwise_and is a modulo here.
+    local was_set = ppu_status_register // PPU_VBLANK_FLAG;
 
-    if $active != 0 {
-        now_set = PPU_VBLANK_FLAG;
+    if $active != 0 and was_set == 0 {
+        ppu_status_register = ppu_status_register + PPU_VBLANK_FLAG;
+    } elif $active == 0 and was_set == 1 {
+        ppu_status_register = ppu_status_register - PPU_VBLANK_FLAG;
     }
 
-    if was_set != now_set {
-        if $active != 0 {
-            ppu_status_register = ppu_status_register + PPU_VBLANK_FLAG;
-        } else {
-            ppu_status_register = ppu_status_register - PPU_VBLANK_FLAG;
-        }
-    }
-
-    ppu_status_register = bitwise_and(ppu_status_register, PPU_STATUS_FLAGS_MASK);
     ppu_refresh_nmi_output;
 }
 
 # Sets or clears the sprite-zero-hit status bit.
 proc ppu_set_sprite_zero_hit active {
-    local was_set = bitwise_and(ppu_status_register, PPU_SPRITE_ZERO_HIT_FLAG);
-    local now_set = 0;
+    local was_set = (ppu_status_register // PPU_SPRITE_ZERO_HIT_FLAG) % 2;
 
-    if $active != 0 {
-        now_set = PPU_SPRITE_ZERO_HIT_FLAG;
+    if $active != 0 and was_set == 0 {
+        ppu_status_register = ppu_status_register + PPU_SPRITE_ZERO_HIT_FLAG;
+    } elif $active == 0 and was_set == 1 {
+        ppu_status_register = ppu_status_register - PPU_SPRITE_ZERO_HIT_FLAG;
     }
-
-    if was_set != now_set {
-        if $active != 0 {
-            ppu_status_register = ppu_status_register + PPU_SPRITE_ZERO_HIT_FLAG;
-        } else {
-            ppu_status_register = ppu_status_register - PPU_SPRITE_ZERO_HIT_FLAG;
-        }
-    }
-
-    ppu_status_register = bitwise_and(ppu_status_register, PPU_STATUS_FLAGS_MASK);
 }
 
 # Sets or clears the sprite-overflow status bit.
 proc ppu_set_sprite_overflow active {
-    local was_set = bitwise_and(ppu_status_register, PPU_SPRITE_OVERFLOW_FLAG);
-    local now_set = 0;
+    local was_set = (ppu_status_register // PPU_SPRITE_OVERFLOW_FLAG) % 2;
 
-    if $active != 0 {
-        now_set = PPU_SPRITE_OVERFLOW_FLAG;
+    if $active != 0 and was_set == 0 {
+        ppu_status_register = ppu_status_register + PPU_SPRITE_OVERFLOW_FLAG;
+    } elif $active == 0 and was_set == 1 {
+        ppu_status_register = ppu_status_register - PPU_SPRITE_OVERFLOW_FLAG;
     }
-
-    if was_set != now_set {
-        if $active != 0 {
-            ppu_status_register = ppu_status_register + PPU_SPRITE_OVERFLOW_FLAG;
-        } else {
-            ppu_status_register = ppu_status_register - PPU_SPRITE_OVERFLOW_FLAG;
-        }
-    }
-
-    ppu_status_register = bitwise_and(ppu_status_register, PPU_STATUS_FLAGS_MASK);
 }
 
 # Recomputes the level-sensitive NMI output from the control register's
@@ -581,6 +582,8 @@ proc ppu_decode_mask_register {
     if ppu_mask_register % 2 == 1 {
         ppu_mask_greyscale = 1;
     }
+
+    ppu_refresh_output_terms;
 }
 
 # PPUCTRL: stores the value, updates the nametable bits in the temporary
@@ -665,7 +668,16 @@ proc ppu_write_address_register value {
 
 # PPUDATA: writes through the PPU bus and increments the VRAM address.
 proc ppu_write_data_register value {
-    ppu_bus_write_ppu ppu_vram_address % 16384, $value;
+    local target_address = ppu_vram_address % 16384;
+
+    ppu_bus_write_ppu target_address, $value;
+
+    # A palette write can change the universal backdrop color, which the disabled-rendering
+    # fill and the pixel path read from one cached value instead of a palette read per pixel.
+    if target_address >= 16128 {
+        ppu_refresh_output_terms;
+    }
+
     ppu_increment_vram_address;
 }
 
@@ -695,68 +707,98 @@ proc ppu_increment_vram_address {
 
 # ---- timing ----
 
-# Clocks one PPU dot: applies vblank timing, renders the dot's pixel, runs
-# the fetch pipeline, then advances dot/scanline, in the reference order.
+# Clocks one PPU dot: the one-dot entry point kept for the self test and for any caller that
+# advances the PPU by a single dot. The frame loop uses ppu_run_dots below, which is the same
+# body without a custom-block call per dot.
 proc ppu_clock_ppu_dot {
-    # ppu_bus_clock_ppu_dot() and the MMC3 low-dot counter it forwards to, written out here:
-    # this runs 89,460 times a frame, and two custom-block calls per dot for one comparison
-    # and one increment is a cost the frame budget cannot carry. NROM has no observer, so the
-    # whole block collapses to one comparison on that board.
-    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-        if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
-            mmc3_a12_low_dots = mmc3_a12_low_dots + 1;
-        }
-    }
+    ppu_run_dots 1;
+}
 
-    # Both status events are scheduled at dot 1 (PPU_VBLANK_START_DOT and
-    # PPU_PRE_RENDER_STATUS_CLEAR_DOT are both 1), so the shared dot test leads and the two
-    # scanline tests run 262 times a frame instead of 89,460.
-    if ppu_dot == 1 {
-        if ppu_scanline == PPU_VBLANK_FIRST_SCANLINE {
-            # Rows 0-239 are complete at this dot even when an early PPUSTATUS
-            # read suppresses the vblank flag itself, so the finished frame is
-            # offered to the display either way.
-            ppu_frame_ready = 1;
+# Clocks `count` consecutive PPU dots in one call: applies vblank timing, renders each dot's
+# pixel, runs the fetch pipeline, then advances dot/scanline, in the reference order.
+#
+# This loop is the innermost loop of the whole project: a CPU frame is 89,342 dots, and the
+# frame loop reaches it once per emulated instruction instead of once per dot. The guards are
+# the same ones ppu_clock_ppu_dot used, with the ordering and the call sites unchanged.
+proc ppu_run_dots count {
+    local dots_remaining = $count;
 
-            if ppu_suppress_vblank_start == 1 {
-                ppu_suppress_vblank_start = 0;
-            } else {
-                ppu_set_vblank_flag 1;
+    until dots_remaining <= 0 {
+        # ppu_bus_clock_ppu_dot() and the MMC3 low-dot counter it forwards to, written out here:
+        # this runs 89,460 times a frame, and two custom-block calls per dot for one comparison
+        # and one increment is a cost the frame budget cannot carry. NROM has no observer, so the
+        # whole block collapses to one comparison on that board.
+        if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+            if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
+                mmc3_a12_low_dots = mmc3_a12_low_dots + 1;
             }
-        } elif ppu_scanline == PPU_PRE_RENDER_SCANLINE {
-            ppu_set_vblank_flag 0;
-            ppu_set_sprite_zero_hit 0;
-            ppu_set_sprite_overflow 0;
         }
-    }
 
-    # Both per-dot procs and the dot advance are called only when they have work to do: a
-    # blanking dot produces no pixel, a vblank or blanked dot runs no fetch, and every dot but
-    # the last two of a line only steps the counter. This call site is the only caller, so the
-    # guards live here and each proc body starts at its first real step.
-    if ppu_scanline < PPU_FRAME_HEIGHT and ppu_dot >= 1 and ppu_dot <= PPU_FRAME_WIDTH {
-        ppu_render_pixel;
-    }
+        # Both status events are scheduled at dot 1 (PPU_VBLANK_START_DOT and
+        # PPU_PRE_RENDER_STATUS_CLEAR_DOT are both 1), so the shared dot test leads and the two
+        # scanline tests run 262 times a frame instead of 89,460.
+        if ppu_dot == 1 {
+            if ppu_scanline == PPU_VBLANK_FIRST_SCANLINE {
+                # Rows 0-239 are complete at this dot even when an early PPUSTATUS
+                # read suppresses the vblank flag itself, so the finished frame is
+                # offered to the display either way.
+                ppu_frame_ready = 1;
 
-    if (ppu_scanline < PPU_FRAME_HEIGHT or ppu_scanline == PPU_PRE_RENDER_SCANLINE)
-        and ppu_mask_rendering_enable == 1 {
-        ppu_clock_rendering_pipeline;
-    }
+                if ppu_suppress_vblank_start == 1 {
+                    ppu_suppress_vblank_start = 0;
+                } else {
+                    ppu_set_vblank_flag 1;
+                }
+            } elif ppu_scanline == PPU_PRE_RENDER_SCANLINE {
+                ppu_set_vblank_flag 0;
+                ppu_set_sprite_zero_hit 0;
+                ppu_set_sprite_overflow 0;
+            }
+        }
 
-    # Dots 0 through 338 only step the counter; the two dots at the end of a line go through
-    # ppu_advance_dot, which owns the wrap and the odd-frame dot-339 skip.
-    if ppu_dot < PPU_ODD_FRAME_LAST_DOT {
-        ppu_dot = ppu_dot + 1;
-    } else {
-        ppu_advance_dot;
+        # Both per-dot procs and the dot advance are called only when they have work to do: a
+        # blanking dot produces no pixel, a vblank or blanked dot runs no fetch, and every dot but
+        # the last two of a line only steps the counter. This call site is the only caller, so the
+        # guards live here and each proc body starts at its first real step.
+        if ppu_scanline < PPU_FRAME_HEIGHT and ppu_dot >= 1 and ppu_dot <= PPU_FRAME_WIDTH {
+            # With rendering disabled every dot of the picture is the universal backdrop: the
+            # background and sprite paths cannot produce a pixel, and the palette read and the
+            # greyscale test are already folded into ppu_backdrop_packed. That case is one list
+            # write per pixel instead of the whole pixel proc.
+            if ppu_mask_rendering_enable == 1 {
+                ppu_render_pixel;
+            } else {
+                ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_backdrop_packed;
+            }
+        }
+
+        if (ppu_scanline < PPU_FRAME_HEIGHT or ppu_scanline == PPU_PRE_RENDER_SCANLINE)
+            and ppu_mask_rendering_enable == 1 {
+            ppu_clock_rendering_pipeline;
+        }
+
+        # Dots 0 through 338 only step the counter; the two dots at the end of a line go through
+        # ppu_advance_dot, which owns the wrap and the odd-frame dot-339 skip.
+        if ppu_dot < PPU_ODD_FRAME_LAST_DOT {
+            ppu_dot = ppu_dot + 1;
+        } else {
+            ppu_advance_dot;
+        }
+
+        dots_remaining = dots_remaining - 1;
     }
 }
 
 # Advances three NTSC PPU dots for one CPU cycle.
 proc ppu_clock_cpu_cycle {
-    ppu_clock_ppu_dot;
-    ppu_clock_ppu_dot;
-    ppu_clock_ppu_dot;
+    ppu_run_dots 3;
+}
+
+# Advances the PPU by three dots for each of `count` CPU cycles, in one call. The frame loop
+# hands this the cycle count of a whole instruction (or a whole OAM DMA transfer), so the
+# project pays one custom-block call per instruction instead of one per dot.
+proc ppu_clock_cpu_cycles count {
+    ppu_run_dots $count * 3;
 }
 
 # ---- dot/scanline advancement ----
@@ -933,7 +975,10 @@ func ppu_increment_scroll_x_for(vram_value) {
         result = result + 1;
     }
 
-    return result % 32768;
+    # No trailing normalization: the increment path tops out at 32767 (the entry already
+    # masked to fifteen bits and the wrap branch subtracts), and the wrap branch rewrites the
+    # address from a value below 4096. The mirror's exhaustive sweep is the proof.
+    return result;
 }
 
 # The VRAM address after the Y scroll increment: fine Y counts first, then
@@ -965,10 +1010,14 @@ func ppu_increment_scroll_y_for(vram_value) {
             coarse_y = coarse_y + 1;
         }
 
-        result = (result - (((result // 32) % 32) * 32)) + (coarse_y * 32);
+        # The low five bits of an address below 4096 are exactly address % 32, so the coarse-Y
+        # reconstruction is one modulo instead of two divisions and a multiply.
+        result = (result % 32) + (coarse_y * 32);
     }
 
-    return result % 32768;
+    # No trailing normalization: the fine-Y path adds 4096 to an address below 32768 at most
+    # once per call and the coarse-Y path rebuilds from a value below 4096.
+    return result;
 }
 
 # The VRAM address with its horizontal scroll bits taken from the
@@ -1039,7 +1088,9 @@ proc ppu_render_pixel {
             + (((ppu_background_attribute_high_shift // fine_weight) % 2) * 2);
     }
 
-    if sprite_visible == 1 {
+    # A line with no sprite unit loaded can never produce a sprite pixel, so the scan of the
+    # eight slots is skipped outright: ppu_read_sprite_pixel would only clear four globals.
+    if sprite_visible == 1 and ppu_sprite_unit_active_count > 0 {
         ppu_read_sprite_pixel;
     } else {
         ppu_sprite_pixel_found = 0;
@@ -1084,9 +1135,11 @@ proc ppu_render_pixel {
     }
 
     framebuffer_index = ppu_framebuffer_row_base + ppu_dot;
-    ppu_framebuffer_packed[framebuffer_index] = ppu_mask_emphasis * 64 + color_index;
+    ppu_framebuffer_packed[framebuffer_index] = ppu_emphasis_packed + color_index;
 
-    if ppu_mask_rendering_enable == 1 {
+    # The same guard the sprite scan uses: an empty line has no X counter to count down and
+    # no pattern to shift, so the proc call is skipped on every pixel of such a line.
+    if ppu_mask_rendering_enable == 1 and ppu_sprite_unit_active_count > 0 {
         ppu_clock_sprite_output_units;
     }
 }

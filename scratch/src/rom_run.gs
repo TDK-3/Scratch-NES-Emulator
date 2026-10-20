@@ -68,6 +68,12 @@ var rom_run_last_fps_update_timer = 0;
 var rom_run_start_timer = 0;
 var rom_run_frames_skipped = 0;
 
+# Chunks between host-input samples. A chunk is 500 CPU cycles, so four chunks are about 1.1 ms
+# of emulated time: a held key still reaches the console on the next sample, and the 16
+# `key_pressed` device lookups plus the ROM-load key read stop running 60 times a frame.
+var rom_run_poll_interval_chunks = 4;
+var rom_run_poll_countdown = 0;
+
 # One summary line for the display sprite.
 var rom_run_state_text = "";
 
@@ -126,20 +132,27 @@ nowarp proc rom_run_loop {
     local elapsed = 0;
     local should_skip = 0;
     forever {
-        # A pending ROM load is serviced before the console runs any more cycles, so the
-        # image cannot be replaced under a frame that is already half run.
-        rom_input_poll_key;
+        # The host keyboard and the ROM load key are sampled once every few chunks instead of
+        # once per chunk. A pending ROM load is still serviced before the console runs any more
+        # cycles in the iteration that sampled it, so the image cannot be replaced under a frame
+        # that is already half run.
+        rom_run_poll_countdown = rom_run_poll_countdown - 1;
 
-        if rom_input_requested == 1 {
-            rom_run_load_input_image;
+        if rom_run_poll_countdown <= 0 {
+            rom_run_poll_countdown = rom_run_poll_interval_chunks;
+            rom_input_poll_key;
+
+            if rom_input_requested == 1 {
+                rom_run_load_input_image;
+            }
+
+            # The pads follow the host keyboard between chunks, so a press reaches the
+            # console within one poll interval instead of one emulated frame later.
+            keyboard_poll_controllers;
         }
 
         frame_loop_run_chunk;
         rom_run_cycles = rom_run_cycles + frame_loop_chunk_cycles_run;
-
-        # The pads follow the host keyboard between chunks, so a press reaches the
-        # console one chunk later instead of one emulated frame later.
-        keyboard_poll_controllers;
 
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;

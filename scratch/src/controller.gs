@@ -27,30 +27,36 @@ proc controller_reset {
 
 # Replaces one live button mask; mirrors set_button_mask().
 proc controller_set_button_mask controller_index, button_mask {
-    controller_button_masks[$controller_index + 1] = normalize_byte($button_mask);
+    controller_button_masks[$controller_index + 1] = $button_mask % 256;
 }
 
 # Returns the next serial D0 bit for one port; mirrors read_controller() before the bus merge.
 func controller_serial_read(controller_index) {
     local port_position = to_number($controller_index) + 1;
+    local shift_register = 0;
 
+    # Both masks here are the single data line, and the shift register holds a byte, so every
+    # bitwise helper call in this proc is a modulo: ">> 1 | 128" is the same as dividing by two
+    # and adding 128, because the bit division clears and the add sets disjoint bits.
     if controller_strobe_high == 1 {
-        return bitwise_and(controller_button_masks[port_position], 1);
+        return controller_button_masks[port_position] % 2;
     }
 
-    local shift_register = normalize_byte(controller_shift_registers[port_position]);
-    controller_shift_registers[port_position] = bitwise_or(shift_register // 2, 128);
+    shift_register = controller_shift_registers[port_position] % 256;
+    controller_shift_registers[port_position] = (shift_register // 2) + 128;
 
-    return bitwise_and(shift_register, 1);
+    return shift_register % 2;
 }
 
 # While bit 0 is high A is polled live; the falling edge latches both ports.
 proc controller_write_strobe value {
-    local next_strobe = bitwise_and(normalize_byte($value), 1);
+    local next_strobe = ($value % 256) % 2;
 
     if (controller_strobe_high == 1) and (next_strobe == 0) {
-        controller_shift_registers[1] = normalize_byte(controller_button_masks[1]);
-        controller_shift_registers[2] = normalize_byte(controller_button_masks[2]);
+        # The masks are stored as bytes by controller_set_button_mask, so the latch is a copy
+        # and needs no second normalization.
+        controller_shift_registers[1] = controller_button_masks[1];
+        controller_shift_registers[2] = controller_button_masks[2];
     }
 
     controller_strobe_high = next_strobe;

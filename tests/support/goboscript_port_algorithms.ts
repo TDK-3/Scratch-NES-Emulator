@@ -175,6 +175,33 @@ export function bitwise_and(left: number, right: number): number {
     return (high_nibbles * 16 + high_bits) * 256 + (low_nibbles * 16 + low_bits);
 }
 
+/**
+ * Mirror of `bitwise_and_byte(left, right)`: the same two nibble-table reads as the byte case
+ * of `bitwise_and`, without the width test, over operands the caller promises are bytes.
+ */
+export function bitwise_and_byte(left: number, right: number): number {
+    const left_byte = scratch_mod(left, 256);
+    const right_byte = scratch_mod(right, 256);
+
+    return bitwise_and(left_byte, right_byte);
+}
+
+/** Mirror of `bitwise_or_byte(left, right)`. */
+export function bitwise_or_byte(left: number, right: number): number {
+    const left_byte = scratch_mod(left, 256);
+    const right_byte = scratch_mod(right, 256);
+
+    return bitwise_or(left_byte, right_byte);
+}
+
+/** Mirror of `bitwise_xor_byte(left, right)`. */
+export function bitwise_xor_byte(left: number, right: number): number {
+    const left_byte = scratch_mod(left, 256);
+    const right_byte = scratch_mod(right, 256);
+
+    return bitwise_xor(left_byte, right_byte);
+}
+
 /** Mirror of `bitwise_or(left, right)`: a + b - (a & b) for non-negative operands. */
 export function bitwise_or(left: number, right: number): number {
     const left_word = scratch_mod(left, 65536);
@@ -446,7 +473,7 @@ export class GoboscriptControllerPorts {
     }
 
     set_button_mask(controller_index: 0 | 1, button_mask: number): void {
-        this.button_masks[controller_index] = normalize_byte(button_mask);
+        this.button_masks[controller_index] = scratch_mod(button_mask, 256);
     }
 
     button_mask(controller_index: 0 | 1): number {
@@ -454,22 +481,25 @@ export class GoboscriptControllerPorts {
     }
 
     serial_read(controller_index: 0 | 1): number {
+        // The port spells both single-line masks as modulos: a shift register is a byte, so
+        // ">> 1 | 128" is the disjoint-bit sum of a division and 128.
         if (this.strobe_high === 1) {
-            return bitwise_and(this.button_masks[controller_index] ?? 0, 1);
+            return scratch_mod(this.button_masks[controller_index] ?? 0, 2);
         }
 
-        const shift_register = normalize_byte(this.shift_registers[controller_index] ?? 0);
-        this.shift_registers[controller_index] = bitwise_or(scratch_floor_divide(shift_register, 2), 128);
+        const shift_register = scratch_mod(this.shift_registers[controller_index] ?? 0, 256);
+        this.shift_registers[controller_index] = scratch_floor_divide(shift_register, 2) + 128;
 
-        return bitwise_and(shift_register, 1);
+        return scratch_mod(shift_register, 2);
     }
 
     write_strobe(value: number): void {
-        const next_strobe = bitwise_and(normalize_byte(value), 1);
+        const next_strobe = scratch_mod(scratch_mod(value, 256), 2);
 
         if (this.strobe_high === 1 && next_strobe === 0) {
-            this.shift_registers[0] = normalize_byte(this.button_masks[0] ?? 0);
-            this.shift_registers[1] = normalize_byte(this.button_masks[1] ?? 0);
+            // set_button_mask stores bytes, so the latch is a copy.
+            this.shift_registers[0] = this.button_masks[0] ?? 0;
+            this.shift_registers[1] = this.button_masks[1] ?? 0;
         }
 
         this.strobe_high = next_strobe;
@@ -876,20 +906,22 @@ export class GoboscriptCpuBus {
     }
 
     private apply_driven_value(value: number, driven_mask: number): number {
-        const driven = scratch_mod(driven_mask, 256);
-        const numeric_value = scratch_mod(value, 256);
+        // The full-byte test comes first, before either normalization, exactly as the port's
+        // cpu_apply_driven_value does: both masks a device here drives are literal 255 or 1.
+        if (driven_mask === 255) {
+            this.open_bus = scratch_mod(value, 256);
 
-        if (driven === 255) {
-            this.open_bus = numeric_value;
-
-            return numeric_value;
+            return this.open_bus;
         }
+
+        const driven = scratch_mod(driven_mask, 256);
 
         if (driven === 0) {
             return this.open_bus;
         }
 
-        this.open_bus = bitwise_and(numeric_value, driven) + bitwise_and(this.open_bus, 255 - driven);
+        const numeric_value = scratch_mod(value, 256);
+        this.open_bus = bitwise_and_byte(numeric_value, driven) + bitwise_and_byte(this.open_bus, 255 - driven);
 
         return this.open_bus;
     }
@@ -902,6 +934,25 @@ export class GoboscriptCpuBus {
     private dma_sequence_cycle: number = 0;
     private dma_alignment_cycle_needed: number = 0;
     private bus_cycle_count: number = 0;
+
+    /**
+     * Mirror of `cpu_bus_run_dma`: runs a pending transfer to completion and returns the cycles
+     * it spent. The port inlines the whole state machine in one proc; this mirror drives the
+     * one-cycle form, which is the same sequence.
+     */
+    run_dma(): number {
+        let cycles = 0;
+
+        while (this.dma_phase !== 0 && cycles < 520) {
+            if (this.clock_dma_cycle() === 0) {
+                break;
+            }
+
+            cycles += 1;
+        }
+
+        return cycles;
+    }
 
     /** Mirror of `cpu_clock_dma_cycle`. Returns 1 if a DMA cycle was executed, 0 otherwise. */
     clock_dma_cycle(): number {
@@ -2341,19 +2392,20 @@ export class GoboscriptMmc3Mapper {
 
     /** Mirror of `mmc3_observe_ppu_a12 address`. */
     observe_ppu_a12(address: number): void {
-        const numeric_address = to_number(address);
+        // A12 is the 4096s bit of the address. The reference refuses a non-integer address, so
+        // the floor comparison is the integer test the port uses too.
         this.ppu_observed = 0;
 
-        if (numeric_address !== scratch_floor_divide(numeric_address, 1)) {
+        if (address < 0 || address >= MMC3_LIMIT.PPU_ADDRESS_SPACE_BYTES) {
             return;
         }
 
-        if (numeric_address < 0 || numeric_address >= MMC3_LIMIT.PPU_ADDRESS_SPACE_BYTES) {
+        if (address !== scratch_floor_divide(address, 1)) {
             return;
         }
 
         this.ppu_observed = 1;
-        const next_high = bit_at(numeric_address, MMC3_LIMIT.A12_WEIGHT);
+        const next_high = scratch_mod(scratch_floor_divide(address, MMC3_LIMIT.A12_WEIGHT), 2);
 
         if (next_high === this.ppu_a12_high) {
             return;
@@ -3436,7 +3488,7 @@ export const CPU_OPCODE_FIELD = {
  * from data/opcode_table.txt at project start, and the mirror has no file to load.
  */
 export class GoboscriptCpuOpcodeDecoder {
-    readonly table: number[];
+    table: number[];
     mnemonic = 0;
     mode = 0;
     base_cycles = 0;
@@ -3475,6 +3527,20 @@ export class GoboscriptCpuOpcodeDecoder {
         }
     }
 
+    /**
+     * Mirror of `cpu_opcode_table_normalize`: the port's file-backed list loads as strings and
+     * is coerced once at boot. The mirror's table is already numeric, so this is the identity.
+     */
+    normalize_table(): void {
+        const numeric: number[] = [];
+
+        for (const entry of this.table) {
+            numeric.push(to_number(entry));
+        }
+
+        this.table = numeric;
+    }
+
     /** Mirror of `cpu_decode_opcode opcode`. */
     decode(opcode: number): void {
         const numeric_opcode = normalize_byte(opcode);
@@ -3486,6 +3552,25 @@ export class GoboscriptCpuOpcodeDecoder {
         this.access = this.table[record_start + CPU_OPCODE_FIELD.OPERAND_ACCESS] ?? 0;
         this.page_cross_cycle = this.table[record_start + CPU_OPCODE_FIELD.PAGE_CROSS_CYCLE] ?? 0;
         this.official = this.table[record_start + CPU_OPCODE_FIELD.OFFICIAL] ?? 0;
+
+        if (this.mnemonic === 0) {
+            this.error = CPU_OPCODE_ERROR_CODE.UNKNOWN_OPCODE;
+        }
+    }
+
+    /**
+     * Mirror of `cpu_decode_opcode_hot opcode`: the four fields an executing instruction reads.
+     * The mirror's table is numeric from load, which is what the port's
+     * cpu_opcode_table_normalize makes of its file-backed list at boot.
+     */
+    decode_hot(opcode: number): void {
+        const numeric_opcode = normalize_byte(opcode);
+        const record_start = CPU_OPCODE_LAYOUT.HEADER_VALUES + numeric_opcode * CPU_OPCODE_LAYOUT.FIELDS_PER_OPCODE;
+        this.mnemonic = this.table[record_start + CPU_OPCODE_FIELD.MNEMONIC] ?? 0;
+        this.mode = this.table[record_start + CPU_OPCODE_FIELD.ADDRESSING_MODE] ?? 0;
+        this.access = this.table[record_start + CPU_OPCODE_FIELD.OPERAND_ACCESS] ?? 0;
+        this.official = this.table[record_start + CPU_OPCODE_FIELD.OFFICIAL] ?? 0;
+        this.error = CPU_OPCODE_ERROR_CODE.NONE;
 
         if (this.mnemonic === 0) {
             this.error = CPU_OPCODE_ERROR_CODE.UNKNOWN_OPCODE;

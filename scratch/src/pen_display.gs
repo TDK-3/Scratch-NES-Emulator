@@ -109,10 +109,20 @@ func pen_display_first_y_for(scale_value) {
     return (picture_height / 2) - ($scale_value / 2) - pen_display_renderer_offset($scale_value);
 }
 
-# Recomputes the derived geometry from the current setting. Called by the
-# run loop right before it hands a finished frame to the display sprite.
+# The pen_fit_to_screen value the derived geometry was last computed from, so a frame that
+# did not change the setting pays one comparison instead of the whole chain. Stage-owned like
+# the values it guards.
+var pen_display_applied_fit = -1;
+
+# Recomputes the derived geometry from the current setting. Called by the run loop right
+# before it hands a finished frame to the display sprite; the chain only runs when the setting
+# changed since the last frame, because it is the setting and nothing else that the geometry
+# derives from.
 proc pen_display_update_geometry {
-    pen_display_scale = pen_display_scale_for(pen_fit_to_screen);
-    pen_display_first_x = pen_display_first_x_for(pen_display_scale);
-    pen_display_first_y = pen_display_first_y_for(pen_display_scale);
+    if pen_display_applied_fit != pen_fit_to_screen {
+        pen_display_applied_fit = pen_fit_to_screen;
+        pen_display_scale = pen_display_scale_for(pen_fit_to_screen);
+        pen_display_first_x = pen_display_first_x_for(pen_display_scale);
+        pen_display_first_y = pen_display_first_y_for(pen_display_scale);
+    }
 }

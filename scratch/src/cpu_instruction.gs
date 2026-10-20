@@ -52,10 +52,11 @@ proc cpu_reset_instruction_error {
     cpu_instruction_error = cpu_instruction_error_code.none;
 }
 
-# Fetches the opcode byte and decodes it, leaving the six fields in the cpu_opcode_* globals.
+# Fetches the opcode byte and decodes it, leaving the four hot fields in the cpu_opcode_*
+# globals. The self test keeps its own full decode, cpu_decode_opcode, for the two cycle fields.
 proc cpu_fetch_and_decode_opcode {
     cpu_fetch_byte;
-    cpu_decode_opcode cpu_fetched_byte;
+    cpu_decode_opcode_hot cpu_fetched_byte;
 }
 
 # Branches are exactly the official opcodes whose decoded mode is relative, so the dispatch tests
@@ -319,7 +320,7 @@ proc cpu_execute_instruction {
     # one decode are pure call overhead.
     cpu_instruction_error = cpu_instruction_error_code.none;
     cpu_fetch_byte;
-    cpu_decode_opcode cpu_fetched_byte;
+    cpu_decode_opcode_hot cpu_fetched_byte;
 
     if cpu_opcode_error != cpu_opcode_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.undecodable_opcode;

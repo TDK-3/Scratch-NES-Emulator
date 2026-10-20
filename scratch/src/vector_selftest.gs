@@ -37,6 +37,13 @@
 %include src/rom_loader
 %include src/shared_vectors
 
+# Whether the green flag replays the shared vectors before it boots the console. The replay is
+# a diagnostic, not part of running a ROM: it detaches every device, empties the cartridge
+# window, and leaves both the bus and the CPU registers to be reset by the boot. Leaving it off
+# is what a normal run does; setting it to 1 in the editor runs the suite on the next green
+# flag. Stage-owned state, like every other header's.
+var port_self_test_enabled = 0;
+
 enum port_suite {
     numeric = 1,
     cpu = 2,

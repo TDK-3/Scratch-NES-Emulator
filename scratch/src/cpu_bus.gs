@@ -27,7 +27,12 @@
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
-var cpu_bus_cycle_count = 0;
+
+# Bus-cycle parity, not a count: the only reader of the cycle count is the OAM DMA alignment
+# test, which wants cpu_bus_cycle_count % 2. Toggling a 0/1 flag per access is one subtraction
+# where a counter would be an add plus a modulo per access, and it cannot lose integer
+# precision in a long session.
+var cpu_bus_cycle_parity = 0;
 
 # OAM DMA state machine. A write to $4014 triggers a transfer from a 256-byte page to OAM.
 # The state machine has four phases: halt (setup), align (optional alignment cycle),
@@ -63,7 +68,7 @@ var cpu_bus_controllers_attached = 1;
 # Clears the bus latch like NesCpuBus.reset(); RAM contents survive a reset.
 proc cpu_bus_reset {
     cpu_open_bus = 0;
-    cpu_bus_cycle_count = 0;
+    cpu_bus_cycle_parity = 0;
 
     # NesCpuBus.reset() also drops a pending OAM DMA transfer, so the port's DMA state
     # machine starts idle again.
@@ -94,20 +99,26 @@ proc cpu_bus_clear_ram {
 # whose results cannot overlap, so they add instead of needing an OR. Only an all-zero mask
 # keeps the latch untouched, exactly as the general merge would.
 func cpu_apply_driven_value(value, driven_mask) {
-    local driven = $driven_mask % 256;
-    local numeric_value = $value % 256;
+    local driven = 0;
+    local numeric_value = 0;
 
-    if driven == 255 {
-        cpu_open_bus = numeric_value;
+    # Both masks a device here can drive are literal 255 or 1, so the full-byte test comes
+    # first: that case is the value itself and one normalization, with no mask arithmetic and
+    # no second comparison. It is the only path the RAM, PPU, and cartridge windows take.
+    if $driven_mask == 255 {
+        cpu_open_bus = $value % 256;
 
-        return numeric_value;
+        return cpu_open_bus;
     }
+
+    driven = $driven_mask % 256;
 
     if driven == 0 {
         return cpu_open_bus;
     }
 
-    cpu_open_bus = bitwise_and(numeric_value, driven) + bitwise_and(cpu_open_bus, 255 - driven);
+    numeric_value = $value % 256;
+    cpu_open_bus = bitwise_and_byte(numeric_value, driven) + bitwise_and_byte(cpu_open_bus, 255 - driven);
 
     return cpu_open_bus;
 }
@@ -115,7 +126,7 @@ func cpu_apply_driven_value(value, driven_mask) {
 # Reads one CPU address; mirrors read_cpu() for the ported windows.
 func cpu_bus_read(address) {
     local numeric_address = $address % 65536; # normalize_word inlined
-    cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
+    cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
 
     # PRG ROM fast path: >80% of bus reads are $8000-$FFFF; handle before PPU decode to save 2 compares.
     if numeric_address >= 32768 {
@@ -140,7 +151,16 @@ func cpu_bus_read(address) {
         # RAM drives every data line, so the read is the byte itself both as the return
         # value and as the new open-bus latch; skipping the merge helper saves a call on
         # the most frequent bus access in the console.
-        local ram_value = cpu_ram[(numeric_address % 2048) + 1];
+        local ram_value = 0;
+
+        # $0000-$07FF is the whole RAM, and it is where a game keeps almost everything; only
+        # the $0800-$1FFF mirrors pay for the modulo.
+        if numeric_address < 2048 {
+            ram_value = cpu_ram[numeric_address + 1];
+        } else {
+            ram_value = cpu_ram[(numeric_address % 2048) + 1];
+        }
+
         cpu_open_bus = ram_value;
 
         return ram_value;
@@ -211,7 +231,7 @@ proc cpu_bus_write address, value {
     local numeric_address = $address % 65536; # normalize_word inlined
     local numeric_value = $value % 256; # normalize_byte inlined
     cpu_open_bus = numeric_value;
-    cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
+    cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
 
     if numeric_address >= 32768 {
         # PRG ROM fast path: $8000-$FFFF mapper registers / PRG writes, skips PPU/IO decode.
@@ -221,8 +241,13 @@ proc cpu_bus_write address, value {
             mmc3_write_cpu numeric_address, numeric_value;
         }
     } elif numeric_address < 8192 {
-        # $0000-$1FFF: 2 KiB of RAM, mirrored across the window.
-        cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
+        # $0000-$1FFF: 2 KiB of RAM, mirrored across the window. The unmirrored half is the
+        # address by itself, so only a mirror pays for the modulo.
+        if numeric_address < 2048 {
+            cpu_ram[numeric_address + 1] = numeric_value;
+        } else {
+            cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
+        }
     } elif numeric_address < 16384 {
         # $2000-$3FFF: PPU registers, mirrored every 8 bytes. The RAM window is decoded
         # first, so a RAM write never reaches a PPU register.
@@ -245,8 +270,9 @@ proc cpu_bus_write address, value {
             cpu_dma_data_latch = 0;
             cpu_dma_sequence_cycle = 0;
 
-            # Alignment cycle needed if current cycle count is odd.
-            cpu_dma_alignment_cycle_needed = cpu_bus_cycle_count % 2;
+            # Alignment cycle needed if the cycle this write just spent is odd. The parity
+            # flag already holds that bit, so no modulo is needed.
+            cpu_dma_alignment_cycle_needed = cpu_bus_cycle_parity;
         }
 
         # The cartridge window starts at the PRG RAM window every attached board maps;
@@ -269,7 +295,7 @@ func cpu_clock_dma_cycle() {
     }
 
     cpu_dma_sequence_cycle = cpu_dma_sequence_cycle + 1;
-    cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
+    cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
 
     if cpu_dma_phase == cpu_dma_phase.halt {
         # Halt cycle: dummy read from the address the CPU was about to read.
@@ -316,4 +342,48 @@ func cpu_clock_dma_cycle() {
     }
 
     return 0;
+}
+
+# Runs a pending OAM DMA transfer to completion in one call and leaves the number of cycles it
+# spent in `cpu_dma_cycles_run`.
+#
+# The state machine below is cpu_clock_dma_cycle's body with the per-cycle proc call removed:
+# a transfer is 513 or 514 cycles, and paying a call for each of them was the single largest
+# avoidable cost in a frame that uploads sprites. The frame loop then advances the PPU by the
+# returned cycle count instead of calling a dot clock per cycle. `cpu_clock_dma_cycle` stays
+# as the one-cycle form the shared vectors and the mirror use.
+var cpu_dma_cycles_run = 0;
+
+proc cpu_bus_run_dma {
+    local guard = 0;
+    cpu_dma_cycles_run = 0;
+
+    until cpu_dma_phase == cpu_dma_phase.idle or guard >= 520 {
+        guard = guard + 1;
+        cpu_dma_cycles_run = cpu_dma_cycles_run + 1;
+        cpu_dma_sequence_cycle = cpu_dma_sequence_cycle + 1;
+        cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+
+        if cpu_dma_phase == cpu_dma_phase.halt {
+            if cpu_dma_alignment_cycle_needed == 1 {
+                cpu_dma_phase = cpu_dma_phase.align;
+            } else {
+                cpu_dma_phase = cpu_dma_phase.read;
+            }
+        } elif cpu_dma_phase == cpu_dma_phase.align {
+            cpu_dma_phase = cpu_dma_phase.read;
+        } elif cpu_dma_phase == cpu_dma_phase.read {
+            cpu_dma_data_latch = cpu_bus_read((cpu_dma_page * 256) + cpu_dma_index);
+            cpu_dma_phase = cpu_dma_phase.write;
+        } else {
+            ppu_write_cpu_register 4, cpu_dma_data_latch;
+            cpu_dma_index = cpu_dma_index + 1;
+
+            if cpu_dma_index >= 256 {
+                cpu_dma_phase = cpu_dma_phase.idle;
+            } else {
+                cpu_dma_phase = cpu_dma_phase.read;
+            }
+        }
+    }
 }

@@ -162,6 +162,9 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/numeric.gs", declaration: "bitwise_and", mirror: "bitwise_and" },
     { source: "src/numeric.gs", declaration: "bitwise_or", mirror: "bitwise_or" },
     { source: "src/numeric.gs", declaration: "bitwise_xor", mirror: "bitwise_xor" },
+    { source: "src/numeric.gs", declaration: "bitwise_and_byte", mirror: "bitwise_and_byte" },
+    { source: "src/numeric.gs", declaration: "bitwise_or_byte", mirror: "bitwise_or_byte" },
+    { source: "src/numeric.gs", declaration: "bitwise_xor_byte", mirror: "bitwise_xor_byte" },
     {
         source: "src/bitwise_tables.gs",
         declaration: "bitwise_table_init",
@@ -213,6 +216,11 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read_io", mirror: "GoboscriptCpuBus.read_io" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_write", mirror: "GoboscriptCpuBus.write" },
     { source: "src/cpu_bus.gs", declaration: "cpu_clock_dma_cycle", mirror: "GoboscriptCpuBus.clock_dma_cycle" },
+    {
+        source: "src/cpu_bus.gs",
+        declaration: "cpu_bus_run_dma",
+        mirror: "GoboscriptCpuBus.run_dma",
+    },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_clear_ram", mirror: "GoboscriptCpuBus.clear_ram" },
     {
         source: "src/cpu_core.gs",
@@ -321,6 +329,16 @@ const MIRROR_CONTRACT: readonly {
         source: "src/cpu_opcode.gs",
         declaration: "cpu_decode_opcode",
         mirror: "GoboscriptCpuOpcodeDecoder.decode",
+    },
+    {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_opcode_table_normalize",
+        mirror: "GoboscriptCpuOpcodeDecoder.normalize_table",
+    },
+    {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_decode_opcode_hot",
+        mirror: "GoboscriptCpuOpcodeDecoder.decode_hot",
     },
     {
         source: "src/cpu_sequence.gs",
@@ -752,6 +770,12 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "writes the precomputed PPUMASK fields the renderer and dot loop read per pixel",
     },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_refresh_output_terms",
+        mirror: null,
+        reason: "caches the emphasis and backdrop terms the pixel path would recompute per pixel",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_control_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_scroll_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_address_register", mirror: null, reason: "ppu pending mirror" },
@@ -760,6 +784,18 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_increment_vram_address", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_clock_ppu_dot", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_clock_cpu_cycle", mirror: null, reason: "ppu pending mirror" },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_run_dots",
+        mirror: null,
+        reason: "batched dot loop the frame loop drives once per instruction",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_clock_cpu_cycles",
+        mirror: null,
+        reason: "one call per instruction that clocks three dots per CPU cycle",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_advance_dot", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_is_rendering_enabled", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_is_visible_or_pre_render_scanline", mirror: null, reason: "ppu pending mirror" },
@@ -1762,7 +1798,19 @@ test("the display sprite draws each finished frame with the pen extension in col
     const ppu = get_source("src/ppu_2c02.gs");
     const clock_dot = ppu.declarations.find((declaration) => declaration.name === "ppu_clock_ppu_dot");
     assert.ok(clock_dot, "ppu_clock_ppu_dot is missing");
-    const clock_body = clock_dot.body.join("\n");
+
+    // The one-dot entry point forwards to the batched dot loop, which owns the per-dot order.
+    // The frame loop calls the batched form once per instruction, so both names have to exist
+    // and the single-dot form must stay a wrapper around the same body.
+    assert.match(
+        clock_dot.body.join("\n"),
+        /ppu_run_dots 1;/,
+        "ppu_clock_ppu_dot must clock one dot through the shared dot loop",
+    );
+
+    const run_dots = ppu.declarations.find((declaration) => declaration.name === "ppu_run_dots");
+    assert.ok(run_dots, "ppu_run_dots is missing");
+    const clock_body = run_dots.body.join("\n");
     assert.match(clock_body, /ppu_frame_ready = 1;/, "vblank start must offer the finished frame");
 
     const render_at = clock_body.indexOf("ppu_render_pixel;");

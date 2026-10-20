@@ -34,12 +34,22 @@ costumes "assets/blank.svg";
 %include src/rom_run
 
 onflag {
-    # The nibble AND table backs every bitwise helper, so it has to exist before the self
-    # test replays its first numeric vector.
+    # The nibble tables back every bitwise helper, so they have to exist before anything reads
+    # a bus byte. The opcode table is converted from the strings its data file loads to the
+    # numbers every decode wants in the same place.
     bitwise_table_init;
     nes_palette_init;
-    run_port_self_test;
-    broadcast "port self test done";
+    cpu_opcode_table_normalize;
+
+    # The shared-vector replay is a boot-time diagnostic: it replays every vector through the
+    # same bus and CPU, leaves their state behind, and is then undone by the console reset, so a
+    # normal run boots straight into the game. Flip port_self_test_enabled (declared in
+    # src/vector_selftest.gs) to 1 to replay it.
+    if port_self_test_enabled == 1 {
+        run_port_self_test;
+        broadcast "port self test done";
+    }
+
     rom_run_start;
     broadcast "rom run started";
     rom_run_loop;
