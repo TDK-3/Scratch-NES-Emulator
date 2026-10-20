@@ -1707,6 +1707,27 @@ Not changed by the review, and why:
   frame loop uses the batched forms, and the tick-counter mirrors use these.
 - The four `ppu_vram_address % 16384` sites stay separate statements, because the lint counts them (section 6).
 
+Checked by hand and left alone (the identity, not just the test, is the reason):
+
+- `alu_add_with_carry_byte`/`alu_subtract_with_carry_byte`: carry is `total // 256`, overflow is the
+  product of the two sign disagreements with the result. For SBC the complement `255 - operand` makes
+  `sign(complement) = not sign(operand)`, so the same product is the reference's `sign(A) != sign(M)`
+  test, and the modulo-256 result matches `left + (255 - right) + carry`.
+- `ppu_increment_scroll_x_for`/`ppu_increment_scroll_y_for`: every branch keeps the result inside 0-32767
+  (the fine-Y path only runs when fine Y is not 7, the coarse-Y path rebuilds from a value below 4096),
+  and the coarse-Y rebuild `(result % 32) + coarse_y * 32` is the old
+  `result - ((result // 32) % 32) * 32 + coarse_y * 32` for a value below 4096.
+- `ppu_sprite_fetch_pattern_address`: the high-plane phase is two dots after the low-plane phase of the
+  same eight-dot slot, and the slot's tile, attributes, and row cannot be rewritten between them, so the
+  saved address is the address the func would return.
+- `controller_serial_read`: `(shift_register // 2) + 128` is `or(shift_register >> 1, 128)` because the
+  shifted value's bit 7 is always clear.
+- `mmc3_write_register`: `(address // 8192) * 8192 + address % 2` is `address & $E001` for an address in
+  $8000-$FFFF, and `mmc3_read_cpu`/`mmc3_read_pattern`'s slot-derived offsets subtract the slot's own span
+  from an address that is already inside the 8 KiB (or 1 KiB) window.
+- `cpu_apply_driven_value`'s full-byte branch returns the value it latched, which is what the merge would
+  produce with a 255 mask.
+
 ## Appendix A - optimizations already in the source (verified by reading it)
 
 These are done; do not re-propose them. Each is present in the current source and matches its description.
