@@ -3769,13 +3769,15 @@ test("rom_run_should_skip never skips two completed frames in a row", () => {
     assert.equal(skipped, 5_000, "half of the frames are skipped while skipping is active");
 });
 
-test("rom_run_next_skip_state turns skipping on below 30 FPS and off at 55 FPS or more", () => {
-    assert.equal(ported.rom_run_next_skip_state(0, 0), 0, "no measurement yet keeps skipping off");
-    assert.equal(ported.rom_run_next_skip_state(0, 15), 1, "15 FPS turns skipping on");
-    assert.equal(ported.rom_run_next_skip_state(0, 29.9), 1, "just under 30 FPS turns skipping on");
-    assert.equal(ported.rom_run_next_skip_state(0, 30), 0, "30 FPS alone does not turn skipping on");
-    assert.equal(ported.rom_run_next_skip_state(1, 30), 1, "the 30 to 54 band keeps skipping on");
-    assert.equal(ported.rom_run_next_skip_state(1, 54.9), 1, "the 30 to 54 band keeps skipping on");
-    assert.equal(ported.rom_run_next_skip_state(1, 55), 0, "55 FPS turns skipping off");
-    assert.equal(ported.rom_run_next_skip_state(1, 0), 1, "no measurement keeps the current state");
+test("rom_run_frame_due spaces frames 1/30 second apart from the origin", () => {
+    assert.equal(ported.rom_run_frame_due(0, 0), 0, "frame 0 is due at the origin");
+    assert.equal(ported.rom_run_frame_due(0, 30), 1, "30 frames are due one second after the origin");
+    assert.equal(ported.rom_run_frame_due(5, 60), 7, "the schedule is offset by the origin");
+    assert.equal(ported.ROM_RUN_FRAME_RATE_CAP, 30, "the cap is 30 frames per second");
+});
+
+test("rom_run_is_behind is 1 only when the console is past its due time", () => {
+    assert.equal(ported.rom_run_is_behind(1.0, 1.1), 0, "early is not behind");
+    assert.equal(ported.rom_run_is_behind(1.1, 1.1), 0, "exactly on time is not behind");
+    assert.equal(ported.rom_run_is_behind(1.2, 1.1), 1, "late is behind");
 });

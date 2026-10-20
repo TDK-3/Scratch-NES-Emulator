@@ -4345,18 +4345,19 @@ export function rom_run_should_skip(skip_active: number, last_frame_skipped: num
     return 0;
 }
 
-/**
- * Mirrors rom_run_next_skip_state in scratch/src/rom_run.gs: skipping turns on below 30 FPS and off
- * at 55 FPS or more, and otherwise keeps its state.
- */
-export function rom_run_next_skip_state(skip_active: number, fps: number): number {
-    if (fps > 0 && fps < 30) {
+/** Mirrors ROM_RUN_FRAME_RATE_CAP in scratch/src/rom_run.gs. */
+export const ROM_RUN_FRAME_RATE_CAP = 30;
+
+/** Mirrors rom_run_frame_due in scratch/src/rom_run.gs: the Scratch time frame_count is due. */
+export function rom_run_frame_due(origin: number, frame_count: number): number {
+    return origin + frame_count / ROM_RUN_FRAME_RATE_CAP;
+}
+
+/** Mirrors rom_run_is_behind in scratch/src/rom_run.gs: 1 when now is past due, else 0. */
+export function rom_run_is_behind(now: number, due: number): number {
+    if (now > due) {
         return 1;
     }
 
-    if (fps >= 55) {
-        return 0;
-    }
-
-    return skip_active;
+    return 0;
 }

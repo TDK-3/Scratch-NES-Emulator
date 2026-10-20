@@ -529,8 +529,19 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/rom_run.gs",
-        declaration: "rom_run_next_skip_state",
-        mirror: "rom_run_next_skip_state",
+        declaration: "rom_run_frame_due",
+        mirror: "rom_run_frame_due",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_is_behind",
+        mirror: "rom_run_is_behind",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_pace_frame",
+        mirror: null,
+        reason: "frame-rate cap; it waits on the Scratch timer, which the port cannot model",
     },
     {
         source: "src/cartridge_loader.gs",
@@ -2861,5 +2872,23 @@ test("the frame-skip policy has no lead test and no parity skip", () => {
         "the lead test and the frame-count parity skip must be gone: neither recovers once frames are skipped",
     );
     assert.match(body, /rom_run_should_skip\(rom_run_skip_active, rom_run_last_frame_skipped\)/);
-    assert.match(body, /rom_run_skip_active = rom_run_next_skip_state\(rom_run_skip_active, rom_run_fps\);/);
+    assert.match(body, /rom_run_pace_frame;/, "the loop must hold each completed frame to the cap");
 });
+
+test("the frame-rate cap holds emulation to 30 frames per second on the Scratch timer", () => {
+    const rom_run = get_source("src/rom_run.gs");
+    assert.match(rom_run.text, /var ROM_RUN_FRAME_RATE_CAP = 30;/, "the cap must be 30 frames per second");
+
+    const pace = rom_run.declarations.find((declaration) => declaration.name === "rom_run_pace_frame");
+    assert.ok(pace, "rom_run_pace_frame is missing");
+    assert.equal(pace.warp, false, "the pacing wait must be nowarp so it yields to the project");
+    const pace_body = pace.body.join("\n");
+    assert.match(pace_body, /until timer\(\) >= due \{\s*wait 0;\s*\}/, "an early frame must wait until it is due");
+    assert.match(pace_body, /rom_run_skip_active = 1;/, "a late frame must mark the console behind");
+
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    const loop_body = loop?.body.join("\n") ?? "";
+    assert.match(loop_body, /rom_run_frame_count = rom_run_frame_count \+ 1;\s*rom_run_pace_frame;/);
+    assert.ok(!/rom_run_fps \/\/ 30|rom_run_fps < 30/.test(rom_run.text), "the FPS estimate must not drive skipping");
+});
+

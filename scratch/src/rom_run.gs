@@ -68,9 +68,17 @@ var rom_run_last_fps_update_timer = 0;
 var rom_run_start_timer = 0;
 var rom_run_frames_skipped = 0;
 
-# Frame-skip state. rom_run_skip_active turns on when the measured FPS falls below 30 and off
-# again at 55 or more. rom_run_last_frame_skipped records whether the previous completed frame
-# was skipped, so no two frames in a row are skipped.
+# Frame-rate cap. The console runs at most ROM_RUN_FRAME_RATE_CAP emulated frames per second of
+# Scratch time: frame n is due at rom_run_pace_origin + n / cap, and the loop waits for it. Once
+# the schedule is more than ROM_RUN_LAG_RESET_SECONDS behind, it restarts from now so the console
+# does not burst to catch up on frames it never ran.
+var ROM_RUN_FRAME_RATE_CAP = 30;
+var ROM_RUN_LAG_RESET_SECONDS = 1;
+var rom_run_pace_origin = 0;
+
+# rom_run_skip_active is 1 while the console is behind its schedule, so a completed frame may be
+# skipped. rom_run_last_frame_skipped records whether the previous completed frame was skipped,
+# so no two frames in a row are skipped.
 var rom_run_skip_active = 0;
 var rom_run_last_frame_skipped = 0;
 
@@ -97,19 +105,45 @@ func rom_run_should_skip(skip_active, last_frame_skipped) {
     return 0;
 }
 
-# Updates the skip state from the measured FPS. Skipping turns on below 30 FPS and only turns off
-# at 55 FPS or more. The gap keeps one measurement from flipping the state straight back. The FPS
-# is measured over 60 emulated frames, skipped ones included, so skipping raises it.
-func rom_run_next_skip_state(skip_active, fps) {
-    if $fps > 0 and $fps < 30 {
+# The Scratch time at which frame frame_count is due, counted from origin. Mirrors the schedule
+# in rom_run_pace_frame.
+func rom_run_frame_due(origin, frame_count) {
+    return $origin + $frame_count / ROM_RUN_FRAME_RATE_CAP;
+}
+
+# Returns 1 when the console is past its due time, 0 when it is on time or early. Mirrors the
+# comparison in rom_run_pace_frame.
+func rom_run_is_behind(now, due) {
+    if $now > $due {
         return 1;
     }
 
-    if $fps >= 55 {
-        return 0;
-    }
+    return 0;
+}
 
-    return $skip_active;
+# Holds the console to the frame-rate cap. Called once per completed frame. A frame that finished
+# late marks the console behind, so the next completed frame may be skipped and the draw cost can
+# be recovered; a frame that finished early waits until it is due. Declared nowarp because the
+# wait must yield to the project.
+nowarp proc rom_run_pace_frame {
+    local due = 0;
+    local now = 0;
+
+    due = rom_run_frame_due(rom_run_pace_origin, rom_run_frame_count);
+    now = timer();
+
+    if now - due > ROM_RUN_LAG_RESET_SECONDS {
+        rom_run_pace_origin = now - rom_run_frame_count / ROM_RUN_FRAME_RATE_CAP;
+        rom_run_skip_active = 1;
+    } elif rom_run_is_behind(now, due) == 1 {
+        rom_run_skip_active = 1;
+    } else {
+        rom_run_skip_active = 0;
+
+        until timer() >= due {
+            wait 0;
+        }
+    }
 }
 
 # Boots the console with the embedded image. A board that does not validate leaves the console
@@ -122,6 +156,7 @@ proc rom_run_start {
     rom_run_poll_countdown = 0;
     rom_run_skip_active = 0;
     rom_run_last_frame_skipped = 0;
+    rom_run_pace_origin = 0;
     rom_run_state_text = "not started";
 
     # The self test detached every device and emptied the cartridge window
@@ -154,6 +189,7 @@ proc rom_run_start {
         rom_run_last_fps_update_frame = 0;
         rom_run_last_fps_update_timer = timer();
         rom_run_start_timer = timer();
+        rom_run_pace_origin = timer();
         rom_run_frames_skipped = 0;
     } else {
         rom_run_state_text = "boot failed " & cartridge_board_state_text;
@@ -201,6 +237,7 @@ nowarp proc rom_run_loop {
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;
             rom_run_frame_count = rom_run_frame_count + 1;
+            rom_run_pace_frame;
 
             # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
             if rom_run_frame_count - rom_run_last_fps_update_frame >= 60 {
@@ -212,7 +249,6 @@ nowarp proc rom_run_loop {
 
                 rom_run_last_fps_update_frame = rom_run_frame_count;
                 rom_run_last_fps_update_timer = timer();
-                rom_run_skip_active = rom_run_next_skip_state(rom_run_skip_active, rom_run_fps);
             }
         }
 
