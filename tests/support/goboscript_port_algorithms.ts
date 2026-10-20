@@ -289,188 +289,224 @@ export function unpack_status_from_stack(status: number): number {
 }
 
 /**
- * Mirror of `alu_add_with_carry accumulator, operand, status`. One status normalize feeds
- * the carry input, the stored carry and overflow bits, and the final zero/negative update.
+ * The zero/negative tail the byte entry points inline: drop bit 7, drop bit 1, and add the
+ * packed answer for the result byte. Only valid for a normalized status.
  */
-export function alu_add_with_carry(accumulator: number, operand: number, status: number): AluResult {
-    const left = scratch_mod(accumulator, 256);
-    const right = scratch_mod(operand, 256);
-    const normalized = normalize_status(status);
-    const carry_in = scratch_mod(normalized, 2);
-    const sum = left + right + carry_in;
-    const value = scratch_mod(sum, 256);
-    let signed_left = left;
-    let signed_right = right;
-    let signed_value = value;
-    const carried = sum > 255 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
-    const overflow_bit = scratch_mod(scratch_floor_divide(carried, 64), 2);
+function alu_zero_negative_byte(status: number, value: number): number {
+    const without_negative = scratch_mod(status, 128);
+    const without_zero = without_negative - 2 * scratch_mod(scratch_floor_divide(status, 2), 2);
 
-    if (signed_left >= 128) {
-        signed_left -= 256;
-    }
-
-    if (signed_right >= 128) {
-        signed_right -= 256;
-    }
-
-    if (signed_value >= 128) {
-        signed_value -= 256;
-    }
-
-    const signed_sum = signed_left + signed_right + carry_in;
-    const updated =
-        signed_sum !== signed_value ? carried + 64 * (1 - overflow_bit) : carried - 64 * overflow_bit;
-
-    return { value, status: update_zero_negative_flags(updated, value) };
+    return without_zero + (CPU_ZERO_NEGATIVE_BITS[value] ?? 0);
 }
 
-/** Mirror of `alu_subtract_with_carry accumulator, operand, status`. */
-export function alu_subtract_with_carry(accumulator: number, operand: number, status: number): AluResult {
-    const left = scratch_mod(accumulator, 256);
-    const right = scratch_mod(operand, 256);
-    const normalized = normalize_status(status);
-    const borrow = 1 - scratch_mod(normalized, 2);
-    const difference = left - right - borrow;
-    const value = scratch_mod(difference, 256);
-    let signed_left = left;
-    let signed_right = right;
-    let signed_value = value;
-    const carried =
-        difference >= 0 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
-    const overflow_bit = scratch_mod(scratch_floor_divide(carried, 64), 2);
+/** Mirror of `alu_add_with_carry accumulator, operand, status`: normalize, then byte form. */
+export function alu_add_with_carry(accumulator: number, operand: number, status: number): AluResult {
+    return alu_add_with_carry_byte(
+        scratch_mod(accumulator, 256),
+        scratch_mod(operand, 256),
+        normalize_status(status),
+    );
+}
 
-    if (signed_left >= 128) {
-        signed_left -= 256;
-    }
-
-    if (signed_right >= 128) {
-        signed_right -= 256;
-    }
-
-    if (signed_value >= 128) {
-        signed_value -= 256;
-    }
-
-    const signed_difference = signed_left - signed_right - borrow;
+/** Mirror of `alu_add_with_carry_byte accumulator, operand, status`. Branch-free flags. */
+export function alu_add_with_carry_byte(accumulator: number, operand: number, status: number): AluResult {
+    const left = accumulator;
+    const right = operand;
+    const normalized = status;
+    const carry_in = scratch_mod(normalized, 2);
+    const total = left + right + carry_in;
+    const value = scratch_mod(total, 256);
+    const sign = scratch_floor_divide(value, 128);
     const updated =
-        signed_difference !== signed_value ? carried + 64 * (1 - overflow_bit) : carried - 64 * overflow_bit;
+        normalized -
+        scratch_mod(normalized, 2) -
+        64 * scratch_mod(scratch_floor_divide(normalized, 64), 2) +
+        scratch_floor_divide(total, 256) +
+        64 *
+            (scratch_mod(scratch_floor_divide(left, 128) + sign, 2) *
+                scratch_mod(scratch_floor_divide(right, 128) + sign, 2));
 
-    return { value, status: update_zero_negative_flags(updated, value) };
+    return { value, status: alu_zero_negative_byte(updated, value) };
+}
+
+/** Mirror of `alu_subtract_with_carry accumulator, operand, status`: normalize, then byte form. */
+export function alu_subtract_with_carry(accumulator: number, operand: number, status: number): AluResult {
+    return alu_subtract_with_carry_byte(
+        scratch_mod(accumulator, 256),
+        scratch_mod(operand, 256),
+        normalize_status(status),
+    );
+}
+
+/** Mirror of `alu_subtract_with_carry_byte accumulator, operand, status`. */
+export function alu_subtract_with_carry_byte(accumulator: number, operand: number, status: number): AluResult {
+    const left = accumulator;
+    const complement = 255 - operand;
+    const normalized = status;
+    const carry_in = scratch_mod(normalized, 2);
+    const total = left + complement + carry_in;
+    const value = scratch_mod(total, 256);
+    const sign = scratch_floor_divide(value, 128);
+    const updated =
+        normalized -
+        scratch_mod(normalized, 2) -
+        64 * scratch_mod(scratch_floor_divide(normalized, 64), 2) +
+        scratch_floor_divide(total, 256) +
+        64 *
+            (scratch_mod(scratch_floor_divide(left, 128) + sign, 2) *
+                scratch_mod(scratch_floor_divide(complement, 128) + sign, 2));
+
+    return { value, status: alu_zero_negative_byte(updated, value) };
 }
 
 /** Mirror of `alu_and accumulator, operand, status`. */
 export function alu_and(accumulator: number, operand: number, status: number): AluResult {
-    const value = bitwise_and(scratch_mod(accumulator, 256), scratch_mod(operand, 256));
+    return alu_and_byte(scratch_mod(accumulator, 256), scratch_mod(operand, 256), normalize_status(status));
+}
 
-    return { value, status: update_zero_negative_flags(status, value) };
+/** Mirror of `alu_and_byte accumulator, operand, status`. */
+export function alu_and_byte(accumulator: number, operand: number, status: number): AluResult {
+    const value = bitwise_and_byte(accumulator, operand);
+
+    return { value, status: alu_zero_negative_byte(status, value) };
 }
 
 /** Mirror of `alu_ora accumulator, operand, status`. */
 export function alu_ora(accumulator: number, operand: number, status: number): AluResult {
-    const value = bitwise_or(scratch_mod(accumulator, 256), scratch_mod(operand, 256));
+    return alu_ora_byte(scratch_mod(accumulator, 256), scratch_mod(operand, 256), normalize_status(status));
+}
 
-    return { value, status: update_zero_negative_flags(status, value) };
+/** Mirror of `alu_ora_byte accumulator, operand, status`. */
+export function alu_ora_byte(accumulator: number, operand: number, status: number): AluResult {
+    const value = bitwise_or_byte(accumulator, operand);
+
+    return { value, status: alu_zero_negative_byte(status, value) };
 }
 
 /** Mirror of `alu_eor accumulator, operand, status`. */
 export function alu_eor(accumulator: number, operand: number, status: number): AluResult {
-    const value = bitwise_xor(scratch_mod(accumulator, 256), scratch_mod(operand, 256));
+    return alu_eor_byte(scratch_mod(accumulator, 256), scratch_mod(operand, 256), normalize_status(status));
+}
 
-    return { value, status: update_zero_negative_flags(status, value) };
+/** Mirror of `alu_eor_byte accumulator, operand, status`. */
+export function alu_eor_byte(accumulator: number, operand: number, status: number): AluResult {
+    const value = bitwise_xor_byte(accumulator, operand);
+
+    return { value, status: alu_zero_negative_byte(status, value) };
 }
 
 /** Mirror of `alu_shift_left value, status`. */
 export function alu_shift_left(value: number, status: number): AluResult {
-    const byte = scratch_mod(value, 256);
-    const shifted = byte * 2;
-    const result = scratch_mod(shifted, 256);
-    const normalized = normalize_status(status);
-    const updated = shifted > 255 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    return alu_shift_left_byte(scratch_mod(value, 256), normalize_status(status));
+}
 
-    return { value: result, status: update_zero_negative_flags(updated, result) };
+/** Mirror of `alu_shift_left_byte value, status`. */
+export function alu_shift_left_byte(value: number, status: number): AluResult {
+    const shifted = value * 2;
+    const result = scratch_mod(shifted, 256);
+    const updated = status - scratch_mod(status, 2) + scratch_floor_divide(shifted, 256);
+
+    return { value: result, status: alu_zero_negative_byte(updated, result) };
 }
 
 /** Mirror of `alu_shift_right value, status`. */
 export function alu_shift_right(value: number, status: number): AluResult {
-    const byte = scratch_mod(value, 256);
-    const result = scratch_floor_divide(byte, 2);
-    const normalized = normalize_status(status);
-    const updated =
-        scratch_mod(byte, 2) === 1 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    return alu_shift_right_byte(scratch_mod(value, 256), normalize_status(status));
+}
 
-    return { value: result, status: update_zero_negative_flags(updated, result) };
+/** Mirror of `alu_shift_right_byte value, status`. */
+export function alu_shift_right_byte(value: number, status: number): AluResult {
+    const result = scratch_floor_divide(value, 2);
+    const updated = status - scratch_mod(status, 2) + scratch_mod(value, 2);
+
+    return { value: result, status: alu_zero_negative_byte(updated, result) };
 }
 
 /** Mirror of `alu_rotate_left value, status`. */
 export function alu_rotate_left(value: number, status: number): AluResult {
-    const byte = scratch_mod(value, 256);
-    const normalized = normalize_status(status);
-    const shifted = byte * 2 + scratch_mod(normalized, 2);
-    const result = scratch_mod(shifted, 256);
-    const updated = shifted > 255 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    return alu_rotate_left_byte(scratch_mod(value, 256), normalize_status(status));
+}
 
-    return { value: result, status: update_zero_negative_flags(updated, result) };
+/** Mirror of `alu_rotate_left_byte value, status`. */
+export function alu_rotate_left_byte(value: number, status: number): AluResult {
+    const shifted = value * 2 + scratch_mod(status, 2);
+    const result = scratch_mod(shifted, 256);
+    const updated = status - scratch_mod(status, 2) + scratch_floor_divide(shifted, 256);
+
+    return { value: result, status: alu_zero_negative_byte(updated, result) };
 }
 
 /** Mirror of `alu_rotate_right value, status`. */
 export function alu_rotate_right(value: number, status: number): AluResult {
-    const byte = scratch_mod(value, 256);
-    const normalized = normalize_status(status);
-    const shifted = byte + scratch_mod(normalized, 2) * 256;
-    const result = scratch_floor_divide(shifted, 2);
-    const updated =
-        scratch_mod(shifted, 2) === 1 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    return alu_rotate_right_byte(scratch_mod(value, 256), normalize_status(status));
+}
 
-    return { value: result, status: update_zero_negative_flags(updated, result) };
+/** Mirror of `alu_rotate_right_byte value, status`. */
+export function alu_rotate_right_byte(value: number, status: number): AluResult {
+    const shifted = value + scratch_mod(status, 2) * 256;
+    const result = scratch_floor_divide(shifted, 2);
+    const updated = status - scratch_mod(status, 2) + scratch_mod(shifted, 2);
+
+    return { value: result, status: alu_zero_negative_byte(updated, result) };
 }
 
 /** Mirror of `alu_compare register_value, operand, status`. */
 export function alu_compare(register_value: number, operand: number, status: number): AluResult {
-    const left = scratch_mod(register_value, 256);
-    const right = scratch_mod(operand, 256);
-    const difference = left - right;
-    const normalized = normalize_status(status);
-    const updated =
-        difference >= 0 ? normalized + (1 - scratch_mod(normalized, 2)) : normalized - scratch_mod(normalized, 2);
+    return alu_compare_byte(scratch_mod(register_value, 256), scratch_mod(operand, 256), normalize_status(status));
+}
 
-    return { value: left, status: update_zero_negative_flags(updated, scratch_mod(difference, 256)) };
+/** Mirror of `alu_compare_byte register_value, operand, status`. */
+export function alu_compare_byte(register_value: number, operand: number, status: number): AluResult {
+    const difference = register_value - operand;
+    const updated = status - scratch_mod(status, 2) + (1 - scratch_mod(scratch_floor_divide(difference, 256), 2));
+
+    return { value: register_value, status: alu_zero_negative_byte(updated, scratch_mod(difference, 256)) };
 }
 
 /** Mirror of `alu_bit_test accumulator, operand, status`. */
 export function alu_bit_test(accumulator: number, operand: number, status: number): AluResult {
-    const left = scratch_mod(accumulator, 256);
-    const memory = scratch_mod(operand, 256);
-    const tested = bitwise_and(left, memory);
-    const normalized = normalize_status(status);
-    let updated =
-        tested === 0
-            ? normalized + 2 * (1 - scratch_mod(scratch_floor_divide(normalized, 2), 2))
-            : normalized - 2 * scratch_mod(scratch_floor_divide(normalized, 2), 2);
+    return alu_bit_test_byte(scratch_mod(accumulator, 256), scratch_mod(operand, 256), normalize_status(status));
+}
 
-    updated =
-        scratch_mod(scratch_floor_divide(memory, 128), 2) === 1
-            ? updated + 128 * (1 - scratch_floor_divide(updated, 128))
-            : updated - 128 * scratch_floor_divide(updated, 128);
-    updated =
-        scratch_mod(scratch_floor_divide(memory, 64), 2) === 1
-            ? updated + 64 * (1 - scratch_mod(scratch_floor_divide(updated, 64), 2))
-            : updated - 64 * scratch_mod(scratch_floor_divide(updated, 64), 2);
+/** Mirror of `alu_bit_test_byte accumulator, operand, status`. */
+export function alu_bit_test_byte(accumulator: number, operand: number, status: number): AluResult {
+    const memory = operand;
+    const tested = bitwise_and_byte(accumulator, memory);
+    const zero_flag = tested === 0 ? 1 : 0;
+    const updated =
+        status -
+        2 * scratch_mod(scratch_floor_divide(status, 2), 2) -
+        128 * scratch_mod(scratch_floor_divide(status, 128), 2) -
+        64 * scratch_mod(scratch_floor_divide(status, 64), 2) +
+        2 * zero_flag +
+        128 * scratch_mod(scratch_floor_divide(memory, 128), 2) +
+        64 * scratch_mod(scratch_floor_divide(memory, 64), 2);
 
-    return { value: left, status: updated };
+    return { value: accumulator, status: updated };
 }
 
 /** Mirror of `alu_increment value, status`. */
 export function alu_increment(value: number, status: number): AluResult {
-    const result = scratch_mod(scratch_mod(value, 256) + 1, 256);
+    return alu_increment_byte(scratch_mod(value, 256), normalize_status(status));
+}
 
-    return { value: result, status: update_zero_negative_flags(status, result) };
+/** Mirror of `alu_increment_byte value, status`. */
+export function alu_increment_byte(value: number, status: number): AluResult {
+    const result = scratch_mod(value + 1, 256);
+
+    return { value: result, status: alu_zero_negative_byte(status, result) };
 }
 
 /** Mirror of `alu_decrement value, status`. */
 export function alu_decrement(value: number, status: number): AluResult {
-    const result = scratch_mod(scratch_mod(value, 256) - 1, 256);
+    return alu_decrement_byte(scratch_mod(value, 256), normalize_status(status));
+}
 
-    return { value: result, status: update_zero_negative_flags(status, result) };
+/** Mirror of `alu_decrement_byte value, status`. */
+export function alu_decrement_byte(value: number, status: number): AluResult {
+    const result = scratch_mod(value - 1, 256);
+
+    return { value: result, status: alu_zero_negative_byte(status, result) };
 }
 
 /**
