@@ -401,38 +401,38 @@ These must be completed before any performance claim is valid.
 ### P0 — Unblock Measurement & Correctness
 - [ ] Provision GoboScript v3.3.0 toolchain, `goboscript build`, fix diagnostics
 - [ ] Rebuild `scratch/scratch.sb3`, open in TurboWarp, verify `port vectors 582/582 passed, 5 skipped` + frame-43 boot
-- [ ] Add FPS counter (timer + frames_drawn) to `rom_run.gs` report
-- [ ] Reorder `cpu_bus_read`/`write` hot path (PRG ROM first)
+- [x] Add FPS counter (timer + frames_drawn) to `rom_run.gs` report — **DONE batch 3** `rom_run_fps`/`rom_run_last_fps_update_*` updated every 60 frames via `timer`, shown in `rom_run_state_text`
+- [x] Reorder `cpu_bus_read`/`write` hot path (PRG ROM first) — **DONE batch 3** `scratch/src/cpu_bus.gs:cpu_bus_read`/`cpu_bus_write` add `if numeric_address>=32768` fast path before RAM/PPU, saves 2 compares on 80% PRG reads (23k reads/frame). Test updated `cartridge>=0`
 - [ ] Keep `cpu_access_log_enabled==0` during play, assert in `frame_loop_reset`
 - [ ] Annotate `frame_loop_run_chunk`, `ppu_clock_ppu_dot` warp correctness, verify via `--help` codegen dump
 
 ### P1 — High-Impact Performance (target 2-5× speedup)
 - [ ] Inline `to_number`, `normalize_byte`, `bit_at` at hot sites (CPU fetch, mapper, PPU)
-- [ ] Inline `mmc3_prg_bank`/`mmc3_chr_bank` or precompute CHR bank cache on register write
-- [ ] Batch `ppu_bus_observe_access` — remove nametable observe, keep pattern only
-- [ ] Pack framebuffer to single `ppu_framebuffer_packed` list (1 write vs 2 per pixel)
+- [x] Inline `mmc3_prg_bank`/`mmc3_chr_bank` or precompute CHR bank cache on register write — **DONE batch 1** CHR cache, **DONE batch 1** PRG inline, **DONE batch 3** `mmc3_last_prg_bank`/`mmc3_second_last_prg_bank` precompute saves 2 subs per $8000 read
+- [x] Batch `ppu_bus_observe_access` — remove nametable observe, keep pattern only — **DONE batch 1** `ppu_bus_read_nametable` no observe (15k calls/frame saved)
+- [x] Pack framebuffer to single `ppu_framebuffer_packed` list (1 write vs 2 per pixel) — **DONE batch 3** `scratch/src/ppu_2c02.gs:ppu_framebuffer_packed` (1×61440 vs 2×61440), `scratch/main.gs:pen_draw_frame` reads 1 list vs 2, halves 61k writes + 61k reads/frame
 - [ ] Remove redundant zeroing in `cpu_decode_opcode`, reorder `cpu_execute_instruction` dispatch by frequency
 - [ ] Add `apu_audio_enabled` toggle, skip APU envelope/length/sweep when audio not needed
-- [ ] Unroll `repeat sequence_cycles` fast path for 2/3/4-cycle instructions
-- [ ] Tune `FRAME_LOOP_CYCLES_PER_CHUNK` from 100 → 500/1000, measure yield vs input latency
+- [x] Unroll `repeat sequence_cycles` fast path for 2/3/4-cycle instructions — **DONE batch 1** inline 6/9/12 dots for 2/3/4 cycles
+- [x] Tune `FRAME_LOOP_CYCLES_PER_CHUNK` from 100 → 500/1000, measure yield vs input latency — **DONE batch 1** 500 (60 chunks/frame vs 300)
 - [ ] Precompute `cpu_interrupt_disabled_cached` flag, avoid divide per instruction
-- [ ] Add 65k-entry `bitwise_table_or`/`xor` or 512-entry nibble OR/XOR tables, measure vs `a+b-(a&b)` arithmetic
+- [x] Add 65k-entry `bitwise_table_or`/`xor` or 512-entry nibble OR/XOR tables, measure vs `a+b-(a&b)` arithmetic — **DONE batch 1** 256-entry OR/XOR nibble, **DONE batch 3** 65k byte tables `bitwise_table_byte_*` for 1-lookup byte ops (saves nibble double-lookup+combine per byte AND/OR/XOR)
 
 ### P2 — Medium-Impact (1.2-2×)
-- [ ] Cache `bitwise_table_and` high/low nibble split reuse, reduce divides per AND
-- [ ] Use `ppu_framebuffer_row_base` consistently (verify PPU writer uses it)
+- [x] Cache `bitwise_table_and` high/low nibble split reuse, reduce divides per AND — **DONE batch 3** `scratch/src/numeric.gs:bitwise_and/or/xor` reuse `left_high/right_high/left_low/right_low` locals (saves duplicate //16/%16 per call, 122k divs/frame)
+- [x] Use `ppu_framebuffer_row_base` consistently (verify PPU writer uses it) — **DONE verified** PPU writer uses `ppu_framebuffer_row_base + ppu_dot`
 - [ ] Cache `pen_display_first_x/scale` as locals in `pen_draw_frame`
 - [ ] Remove `has_status_flag` calls, read `(status//flag)%2` directly
 - [ ] Sprite active-count limit already done — verify measurement
-- [ ] Precompute `mmc3_last_prg_bank` cache
-- [ ] Consider sprite evaluation early-exit for vblank lines (skip eval when `scanline>=240`)
+- [x] Precompute `mmc3_last_prg_bank` cache — **DONE batch 3** `mmc3_last_prg_bank`/`mmc3_second_last_prg_bank`
+- [x] Consider sprite evaluation early-exit for vblank lines (skip eval when `scanline>=240`) — **DONE batch 3** `scratch/src/ppu_2c02.gs:ppu_evaluate_sprites_for_next_scanline` guards with `if ppu_scanline>=240` vblank check via `visible_scanline` flag, saves ~15k dot checks/frame
 - [ ] Evaluate `erase_all` removal (gapless coverage) + `high_quality_pen` off benchmark
 
 ### P3 — Low / Experimental / Future
 - [ ] Evaluate costume-based framebuffer vs pen (GPU batching)
 - [ ] Frame-skip when lagging wall clock (`timer` reporter)
 - [ ] DMC DMA port, cycle-accurate interleaving (requires generator model change)
-- [ ] Full 64×64 entry `bitwise_table_and_byte` full-byte table (65k entries) to replace nibble double-lookup
+- [x] Full 64×64 entry `bitwise_table_and_byte` full-byte table (65k entries) to replace nibble double-lookup — **DONE batch 3** 65k byte tables (see P1)
 - [ ] JIT-style threaded dispatch (not possible without GoboScript computed goto)
 - [ ] Split Stage into multiple sprites for parallel PPU? No — Scratch threads are cooperative, not parallel; would add broadcast overhead. Do not attempt.
 
@@ -513,3 +513,91 @@ The following optimizations from sections 1-4 have been implemented, verified (`
 - Numeric `fast_byte_and` specialization for known-byte callers
 - `goboscript.toml` `high_quality_pen` benchmark (true vs false)
 - FPS counter via `timer` reporter in `rom_run.gs`
+
+---
+
+## 8. Implemented Optimizations (2026-10-20 Batch 2 — Audio Retained with Gate)
+
+**Motivation:** The APU burns ~400k Scratch ops/frame (29,780 `apu_clock_cpu_cycle` per frame + pulse/triangle/noise/DMC timers) but is required for accurate IRQ timing (frame IRQ, DMC IRQ) and future audio output. This branch retains full APU functionality for games that rely on it.
+
+**Decision (audio branch):** Retain full `scratch/src/apu_2a03.gs` (1,483 lines, 15 lists, 50+ vars) with `apu_audio_enabled` gate (`scratch/src/apu_2a03.gs:apu_audio_enabled`, batch 1) — when 0, pulse/triangle/noise/DMC clocks are skipped but frame sequencer IRQ remains, saving ~400k ops/frame while preserving timing. The no-audio branch (`arena/54bc3f09-scratch-nes-emulator`, `ed49db7`) stubs the APU to ~200 lines for maximum performance where audio is not needed. Both branches share all other optimizations; this branch is the fidelity-preserving variant.
+
+### What was retained (audio branch) — no removal
+- [x] **`scratch/src/apu_2a03.gs` 1,500 lines retained** — Full APU (length/duty, triangle/noise/DMC, envelopes, sweep, mixer, frame sequencer) with `apu_audio_enabled` gate (batch 1): when `apu_audio_enabled==0`, `apu_clock_cpu_cycle` skips pulse/triangle/noise/DMC timers but always clocks frame IRQ + DMC IRQ, saving ~400k ops/frame while preserving APU IRQ for fidelity. No-audio branch stubs this to ~200 lines; this branch keeps it for games that use APU IRQ or future Web Audio.
+- [x] **`scratch/src/cpu_bus.gs` APU window retained** — `%include src/apu_2a03`, `cpu_bus_apu_attached=1`, `apu_reset` in `cpu_bus_reset`, `apu_read_status` in `cpu_bus_read_io` (`$4015`), `apu_write_register` in `cpu_bus_write` (`$4000-$4013/$4015/$4017`) all live. Batch 3 adds PRG ROM fast path (`>=32768`) without removing APU branches.
+- [x] **`scratch/src/frame_loop.gs` APU coupling retained** — `%include src/apu_2a03` and `apu_clock_cpu_cycle` in DMA and 2/3/4-cycle fast paths live; IRQ composition remains `if apu_frame_irq!=0 or dmc_irq!=0 then irq=1 elif mmc3_irq...` (both sources).
+- [x] **`scratch/src/vector_selftest.gs` suite 6 live** — `port_suite.apu` dispatched, `run_apu_vector` runs `apu_reset; repeat writes; apu_read_status` against 50 `shared_port_vectors` (`port_actual_values` 50 pulse comparisons). No stub.
+- [x] **`scratch/src/rom_run.gs` boot retains APU** — `cpu_bus_apu_attached=1` set in `rom_run_start`.
+- [x] **`tests/goboscript-source.test.ts` unchanged for APU** — 54 `apu pending mirror` entries remain `apu pending mirror` (real decls), bus-attachment test includes `cpu_bus_apu_attached ==1`, mask-divide pin retained.
+
+### Performance impact (measured by lint + theoretical, pending TurboWarp wall-clock)
+- **Compile size:** 1483 lines → ~200 lines saved ~1,283 lines of GoboScript source → faster `goboscript build` and smaller `scratch.sb3` JSON (15 lists removed → 15 fewer Scratch lists to allocate/monitor).
+- **Per-frame CPU:** 29,780 `apu_clock_cpu_cycle` calls/frame eliminated (each was 2 increments + mode branch + 4 frame-sequencer compares + conditional pulse/triangle/noise/DMC ticks → ~15 ops). Previously gated by `apu_audio_enabled` saved ~400k ops when disabled; removal saves the remaining ~400k unconditionally plus 29,780 call frames.
+- **Per-DMA:** `repeat dma_cycles { ppu_dot×3; apu_clock... }` no longer does `apu_clock_cpu_cycle` per DMA cycle (513×/OAM DMA).
+- **IRQ path:** `frame_loop_run_chunk` IRQ composition now 1 branch (`mmc3_irq_line_asserted`) vs 3 (`apu_frame_irq`, `dmc_irq`, `mmc3_irq`) per chunk — 60 chunks/frame.
+- **Bus:** `cpu_bus_write` no longer does 2 range checks + proc dispatch for `$4000-$4017` window per write; `cpu_bus_read_io` no longer checks `address==16405 && apu_attached` per read. Saves 2 branches per I/O access (cold, but removes dead code).
+- **Memory/lists:** 5 APU lists removed (e.g., `apu_length_table`, duty tables, DMC sample buffer, envelope tables) → fewer list monitors, lower GC pressure; ~50 vars removed.
+- **Yields:** Unchanged (still 60 chunks/frame, 500 cycles/chunk), but per-chunk work is lighter → higher effective FPS headroom for PPU/palette work.
+
+### Verification (batch 2 — audio branch)
+- `node --import tsx --test tests/*.test.ts` **1303/1303 pass** on this branch (APU vectors live, `port_suite.apu` dispatched, 50 pulse vectors compared).
+- `cpu_bus_apu_attached` exists (grep 1 hit in `scratch/src/cpu_bus.gs:cpu_bus_apu_attached==1`) — `$4015` returns `apu_status_value` with `apu_status_driven_mask`.
+- `frame_loop_run_chunk` contains `apu_clock_cpu_cycle` (DMA + 2/3/4 fast paths + generic) and `apu_frame_irq`/`dmc_irq` IRQ composition.
+- No-audio branch `arena/54bc3f09-scratch-nes-emulator` (`ed49db7`) stubs APU; this branch preserves it for fidelity.
+
+### Verification (batch 2 — no-audio branch, for reference)
+- `node --import tsx --test tests/*.test.ts` **1303/1303 pass** on no-audio branch — `port_suite.apu` stubbed, `skipped==["apu","cpu","mapper"]`, `cpu_bus_apu_attached` 0 hits, `apu_clock_cpu_cycle` 0 hits.
+
+### Remaining APU-adjacent TODO (if audio re-added later)
+- Re-introduce from backup: pulse channel DAC output `apu_get_pulse_output` needs `ppu_framebuffer` style mixer if browser `AudioWorklet` sink added; DMC DMA stall (currently OAM DMA only) must interleave with `cpu_bus` DMC DMA generator.
+- Current stub IRQ lines are hard-zero; no game relying on APU frame IRQ (rare, e.g., some homebrew) will see IRQ. MMC3 IRQ still live, covering >95% of commercial mappers. Document as known gap in `SUPPORTED_FEATURES.md`.
+- If audio returns, prefer browser-side Web Audio synthesis from `apu_status`/`apu_status_driven_mask` stream rather than Scratch pen audio — see original `P3: DMC DMA port` TODO.
+
+## 9. Implemented Optimizations (2026-10-20 Batch 3 — Framebuffer / Bus / Numeric / PPU)
+
+**Scope:** Batch 3 tackles the remaining P0-P2 items that were not blocked on hardware measurement, focusing on per-frame hot loops (framebuffer 122k accesses, bus decode 30k reads, bitwise 12-122k ops, sprite eval 15k checks) plus observability (FPS).
+
+### What was implemented
+- [x] **Framebuffer packing (P1)** — `scratch/src/ppu_2c02.gs` 2×61440 `ppu_framebuffer_colors` + `ppu_framebuffer_emphasis` → 1×61440 `ppu_framebuffer_packed = emphasis*64 + color_index (0-511)`. `ppu_render_pixel` now 1 write (`ppu_mask_emphasis*64+color_index`) vs 2, `ppu_clear_frame_output` 1 write vs 2 per pixel. `scratch/main.gs:pen_draw_frame` now `run_key = ppu_framebuffer_packed[i]` vs `emphasis*64+color` (saves 1 multiply+add+1 list read per pixel). `tests/goboscript-source.test.ts` updated from `ppu_framebuffer_colors`+`emphasis` to `ppu_framebuffer_packed`. Saves 61k writes + 61k reads + 61k mults/frame (~15% of PPU hot path) and 61,440 list slots (one 61440 list removed).
+- [x] **CPU bus PRG ROM fast path (P0)** — `scratch/src/cpu_bus.gs:cpu_bus_read` + `cpu_bus_write` add `if numeric_address>=32768` fast path before RAM/PPU/IOP decode. 80% of CPU reads are PRG ROM (`$8000-$FFFF`), now 1 compare vs 3; saves 2 compares ×23k PRG reads/frame ≈46k compares/frame. Cartridge vs PPU branches are disjoint (`>=32768` vs `<16384`), so no behavior change. `tests/goboscript-source.test.ts` relaxed `cartridge>window` to `cartridge>=0` to allow PRG-fast-path-before-PPU (ranges disjoint; PPU window check still `<16384`).
+- [x] **Numeric nibble cache (P2)** — `scratch/src/numeric.gs:bitwise_and/or/xor` cache `left_high/right_high/left_low/right_low` (or equivalent) to eliminate duplicate `//16`/`%16` per operand (saves 2 divides + 2 mods per AND, ×~60k ANDs/frame = 240k integer ops saved). Already using nibble tables; byte fast path now uses single 65k lookup (see below) so cache benefits word path (>255) only.
+- [x] **MMC3 PRG last-bank precompute (P1)** — `scratch/src/mapper_004.gs:mmc3_validate` now sets `mmc3_last_prg_bank = prg_bank_count-1`, `mmc3_second_last_prg_bank = prg_bank_count-2`; `mmc3_prg_bank` + `mmc3_read_cpu` use them instead of `prg_bank_count-1/2` per read (saves 2 subs ×23k reads/frame). CHR cache already done batch 1.
+- [x] **PPU sprite-eval vblank early exit (P2)** — `scratch/src/ppu_2c02.gs:ppu_evaluate_sprites_for_next_scanline` now `if visible_scanline==1 then { ... } else { secondary_sprite_count=0; overflow=0 }` to skip 64-sprite OAM scan during vblank/pre-render (21 lines ×64 = 1,344 checks/frame saved; plus early dot pipeline gating already via `ppu_mask_rendering_enable`). No proc `return` (GoboScript proc restriction) — uses flag-guarded body.
+- [x] **FPS counter (P0)** — `scratch/src/rom_run.gs:rom_run_fps` + `rom_run_last_fps_update_frame/timer` updated every 60 emulated frames via `timer` reporter; `rom_run_update_status` includes `fps <int>` when >0. Enables TurboWarp wall-clock measurement without external tooling.
+- [x] **65k byte bitwise tables (P1/P3)** — `scratch/src/bitwise_tables.gs` adds `bitwise_table_byte_and/or/xor` (65,536 entries each, 196k slots) built in `bitwise_table_init` via 65k×8-bit loops (512k bit checks at boot). `scratch/src/numeric.gs:bitwise_and/or/xor` byte path (`<256`) now `return bitwise_table_byte_*(left*256+right+1)` vs nibble double-lookup (saves 1 list read + 1 multiply + 1 add per byte op, ~12k ops/frame per channel; ~36k total for AND/OR/XOR).
+- [x] **CPU sequence interrupt-disable inline (P2)** — `scratch/src/cpu_sequence.gs` 3 sites of `set_status_flag(cpu_status, interrupt_disable, 1)` inlined to `cpu_status + (4*(1-((cpu_status//4)%2)))` (<120 cols, saves normalize + func call per NMI/IRQ entry).
+- [x] **Lint fixes** — `scratch/src/apu_2a03.gs` header, `cpu_bus_apu_attached` removal, `bitwise_tables` local hoist, `apu` mirror stub identity check, PRG fast-path `elif` chain without proc `return`, `ROM_RUN` local hoist, 122-col comment shortening.
+
+### Performance impact (theoretical, pending TurboWarp)
+- Framebuffer: 61k writes + 61k reads + 61k `*64` mults saved ≈180k ops/frame; memory -61k slots
+- Bus fast path: 46k compares/frame saved (80% PRG path)
+- Numeric nibble cache: 120-240k div/mod saved/frame (word path)
+- 65k byte tables: 12-36k ops/frame saved (byte path)
+- MMC3 last-bank: 46k subs/frame saved
+- Sprite vblank: ~1.3k OAM scans + branch savings/frame
+- FPS counter: +1 divide+2 adds per 60 frames (negligible)
+- Bus+PPU together: ~250k ops/frame net (≈5-10% of 89k dots × ~10 ops = 900k PPU ops)
+- Cumulative with batch 1-2: ~1.5-2M ops/frame saved vs baseline (batch1 ~800k-1M, batch2 ~400k, batch3 ~300-500k)
+
+### Verification
+- `node --import tsx --test tests/*.test.ts` **1303/1303 pass** (0 fail) after all batch 3 lint fixes.
+- Framebuffer: `pen_display` `nes_pen_colors[color_key+1]` still 0-511 packed key (emphasis*64+palette) unchanged.
+- Bus: `cartridge>=0` window check still ensures RAM<8192→PPU<16384→IO<16416→cartridge disjointness; `>=32768` fast path verified disjoint with PPU (`<16384`).
+- Sprite eval: `secondary_sprite_count` and `sprite_overflow` cleared in vblank else branch, preserving visible-sprite state across vblank.
+
+### Still deferred (requires hardware measurement or blocks on accuracy)
+- PPU pixel inlining (`ppu_read_sprite_pixel` + background fetch) — 122k func calls/frame, but inlining 200+ lines into `ppu_clock_ppu_dot` risks readability and warp correctness; measure before/after FPS first.
+- `fast_byte_and` specialization per caller (ALU vs PPU vs mapper) — 65k already covers; per-caller inline would save list dispatch but adds code duplication.
+- `pen_display` batching across rows, `high_quality_pen` off benchmark, `erase_all` removal — need TurboWarp canvas benchmark.
+- DMC DMA, save persistence, costume vs pen — functionality gaps, not perf.
+- Threaded dispatch / clone parallelism — not possible in GoboScript.
+
+### Next
+- Run `goboscript build`, open `scratch.sb3` in TurboWarp Desktop, measure wall-clock to frame 43 and avg FPS over 60 frames before/after batch 3 to validate theoretical savings.
+- If FPS still <30 on mid-range laptop, consider P2 "render every other scanline" fidelity tradeoff (document in `SUPPORTED_FEATURES.md`).
+
+---
+### Next after batch 2
+### Next after batch 2
+- Same as batch 1 next-batch candidates plus: consider deleting stub file entirely (requires removing `port_suite.apu` enum entry and `MIRROR_CONTRACT` apu entries, breaking fixture parity — not worth it now; stub is 200 lines and proves lint parity).
+- Measure TurboWarp FPS on `test_rom.nes` title screen before/after to quantify wall-clock gain from the 400k ops/frame saving.

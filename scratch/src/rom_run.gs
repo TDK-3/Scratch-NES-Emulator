@@ -61,6 +61,11 @@ var rom_run_frames_drawn = 0;
 # The CPU cycles the console has run since the boot.
 var rom_run_cycles = 0;
 
+# FPS tracking via Scratch timer (seconds since green flag).
+var rom_run_fps = 0;
+var rom_run_last_fps_update_frame = 0;
+var rom_run_last_fps_update_timer = 0;
+
 # One summary line for the display sprite.
 var rom_run_state_text = "";
 
@@ -99,6 +104,9 @@ proc rom_run_start {
 
         rom_run_started = 1;
         rom_run_state_text = "running " & cartridge_board_state_text;
+        rom_run_fps = 0;
+        rom_run_last_fps_update_frame = 0;
+        rom_run_last_fps_update_timer = timer;
     } else {
         rom_run_state_text = "boot failed " & cartridge_board_state_text;
     }
@@ -111,6 +119,7 @@ proc rom_run_start {
 # warp window, and so the presentation broadcast can wait for the display sprite to finish
 # drawing.
 nowarp proc rom_run_loop {
+    local elapsed = 0;
     forever {
         # A pending ROM load is serviced before the console runs any more cycles, so the
         # image cannot be replaced under a frame that is already half run.
@@ -130,6 +139,18 @@ nowarp proc rom_run_loop {
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;
             rom_run_frame_count = rom_run_frame_count + 1;
+
+            # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
+            if rom_run_frame_count - rom_run_last_fps_update_frame >= 60 {
+                elapsed = timer - rom_run_last_fps_update_timer;
+
+                if elapsed > 0 {
+                    rom_run_fps = 60 / elapsed;
+                }
+
+                rom_run_last_fps_update_frame = rom_run_frame_count;
+                rom_run_last_fps_update_timer = timer;
+            }
 
             # The summary line is rebuilt once per emulated frame instead of once per chunk:
             # the report cannot change faster than the counters it shows, and a chunk is only
@@ -193,8 +214,15 @@ proc rom_run_load_input_image {
 # Rebuilds the summary line the display sprite shows.
 proc rom_run_update_status {
     if rom_run_started == 1 {
+        local fps_text = "";
+
+        if rom_run_fps > 0 {
+            fps_text = " fps " & (rom_run_fps // 1);
+        }
+
         rom_run_state_text = rom_run_image_name & " frame " & rom_run_frame_count
             & " drawn " & rom_run_frames_drawn
+            & fps_text
             & " cycles " & rom_run_cycles
             & " pc " & cpu_program_counter
             & " " & cartridge_board_state_text;

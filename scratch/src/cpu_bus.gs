@@ -117,6 +117,24 @@ func cpu_bus_read(address) {
     local numeric_address = normalize_word($address);
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
+    if numeric_address >= 32768 {
+        if cpu_bus_cartridge_kind == mapper_kind.nrom {
+            nrom_read_cpu numeric_address;
+
+            if nrom_cpu_mapped == 1 {
+                return cpu_apply_driven_value(nrom_cpu_value, nrom_cpu_driven_mask);
+            }
+        } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+            mmc3_read_cpu numeric_address;
+
+            if mmc3_cpu_mapped == 1 {
+                return cpu_apply_driven_value(mmc3_cpu_value, mmc3_cpu_driven_mask);
+            }
+        }
+
+        return cpu_open_bus;
+    }
+
     if numeric_address < 8192 {
         # RAM drives every data line, so the read is the byte itself both as the return
         # value and as the new open-bus latch; skipping the merge helper saves a call on
@@ -198,7 +216,13 @@ proc cpu_bus_write address, value {
     cpu_open_bus = numeric_value;
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
-    if numeric_address < 8192 {
+    if numeric_address >= 32768 {
+        if cpu_bus_cartridge_kind == mapper_kind.nrom {
+            nrom_write_cpu numeric_address, numeric_value;
+        } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+            mmc3_write_cpu numeric_address, numeric_value;
+        }
+    } elif numeric_address < 8192 {
         # $0000-$1FFF: 2 KiB of RAM, mirrored across the window.
         cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
     } elif numeric_address < 16384 {

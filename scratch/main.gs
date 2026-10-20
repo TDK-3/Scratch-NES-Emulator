@@ -82,8 +82,7 @@ proc pen_draw_frame {
         pixel_x = 0;
         run_start = 0;
         framebuffer_index = row_base + 1;
-        run_key = (ppu_framebuffer_emphasis[framebuffer_index] * 64)
-            + ppu_framebuffer_colors[framebuffer_index];
+        run_key = ppu_framebuffer_packed[framebuffer_index];
 
         # The remaining 255 pixels of the row, with the framebuffer index carried forward
         # instead of being recomputed from the pixel number: a repeat loop and one addition
@@ -91,8 +90,7 @@ proc pen_draw_frame {
         repeat 255 {
             pixel_x = pixel_x + 1;
             framebuffer_index = framebuffer_index + 1;
-            current_key = (ppu_framebuffer_emphasis[framebuffer_index] * 64)
-                + ppu_framebuffer_colors[framebuffer_index];
+            current_key = ppu_framebuffer_packed[framebuffer_index];
 
             if current_key != run_key {
                 pen_draw_run run_start, pixel_x - 1, stage_y, run_key;

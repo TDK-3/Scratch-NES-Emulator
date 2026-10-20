@@ -92,8 +92,7 @@ func bitwise_and(left, right) {
     local right_word = $right % 65536;
 
     if left_word < 256 and right_word < 256 {
-        return (bitwise_table_and[((left_word // 16) * 16) + (right_word // 16) + 1] * 16)
-            + bitwise_table_and[((left_word % 16) * 16) + (right_word % 16) + 1];
+        return bitwise_table_byte_and[left_word * 256 + right_word + 1];
     }
 
     local left_high = left_word // 256;
@@ -114,8 +113,7 @@ func bitwise_or(left, right) {
     local right_word = $right % 65536;
 
     if left_word < 256 and right_word < 256 {
-        return (bitwise_table_or[((left_word // 16) * 16) + (right_word // 16) + 1] * 16)
-            + bitwise_table_or[((left_word % 16) * 16) + (right_word % 16) + 1];
+        return bitwise_table_byte_or[left_word * 256 + right_word + 1];
     }
 
     local left_high = left_word // 256;
@@ -136,8 +134,7 @@ func bitwise_xor(left, right) {
     local right_word = $right % 65536;
 
     if left_word < 256 and right_word < 256 {
-        return (bitwise_table_xor[((left_word // 16) * 16) + (right_word // 16) + 1] * 16)
-            + bitwise_table_xor[((left_word % 16) * 16) + (right_word % 16) + 1];
+        return bitwise_table_byte_xor[left_word * 256 + right_word + 1];
     }
 
     local left_high = left_word // 256;

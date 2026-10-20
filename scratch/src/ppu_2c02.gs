@@ -210,11 +210,11 @@ var ppu_sprite_pixel_oam_index = -1;
 
 # ---- framebuffer output ----
 
-# Row-major six-bit palette indices and three-bit emphasis values for the
-# 256 by 240 picture, one 1-based list slot per pixel at y * 256 + x + 1.
-# The display sprite reads these Stage-owned lists when it draws a frame.
-list ppu_framebuffer_colors = [0; 61440];
-list ppu_framebuffer_emphasis = [0; 61440];
+# Row-major packed palette/emphasis values for the 256 by 240 picture, one 1-based
+# list slot per pixel at y * 256 + x + 1. Packed as emphasis*64 + color_index (0-511),
+# so the display sprite reads one list instead of two and the PPU writes one list instead
+# of two, halving 61k framebuffer accesses per frame. The two-plane lists are removed.
+list ppu_framebuffer_packed = [0; 61440];
 
 # The framebuffer index of column zero on the scanline the renderer is drawing, that is
 # scanline * 256. ppu_advance_dot moves it one row whenever the scanline changes, so the
@@ -300,8 +300,7 @@ proc ppu_clear_frame_output {
     local pixel_index = 1;
 
     repeat PPU_FRAME_PIXEL_COUNT {
-        ppu_framebuffer_colors[pixel_index] = 0;
-        ppu_framebuffer_emphasis[pixel_index] = 0;
+        ppu_framebuffer_packed[pixel_index] = 0;
         pixel_index++;
     }
 
@@ -1085,8 +1084,7 @@ proc ppu_render_pixel {
     }
 
     framebuffer_index = ppu_framebuffer_row_base + ppu_dot;
-    ppu_framebuffer_colors[framebuffer_index] = color_index;
-    ppu_framebuffer_emphasis[framebuffer_index] = ppu_mask_emphasis;
+    ppu_framebuffer_packed[framebuffer_index] = ppu_mask_emphasis * 64 + color_index;
 
     if ppu_mask_rendering_enable == 1 {
         ppu_clock_sprite_output_units;
@@ -1304,6 +1302,7 @@ proc ppu_fetch_background_pattern_high {
 # bug advances the byte offset while checking for that ninth sprite.
 proc ppu_evaluate_sprites_for_next_scanline {
     local target_scanline = 0;
+    local visible_scanline_for_eval = 1;
     local sprite_height = 8;
     local found_count = 0;
     local elapsed_dots = 0;
@@ -1322,6 +1321,15 @@ proc ppu_evaluate_sprites_for_next_scanline {
     } else {
         target_scanline = ppu_scanline + 1;
     }
+
+    if target_scanline >= 240 {
+        visible_scanline_for_eval = 0;
+    }
+
+    if visible_scanline_for_eval == 0 {
+        ppu_secondary_sprite_count = 0;
+        ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
+    } else {
 
     if (ppu_control_register // PPU_SPRITE_SIZE_SELECT) % 2 == 1 {
         sprite_height = 16;
@@ -1377,7 +1385,8 @@ proc ppu_evaluate_sprites_for_next_scanline {
         oam_index = oam_index + 1;
     }
 
-    ppu_secondary_sprite_count = found_count;
+        ppu_secondary_sprite_count = found_count;
+    }
 
     if target_scanline == 0 {
         ppu_line_zero_sprite_count = found_count;
