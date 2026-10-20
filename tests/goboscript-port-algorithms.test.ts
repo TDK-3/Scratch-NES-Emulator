@@ -3744,3 +3744,38 @@ test("the mirrored image validation gates the install on a complete iNES image",
 
     assert.equal(failed.rom_input_error_code, ported.ROM_INPUT_ERROR.ODD_DIGITS);
 });
+
+test("rom_run_should_skip never skips two completed frames in a row", () => {
+    assert.equal(ported.rom_run_should_skip(0, 0), 0, "skipping off draws every frame");
+    assert.equal(ported.rom_run_should_skip(0, 1), 0, "skipping off draws every frame");
+    assert.equal(ported.rom_run_should_skip(1, 1), 0, "a skip is never followed by another skip");
+    assert.equal(ported.rom_run_should_skip(1, 0), 1, "with skipping on, a drawn frame is followed by a skip");
+
+    let last_skipped = 0;
+    let skipped = 0;
+    let longest_run = 0;
+    let run = 0;
+
+    for (let frame = 0; frame < 10_000; frame += 1) {
+        const should_skip = ported.rom_run_should_skip(1, last_skipped);
+
+        last_skipped = should_skip;
+        skipped += should_skip;
+        run = should_skip === 1 ? run + 1 : 0;
+        longest_run = Math.max(longest_run, run);
+    }
+
+    assert.equal(longest_run, 1, "the longest run of skipped frames must be one");
+    assert.equal(skipped, 5_000, "half of the frames are skipped while skipping is active");
+});
+
+test("rom_run_next_skip_state turns skipping on below 30 FPS and off at 55 FPS or more", () => {
+    assert.equal(ported.rom_run_next_skip_state(0, 0), 0, "no measurement yet keeps skipping off");
+    assert.equal(ported.rom_run_next_skip_state(0, 15), 1, "15 FPS turns skipping on");
+    assert.equal(ported.rom_run_next_skip_state(0, 29.9), 1, "just under 30 FPS turns skipping on");
+    assert.equal(ported.rom_run_next_skip_state(0, 30), 0, "30 FPS alone does not turn skipping on");
+    assert.equal(ported.rom_run_next_skip_state(1, 30), 1, "the 30 to 54 band keeps skipping on");
+    assert.equal(ported.rom_run_next_skip_state(1, 54.9), 1, "the 30 to 54 band keeps skipping on");
+    assert.equal(ported.rom_run_next_skip_state(1, 55), 0, "55 FPS turns skipping off");
+    assert.equal(ported.rom_run_next_skip_state(1, 0), 1, "no measurement keeps the current state");
+});

@@ -68,6 +68,12 @@ var rom_run_last_fps_update_timer = 0;
 var rom_run_start_timer = 0;
 var rom_run_frames_skipped = 0;
 
+# Frame-skip state. rom_run_skip_active turns on when the measured FPS falls below 30 and off
+# again at 55 or more. rom_run_last_frame_skipped records whether the previous completed frame
+# was skipped, so no two frames in a row are skipped.
+var rom_run_skip_active = 0;
+var rom_run_last_frame_skipped = 0;
+
 # Chunks between host-input samples. Four 100-cycle chunks are 400 emulated CPU cycles; actual
 # wall-time input latency depends on how quickly the runtime completes and schedules each chunk.
 var rom_run_poll_interval_chunks = 4;
@@ -82,6 +88,33 @@ var rom_run_progress_chunk_count = 0;
 # One summary line for the display sprite.
 var rom_run_state_text = "";
 
+# Decides whether a completed frame is skipped instead of drawn. While skipping is active, every
+# other frame is drawn, so the picture still refreshes at half the emulated rate when the pen
+# cannot keep up. A lead test (frames run ahead of frames drawn) was used before; it never
+# recovered, because each skipped frame widened the lead and nothing narrowed it.
+func rom_run_should_skip(skip_active, last_frame_skipped) {
+    if $skip_active == 1 and $last_frame_skipped == 0 {
+        return 1;
+    }
+
+    return 0;
+}
+
+# Updates the skip state from the measured FPS. Skipping turns on below 30 FPS and only turns off
+# at 55 FPS or more. The gap keeps one measurement from flipping the state straight back. The FPS
+# is measured over 60 emulated frames, skipped ones included, so skipping raises it.
+func rom_run_next_skip_state(skip_active, fps) {
+    if $fps > 0 and $fps < 30 {
+        return 1;
+    }
+
+    if $fps >= 55 {
+        return 0;
+    }
+
+    return $skip_active;
+}
+
 # Boots the console with the embedded image. A board that does not validate leaves the console
 # stopped and says why in the state text.
 proc rom_run_start {
@@ -91,6 +124,8 @@ proc rom_run_start {
     rom_run_cycles = 0;
     rom_run_poll_countdown = 0;
     rom_run_progress_chunk_count = 0;
+    rom_run_skip_active = 0;
+    rom_run_last_frame_skipped = 0;
     rom_run_state_text = "not started";
 
     # The self test detached every device and emptied the cartridge window
@@ -177,6 +212,7 @@ nowarp proc rom_run_loop {
 
                 rom_run_last_fps_update_frame = rom_run_frame_count;
                 rom_run_last_fps_update_timer = timer();
+                rom_run_skip_active = rom_run_next_skip_state(rom_run_skip_active, rom_run_fps);
             }
 
             # A completed frame always refreshes the report, regardless of the progress interval.
@@ -188,25 +224,16 @@ nowarp proc rom_run_loop {
         }
 
         if ppu_frame_ready == 1 {
-            # Frame-skip when lagging: if emulated frames are >2 ahead of drawn
-            # or FPS is known to be <30, drop every other frame to keep CPU
-            # at 60Hz even when pen drawing is slow. Skipped frames still
-            # advance PPU/CPU but do not block on the sprite.
-            should_skip = 0;
-
-            if rom_run_fps > 0 and rom_run_fps < 30 {
-                if rom_run_frame_count % 2 == 0 {
-                    should_skip = 1;
-                }
-            } elif rom_run_frame_count > rom_run_frames_drawn + 2 {
-                should_skip = 1;
-            }
+            # Skipped frames still advance the PPU and CPU, but they skip the pen draw and the
+            # broadcast wait. The decision is made by rom_run_should_skip.
+            should_skip = rom_run_should_skip(rom_run_skip_active, rom_run_last_frame_skipped);
+            ppu_frame_ready = 0;
 
             if should_skip == 1 {
-                ppu_frame_ready = 0;
+                rom_run_last_frame_skipped = 1;
                 rom_run_frames_skipped = rom_run_frames_skipped + 1;
             } else {
-                ppu_frame_ready = 0;
+                rom_run_last_frame_skipped = 0;
                 rom_run_frames_drawn = rom_run_frames_drawn + 1;
                 pen_display_update_geometry;
                 broadcast_and_wait "draw frame";

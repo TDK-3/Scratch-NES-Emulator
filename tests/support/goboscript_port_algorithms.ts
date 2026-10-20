@@ -4332,3 +4332,31 @@ export function pen_display_first_y_for(scale_value: number): number {
 
     return (picture_height / 2) - (scale_value / 2) - pen_display_renderer_offset(scale_value);
 }
+
+/**
+ * Mirrors rom_run_should_skip in scratch/src/rom_run.gs: skip a completed frame only while skipping
+ * is active and the previous frame was drawn, so two skipped frames are never adjacent.
+ */
+export function rom_run_should_skip(skip_active: number, last_frame_skipped: number): number {
+    if (skip_active === 1 && last_frame_skipped === 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * Mirrors rom_run_next_skip_state in scratch/src/rom_run.gs: skipping turns on below 30 FPS and off
+ * at 55 FPS or more, and otherwise keeps its state.
+ */
+export function rom_run_next_skip_state(skip_active: number, fps: number): number {
+    if (fps > 0 && fps < 30) {
+        return 1;
+    }
+
+    if (fps >= 55) {
+        return 0;
+    }
+
+    return skip_active;
+}
