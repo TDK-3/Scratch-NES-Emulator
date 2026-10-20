@@ -2256,6 +2256,7 @@ export class GoboscriptMmc3Mapper {
         this.copy_prg_rom();
         this.copy_chr_rom();
         this.copy_trainer();
+        this.reset();
     }
 
     /** Mirror of `mmc3_prg_bank(slot)`. */

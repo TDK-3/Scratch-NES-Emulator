@@ -125,7 +125,7 @@ unstable high-byte stores, with both page-crossing and non-crossing cases, and t
 against the upstream jam bus pattern. The vector subset compares each bus operation,
 sequence boundaries, final registers, and listed RAM; it is not the full upstream corpus, which
 `npm run test:cpu-corpus` can replay from a local clone (2,560,000 scenarios in about 20 seconds). The current
-suite has 1,303 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
+suite has 1,306 tests, including build-time ROM/port-vector generator regressions, a browser-server HTTP smoke
 test, 588 cross-domain parity cases, 97 GoboScript port-algorithm comparisons against an integer-only mirror of
 the ported modules, 26 GoboScript source-lint checks, eleven GoboScript keyboard-input checks, two
 licensed APU-player integration tests (SquarePlayer also exercises the keyboard adapter), four browser

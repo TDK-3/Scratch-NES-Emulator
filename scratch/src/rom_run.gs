@@ -19,11 +19,11 @@
 # no scanline of the next frame can overwrite a row the sprite has not drawn yet. The report
 # still shows the frames, the drawn frames, the CPU cycles, and the program counter reached.
 #
-# The host keyboard is sampled once per chunk, not once per emulated frame. A frame is about
-# 29,780 cycles, so this loop spends roughly 300 chunks, and 300 yields, finishing one: a
-# per-frame sample would hand the console a key press seconds after it happened and would miss
-# a short tap altogether. src/keyboard_input.gs turns the keys that are held down into the live
-# button masks controller.gs reports, and the console still decides when to look at them, the
+# The host keyboard is sampled once every four chunks, not once per emulated frame. A frame is
+# about 29,780 cycles, so this loop spends roughly 300 bounded chunks finishing one. Polling every
+# four chunks keeps input responsive without repeating sixteen key-device lookups each time.
+# src/keyboard_input.gs turns the held keys into the live button masks controller.gs reports,
+# and the console still decides when to look at them, the
 # way a game strobes $4016 when it wants the pad. Sampling here also keeps the masks from
 # changing while a chunk runs, so a chunk never sees half of one sample.
 #
@@ -68,11 +68,16 @@ var rom_run_last_fps_update_timer = 0;
 var rom_run_start_timer = 0;
 var rom_run_frames_skipped = 0;
 
-# Chunks between host-input samples. A chunk is 500 CPU cycles, so four chunks are about 1.1 ms
-# of emulated time: a held key still reaches the console on the next sample, and the 16
-# `key_pressed` device lookups plus the ROM-load key read stop running 60 times a frame.
+# Chunks between host-input samples. Four 100-cycle chunks are 400 emulated CPU cycles; actual
+# wall-time input latency depends on how quickly the runtime completes and schedules each chunk.
 var rom_run_poll_interval_chunks = 4;
 var rom_run_poll_countdown = 0;
+
+# Refresh the visible status every 25 chunks while a frame is in progress. Without this, the
+# display keeps saying "running" until a complete 29,780-cycle frame has finished, which hides
+# whether a slow Scratch warp chunk is making forward progress.
+var rom_run_progress_interval_chunks = 25;
+var rom_run_progress_chunk_count = 0;
 
 # One summary line for the display sprite.
 var rom_run_state_text = "";
@@ -84,6 +89,8 @@ proc rom_run_start {
     rom_run_frame_count = 0;
     rom_run_frames_drawn = 0;
     rom_run_cycles = 0;
+    rom_run_poll_countdown = 0;
+    rom_run_progress_chunk_count = 0;
     rom_run_state_text = "not started";
 
     # The self test detached every device and emptied the cartridge window
@@ -153,9 +160,11 @@ nowarp proc rom_run_loop {
 
         frame_loop_run_chunk;
         rom_run_cycles = rom_run_cycles + frame_loop_chunk_cycles_run;
+        rom_run_progress_chunk_count = rom_run_progress_chunk_count + 1;
 
         if frame_loop_frame_complete == 1 {
             frame_loop_reset;
+            rom_run_progress_chunk_count = 0;
             rom_run_frame_count = rom_run_frame_count + 1;
 
             # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
@@ -170,9 +179,11 @@ nowarp proc rom_run_loop {
                 rom_run_last_fps_update_timer = timer();
             }
 
-            # The summary line is rebuilt once per emulated frame instead of once per chunk:
-            # the report cannot change faster than the counters it shows, and a chunk is only
-            # a hundred cycles of one frame.
+            # A completed frame always refreshes the report, regardless of the progress interval.
+            rom_run_update_status;
+        } elif rom_run_progress_chunk_count >= rom_run_progress_interval_chunks {
+            # Keep the live cycle and PC counters visible while a slow PPU frame is still running.
+            rom_run_progress_chunk_count = 0;
             rom_run_update_status;
         }
 
@@ -265,5 +276,6 @@ proc rom_run_update_status {
             & " cycles " & rom_run_cycles
             & " pc " & cpu_program_counter
             & " " & cartridge_board_state_text;
+        broadcast "rom run progress";
     }
 }

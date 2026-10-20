@@ -2941,6 +2941,32 @@ test("the mirrored MMC3 payload copy lands the bytes the reference board holds",
         mirror.read_pattern(address);
         assert.equal(mirror.pattern_value, reference.read_pattern(address), `banked pattern at ${address}`);
     }
+
+    // Re-loading a cartridge must restore the fresh-board bank and IRQ state, not retain the last run.
+    reference.reset();
+    mirror.write_cpu(0x8000, 0xc6);
+    mirror.write_cpu(0x8001, 3);
+    mirror.write_cpu(0xc000, 7);
+    mirror.write_cpu(0xc001, 0);
+    mirror.write_cpu(0xe001, 0);
+    mirror.observe_ppu_address(0x0000);
+    mirror.load_payload();
+
+    assert.deepEqual(mirror.bank_registers, new Array<number>(8).fill(0));
+    assert.equal(mirror.bank_select, 0);
+    assert.equal(mirror.prg_mode, 0);
+    assert.equal(mirror.chr_mode, 0);
+    assert.equal(mirror.mirroring, mirror.header_mirroring);
+    assert.equal(mirror.irq_counter, 0);
+    assert.equal(mirror.irq_enabled, 0);
+    assert.equal(mirror.irq_line_asserted, 0);
+    assert.equal(mirror.ppu_a12_high, 0);
+
+    for (const address of [0x8000, 0xa000, 0xc000, 0xe000]) {
+        const expected = reference.read_cpu(address, 0);
+        mirror.read_cpu(address);
+        assert.equal(mirror.cpu_value, expected?.value, `reloaded PRG ROM at $${address.toString(16)}`);
+    }
 });
 
 test("the mirrored MMC3 PRG bank masks match a board with enough banks to see them", () => {

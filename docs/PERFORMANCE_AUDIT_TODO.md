@@ -20,7 +20,7 @@ measurements.
 >
 > What a tick means after the 2026-10-20 pass: the source change described in the item is present in
 > `scratch/`, its mirror and `MIRROR_CONTRACT` row exist where the declaration inventory demands one, and
-> `npm test` (1305 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
+> `npm test` (1306 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
 > suites) passes. It does **not** mean the saving was measured on a running Scratch project: the measurement
 > work in section 4.10 is still blocked, so every ticked item's saving is an estimate. Items that would need
 > the compiler, a Scratch runtime, or a rendering comparison carry a written `Blocked` line instead of a
@@ -93,7 +93,7 @@ The whole catalogue below was worked through against the current source. What th
 | `src/rom_input.gs`, `src/rom_run.gs`, `src/frame_loop.gs` | staged byte count, four-chunk poll, whole-DMA batching |
 | `tests/` | mirror functions and contract rows for every new declaration, the palette-cache pin, the inlined-pixel ordering pin |
 
-Every change kept `npm test` at 1305/1305. The paragraph below about measurement still stands: these are
+The audit's earlier change set passed 1305 tests; the current work passes 1306/1306. The paragraph below about measurement still stands: these are
 structural savings, and none of them has been measured on a running Scratch project.
 
 ---
@@ -947,13 +947,14 @@ reporters. That is the number to attack.
   - Est. saving: ~2,000 calls on a DMA frame.
 
 - [ ] **F3 (P1, M) Tune the chunk size against a measurement, and make it adaptive.**
-  - **Blocked (2026-10-20):** the chunk size is a tuning decision that needs a measured frame time (S3). 500 cycles has the reasoning recorded in the source.
-  - Where: `frame_loop.gs:41-42`, `:75`.
-  - Now: 500 cycles per chunk (60 chunks per frame at ~500 cycles each after the current tuning), one
-    `wait 0` per chunk in `rom_run_loop`.
-  - Change: measure 250/500/1000/2000 for both frame time and input latency; consider a chunk size that
-    grows while the loop is keeping up and shrinks when it is not. Record the chosen value and why in this
-    file.
+  - **Partial change (2026-10-20):** set the bound to 100 cycles to shorten each synchronous warp and expose
+    progress more often. This is a responsiveness choice, not a measured throughput optimum; the GoboScript
+    compiler and TurboWarp runtime are unavailable here, so frame time and input latency remain unmeasured.
+  - Where: `scratch/src/frame_loop.gs`, `scratch/src/rom_run.gs`.
+  - Now: 100 cycles per chunk (about 300 chunks per frame); progress is reported every 25 chunks and input
+    is polled every four chunks.
+  - Remaining: measure several chunk sizes for frame time, UI responsiveness, and input latency; consider
+    adapting the size only after a repeatable runtime benchmark.
 
 - [ ] **F4 (P2, S) Run several chunks per scheduled tick.**
   - **Blocked (2026-10-20):** running several chunks per tick trades responsiveness for yield overhead; without a measurement it is a guess.
@@ -966,10 +967,11 @@ reporters. That is the number to attack.
 - [x] **F5 (P2, S) Poll the keyboard once per frame, not once per chunk.**
   - **Done (2026-10-20):** the keyboard is sampled once per four chunks.
   - Where: `keyboard_input.gs:47-117`, called from `rom_run.gs:142`.
-  - Now: 16 `key_pressed` sensor reads + 2 `controller_set_button_mask` calls per chunk; ~60 chunks per
-    frame gives ~960 sensor reads and 120 calls per frame.
-  - Change: poll every `N` chunks (N = 4 gives ~4 ms granularity at 60 fps) or once per frame (16 ms, well
-    under a human's reaction time but visible for fast games). Keep the "level, not edge" property.
+  - Now: 16 `key_pressed` sensor reads + 2 `controller_set_button_mask` calls per poll; polling once per
+    four 100-cycle chunks gives about 75 polls/frame, or ~1,200 sensor reads and 150 calls per frame.
+  - Change: poll every `N` chunks (N = 4 is four scheduler iterations; at 60 updates per second this is about
+    67 ms, before accounting for time spent emulating) or once per frame (16 ms only if frames keep pace). Keep
+    the "level, not edge" property.
   - Est. saving: up to ~900 device lookups per frame.
 
 - [x] **F6 (P2, S) Fold the ROM-load key into the same poll.**
@@ -1758,7 +1760,7 @@ These are done; do not re-propose them. Each is present in the current source an
 | Interrupt-disable read inlined in the sequence selector | `cpu_control.gs:120` |
 | Interrupt-disable sets inlined in the interrupt sequences | `cpu_sequence.gs:76`, `:88`, `:150` |
 | Branch and implied dispatch ordered by frequency | `cpu_instruction.gs:72-90`, `:147-197` |
-| Chunk size 500 and 2/3/4-cycle dot paths unrolled | `frame_loop.gs:42`, `:103-121` |
+| Chunk size 100 and instruction-batched PPU dot advancement | `scratch/src/frame_loop.gs`, `scratch/src/ppu_2c02.gs` |
 | Access log disabled while a game runs | `rom_run.gs:102` |
 | Pen color cache of 512 `#rrggbb` strings | `nes_palette.gs:26`, `:31-249` |
 | Pen draw inlined, run-length encoded, per-frame cached scale | `main.gs:62-127` |
