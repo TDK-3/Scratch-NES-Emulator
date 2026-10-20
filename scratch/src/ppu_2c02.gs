@@ -214,6 +214,10 @@ var ppu_sprite_pixel_oam_index = -1;
 var ppu_nmi_enabled = 0;
 var ppu_vram_increment = 1;
 
+# The background pattern table's base address, decoded from PPUCTRL. Every tile fetch read the
+# same two bits and multiplied them by 4096, twice per tile per line.
+var ppu_background_pattern_table = 0;
+
 # The greyscale conversion of each six-bit color index, filled once per reset by
 # ppu_greyscale_table_init so a greyscale frame reads a list instead of dividing per pixel.
 list ppu_greyscale_colors = [0; 64];
@@ -630,6 +634,7 @@ proc ppu_decode_mask_register {
 # $2007 access, and inside every NMI-output refresh.
 proc ppu_decode_control_register {
     ppu_nmi_enabled = (ppu_control_register // PPU_CONTROL_NMI_ENABLE) % 2;
+    ppu_background_pattern_table = (ppu_control_register // PPU_BACKGROUND_PATTERN_TABLE_SELECT) % 2 * 4096;
 
     if (ppu_control_register // PPU_CONTROL_VRAM_INCREMENT) % 2 == 1 {
         ppu_vram_increment = 32;
@@ -1284,11 +1289,16 @@ proc ppu_clock_rendering_pipeline {
 
     if (ppu_dot >= 1 and ppu_dot <= 256) or (ppu_dot >= 321 and ppu_dot <= 336) {
         # ppu_shift_background_registers() inlined: four shifts per fetch dot, and the
-        # call was a larger share of the dot than the shifts themselves.
-        ppu_background_pattern_low_shift = (ppu_background_pattern_low_shift * 2) % 65536;
-        ppu_background_pattern_high_shift = (ppu_background_pattern_high_shift * 2) % 65536;
-        ppu_background_attribute_low_shift = (ppu_background_attribute_low_shift * 2) % 65536;
-        ppu_background_attribute_high_shift = (ppu_background_attribute_high_shift * 2) % 65536;
+        # call was a larger share of the dot than the shifts themselves. With the background
+        # disabled the pixel path never reads the shifters, so the four multiplies and
+        # modulos are skipped entirely on the frames and scanlines that show sprites only.
+        if ppu_mask_background_enable == 1 {
+            ppu_background_pattern_low_shift = (ppu_background_pattern_low_shift * 2) % 65536;
+            ppu_background_pattern_high_shift = (ppu_background_pattern_high_shift * 2) % 65536;
+            ppu_background_attribute_low_shift = (ppu_background_attribute_low_shift * 2) % 65536;
+            ppu_background_attribute_high_shift = (ppu_background_attribute_high_shift * 2) % 65536;
+        }
+
         fetch_phase = ppu_dot % 8;
 
         if fetch_phase == 0 {
@@ -1384,19 +1394,19 @@ proc ppu_fetch_background_attribute {
 
 # Fetches the low pattern plane byte for the next background tile.
 proc ppu_fetch_background_pattern_low {
-    local pattern_table = ((ppu_control_register // PPU_BACKGROUND_PATTERN_TABLE_SELECT) % 2) * 4096;
+    local pattern_base = ppu_background_pattern_table;
     local fine_y = (ppu_vram_address // 4096) % 8;
 
-    ppu_bus_read_pattern_window pattern_table + (ppu_next_background_tile * PPU_PATTERN_BYTES_PER_TILE) + fine_y;
+    ppu_bus_read_pattern_window pattern_base + (ppu_next_background_tile * PPU_PATTERN_BYTES_PER_TILE) + fine_y;
     ppu_next_background_pattern_low = ppu_bus_read_value;
 }
 
 # Fetches the high pattern plane byte for the next background tile.
 proc ppu_fetch_background_pattern_high {
-    local pattern_table = ((ppu_control_register // PPU_BACKGROUND_PATTERN_TABLE_SELECT) % 2) * 4096;
+    local pattern_base = ppu_background_pattern_table;
     local fine_y = (ppu_vram_address // 4096) % 8;
 
-    ppu_bus_read_pattern_window pattern_table
+    ppu_bus_read_pattern_window pattern_base
         + (ppu_next_background_tile * PPU_PATTERN_BYTES_PER_TILE)
         + fine_y
         + PPU_PATTERN_HIGH_PLANE_OFFSET;
@@ -1425,6 +1435,7 @@ proc ppu_evaluate_sprites_for_next_scanline {
     local evaluation_done = 0;
     local checking_overflow = 0;
     local candidate_address = 0;
+    local candidate_base = 0;
     local candidate_row = 0;
     local slot_index = 0;
     local copy_index = 1;
@@ -1448,7 +1459,9 @@ proc ppu_evaluate_sprites_for_next_scanline {
             checking_overflow = 1;
         }
 
-        candidate_address = (oam_index * PPU_BYTES_PER_SPRITE);
+        # The OAM byte offset is carried forward by four per entry instead of multiplied out
+        # of the index on all sixty-four candidates of every evaluated line.
+        candidate_address = candidate_base;
 
         if checking_overflow == 1 {
             candidate_address = candidate_address + overflow_offset;
@@ -1486,6 +1499,7 @@ proc ppu_evaluate_sprites_for_next_scanline {
             elapsed_dots = elapsed_dots + 8;
         }
 
+        candidate_base = candidate_base + PPU_BYTES_PER_SPRITE;
         oam_index = oam_index + 1;
     }
 
@@ -1494,13 +1508,16 @@ proc ppu_evaluate_sprites_for_next_scanline {
     if target_scanline == 0 {
         ppu_line_zero_sprite_count = found_count;
 
-            repeat PPU_SECONDARY_SPRITE_LIMIT {
-                ppu_line_zero_sprite_y[copy_index] = to_number(ppu_secondary_sprite_y[copy_index]);
-                ppu_line_zero_sprite_tile[copy_index] = to_number(ppu_secondary_sprite_tile[copy_index]);
-                ppu_line_zero_sprite_attributes[copy_index] = to_number(ppu_secondary_sprite_attributes[copy_index]);
-                ppu_line_zero_sprite_x[copy_index] = to_number(ppu_secondary_sprite_x[copy_index]);
-                ppu_line_zero_sprite_oam_index[copy_index] = to_number(ppu_secondary_sprite_oam_index[copy_index]);
-                ppu_line_zero_sprite_row[copy_index] = to_number(ppu_secondary_sprite_row[copy_index]);
+            # Only the slots the evaluation filled are copied: a line with two sprites copies
+            # two entries instead of eight, and every source value is already a number, so the
+            # six coercions per slot are gone as well.
+            repeat found_count {
+                ppu_line_zero_sprite_y[copy_index] = ppu_secondary_sprite_y[copy_index];
+                ppu_line_zero_sprite_tile[copy_index] = ppu_secondary_sprite_tile[copy_index];
+                ppu_line_zero_sprite_attributes[copy_index] = ppu_secondary_sprite_attributes[copy_index];
+                ppu_line_zero_sprite_x[copy_index] = ppu_secondary_sprite_x[copy_index];
+                ppu_line_zero_sprite_oam_index[copy_index] = ppu_secondary_sprite_oam_index[copy_index];
+                ppu_line_zero_sprite_row[copy_index] = ppu_secondary_sprite_row[copy_index];
                 copy_index = copy_index + 1;
             }
         }

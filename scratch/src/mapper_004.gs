@@ -522,7 +522,11 @@ proc mmc3_read_cpu address {
             }
         }
 
-        offset = ((prg_bank % mmc3_prg_bank_count) * mmc3_limit.prg_bank_bytes) + (numeric_address % 8192);
+        # The slot is already the bank-aligned quotient, so the offset inside the bank is the
+        # address minus the window start minus the slot's own span: one multiply and two
+        # subtractions replace a second modulo on every PRG ROM read.
+        offset = ((prg_bank % mmc3_prg_bank_count) * mmc3_limit.prg_bank_bytes)
+            + (numeric_address - mmc3_limit.prg_rom_start - (slot * mmc3_limit.prg_bank_bytes));
         mmc3_cpu_mapped = 1;
         mmc3_cpu_value = mmc3_prg_rom[offset + 1];
         mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
@@ -557,10 +561,14 @@ proc mmc3_write_cpu address, value {
 # Reads one pattern-table byte from the CHR bank its slot selects, out of CHR ROM when the board has
 # it and out of CHR RAM otherwise. Uses the cache built on register writes to avoid per-dot decode.
 proc mmc3_read_pattern address {
-    local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
+    # The PPU bus has already folded the address into the 16 KiB pattern space, and 16384
+    # divides 65536, so the two-step mask is one modulo. The offset inside the 1 KiB CHR bank
+    # is the address minus the slot's own span rather than a second modulo.
+    local numeric_address = $address % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
     local chr_bank = mmc3_chr_bank_cache[slot + 1];
-    local offset = (chr_bank * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
+    local offset = (chr_bank * mmc3_limit.chr_bank_bytes)
+        + (numeric_address - (slot * mmc3_limit.chr_bank_bytes));
     mmc3_pattern_value = 0;
 
     if mmc3_chr_rom_bytes > 0 {
@@ -572,10 +580,11 @@ proc mmc3_read_pattern address {
 
 # Writes one pattern-table byte. A CHR ROM board drops the write, as the reference does.
 proc mmc3_write_pattern address, value {
-    local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
+    local numeric_address = $address % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
     local chr_bank = mmc3_chr_bank_cache[slot + 1];
-    local offset = (chr_bank * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
+    local offset = (chr_bank * mmc3_limit.chr_bank_bytes)
+        + (numeric_address - (slot * mmc3_limit.chr_bank_bytes));
     mmc3_pattern_write_accepted = 0;
 
     if mmc3_chr_ram_bytes > 0 {
