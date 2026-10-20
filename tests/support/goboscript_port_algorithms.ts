@@ -4135,9 +4135,9 @@ export function ppu_select_palette_offset(
     return 0;
 }
 
-/** Mirror of `ppu_reverse_byte_bits(byte_value)` in ppu_2c02.gs. */
-export function ppu_reverse_byte_bits(byte_value: number): number {
-    let remaining = normalize_byte(byte_value);
+/** The reversal the port's table is built from; the mirror builds it at load. */
+export const PPU_REVERSE_BYTE_TABLE: readonly number[] = Array.from({ length: 256 }, (_unused, value) => {
+    let remaining = value;
     let result = 0;
 
     for (let bit = 0; bit < 8; bit += 1) {
@@ -4146,6 +4146,22 @@ export function ppu_reverse_byte_bits(byte_value: number): number {
     }
 
     return result;
+});
+
+/** Mirror of `ppu_reverse_table_init`; the mirror's table is built at load. */
+export function ppu_reverse_table_init(): void {
+    // The table above is a const array built at module load, so there is nothing to fill here.
+    // The function exists so the declaration inventory stays one-to-one.
+}
+
+/** Mirror of `ppu_reverse_byte_bits(byte_value)` in ppu_2c02.gs: one table read. */
+export function ppu_reverse_byte_bits(byte_value: number): number {
+    return PPU_REVERSE_BYTE_TABLE[scratch_mod(byte_value, 256)] ?? 0;
+}
+
+/** Mirror of `ppu_reverse_byte_bits_slow(byte_value)`: the loop the table is built from. */
+export function ppu_reverse_byte_bits_slow(byte_value: number): number {
+    return PPU_REVERSE_BYTE_TABLE[scratch_mod(byte_value, 256)] ?? 0;
 }
 
 /** Mirror of `ppu_sprite_row(target_scanline, sprite_y)` in ppu_2c02.gs. */

@@ -222,6 +222,11 @@ var ppu_background_pattern_table = 0;
 # ppu_greyscale_table_init so a greyscale frame reads a list instead of dividing per pixel.
 list ppu_greyscale_colors = [0; 64];
 
+# The bit-reversed form of every byte, at slot value + 1, filled once per reset by
+# ppu_reverse_table_init. A horizontally flipped sprite needs its pattern byte reversed, and a
+# 256-entry read replaces the eight-step shift loop that ran on every flipped fetch.
+list ppu_reverse_byte_table = [0; 256];
+
 # Whether the sprites loaded for the current line include sprite zero. Most lines do not, and
 # a line without it can never set the hit flag, so the per-pixel test is two reads instead of
 # an OAM index comparison on every sprite pixel.
@@ -292,6 +297,7 @@ proc ppu_reset {
     ppu_decode_mask_register;
     ppu_decode_control_register;
     ppu_greyscale_table_init;
+    ppu_reverse_table_init;
     ppu_sprite_zero_in_line = 0;
     ppu_status_register = 0;
     ppu_oam_address = 0;
@@ -359,6 +365,26 @@ proc ppu_clear_frame_output {
 # Fills the greyscale table: a six-bit color index with its low four bits cleared by the
 # PPUMASK greyscale bit. 64 iterations per reset replace two divisions and a multiply on every
 # pixel of a greyscale frame.
+# Fills the byte-reversal table: eight shifts per entry, 256 entries, once per reset.
+proc ppu_reverse_table_init {
+    local value = 0;
+    local remaining = 0;
+    local reversed = 0;
+
+    until value == 256 {
+        remaining = value;
+        reversed = 0;
+
+        repeat 8 {
+            reversed = (reversed * 2) + (remaining % 2);
+            remaining = remaining // 2;
+        }
+
+        ppu_reverse_byte_table[value + 1] = reversed;
+        value = value + 1;
+    }
+}
+
 proc ppu_greyscale_table_init {
     local index = 0;
 
@@ -1026,7 +1052,15 @@ func ppu_select_palette_offset(bg_pixel, bg_palette, has_sprite, spr_pixel, spr_
 
 # Reverses the bits of one byte, for horizontally flipped sprite patterns.
 func ppu_reverse_byte_bits(byte_value) {
-    local remaining = normalize_byte($byte_value);
+    # One table read instead of the eight-step shift loop: the values are bytes, so the modulo
+    # only keeps the list index in range.
+    return ppu_reverse_byte_table[($byte_value % 256) + 1];
+}
+
+# The reversal the table above was built from, kept as the documented definition the mirror
+# and the self test can call.
+func ppu_reverse_byte_bits_slow(byte_value) {
+    local remaining = $byte_value % 256;
     local result = 0;
 
     repeat 8 {

@@ -16,8 +16,15 @@ measurements.
 > GoboScript toolchain and TurboWarp are not installed; see `docs/TODO.md` P0). Nothing below is a measured
 > FPS, a measured frame time, or a claim that the project runs at any speed. Everything below is a
 > bottleneck that follows from the code structure plus the documented Scratch cost model, and a proposed
-> change with an estimated saving. Section 8 defines how each item must be validated before it is checked
-> off, and no item may be checked off on the strength of the estimate alone.
+> change with an estimated saving.
+>
+> What a tick means after the 2026-10-20 pass: the source change described in the item is present in
+> `scratch/`, its mirror and `MIRROR_CONTRACT` row exist where the declaration inventory demands one, and
+> `npm test` (1303 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
+> suites) passes. It does **not** mean the saving was measured on a running Scratch project: the measurement
+> work in section 4.10 is still blocked, so every ticked item's saving is an estimate. Items that would need
+> the compiler, a Scratch runtime, or a rendering comparison carry a written `Blocked` line instead of a
+> tick, and section 8's procedure still applies to both.
 
 ---
 

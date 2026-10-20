@@ -836,6 +836,16 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_select_palette_offset", mirror: "ppu_select_palette_offset" },
     {
         source: "src/ppu_2c02.gs",
+        declaration: "ppu_reverse_table_init",
+        mirror: "ppu_reverse_table_init",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_reverse_byte_bits_slow",
+        mirror: "ppu_reverse_byte_bits_slow",
+    },
+    {
+        source: "src/ppu_2c02.gs",
         declaration: "ppu_decode_control_register",
         mirror: null,
         reason: "caches two PPUCTRL fields the rendering pipeline reads; the mirror decodes them where it needs them",
