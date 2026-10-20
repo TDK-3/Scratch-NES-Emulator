@@ -32,10 +32,15 @@ costumes "assets/blank.svg";
 # has set a color yet in this frame. Sprite-local display state, not emulator state.
 var pen_current_color_key = 512;
 
+# The pen attributes the extension was last set to, so a frame that does not change the fit
+# scale does not repeat two extension calls per frame. -1 means "never set".
+var pen_applied_size = -1;
+var pen_applied_transparency = -1;
+
 onflag {
     pen_up;
     erase_all;
-    say "Running the shared port vectors...";
+    say "Starting the console...";
 }
 
 on "port self test done" {
@@ -71,11 +76,21 @@ proc pen_draw_frame {
     local cached_scale = 0;
     local cached_first_x = 0;
 
-    say "";
     pen_up;
     erase_all;
-    set_pen_size pen_display_scale;
-    set_pen_transparency 0;
+
+    # The pen size and transparency only change when the fit setting does, so they are set on
+    # the frame that changes them instead of on all sixty frames a second.
+    if pen_applied_size != pen_display_scale {
+        pen_applied_size = pen_display_scale;
+        set_pen_size pen_display_scale;
+    }
+
+    if pen_applied_transparency != 0 {
+        pen_applied_transparency = 0;
+        set_pen_transparency 0;
+    }
+
     pen_current_color_key = 512;
     cached_scale = pen_display_scale;
     cached_first_x = pen_display_first_x;

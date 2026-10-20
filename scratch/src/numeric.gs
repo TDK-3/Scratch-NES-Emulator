@@ -17,10 +17,14 @@
 #   and inline the arithmetic they need.
 # - A bitwise AND used to walk one bit per iteration (16 iterations of modulus, division,
 #   comparison and addition) for every masked bus read. It now looks up the low and high
-#   nibble pair in 256-entry tables. The AND table answers AND, the OR table answers OR,
-#   and the XOR table answers XOR, each via two lookups for a byte and four for a word,
-#   without deriving OR/XOR from AND arithmetic. src/bitwise_tables.gs fills them from the
-#   Stage's green flag before anything reads a bus byte.
+#   nibble pair in 256-entry tables. The AND table answers AND, the OR table answers OR, and
+#   the XOR table answers XOR, each via two lookups for a byte and four for a word, without
+#   deriving OR/XOR from AND arithmetic. src/bitwise_tables.gs fills them from the Stage's
+#   green flag before anything reads a bus byte.
+# - The byte entry points skip the word normalization and the width test: the console's own
+#   values are bytes by construction at those call sites, and one "% 256" still guards the
+#   list index. Use them where the operand is known to be a byte, and the general helpers
+#   everywhere the operand may be a word.
 
 %include src/bitwise_tables
 
@@ -85,90 +89,105 @@ func bit_at(value, weight) {
 }
 
 # Bitwise AND over 16 bits, through the nibble table. Both operands are bytes for nearly every
-# caller in the console, so the byte case takes a two-lookup path and only a wider pair pays
+# caller in the console, so the byte case takes the two-lookup path and only a wider pair pays
 # for the full 16-bit split.
 func bitwise_and(left, right) {
     local left_word = $left % 65536;
     local right_word = $right % 65536;
+    local result = 0;
 
     if left_word < 256 and right_word < 256 {
-        return bitwise_table_byte_and[left_word * 256 + right_word + 1];
+        result = bitwise_table_and[(left_word // 16) * 16 + (right_word // 16) + 1] * 16;
+
+        return result + bitwise_table_and[(left_word % 16) * 16 + (right_word % 16) + 1];
     }
 
     local left_high = left_word // 256;
     local right_high = right_word // 256;
     local left_low = left_word % 256;
     local right_low = right_word % 256;
-    local left_high_high = left_high // 16;
-    local right_high_high = right_high // 16;
-    local left_high_low = left_high % 16;
-    local right_high_low = right_high % 16;
-    local left_low_high = left_low // 16;
-    local right_low_high = right_low // 16;
-    local left_low_low = left_low % 16;
-    local right_low_low = right_low % 16;
-    local high_nibbles = bitwise_table_and[left_high_high * 16 + right_high_high + 1];
-    local high_bits = bitwise_table_and[left_high_low * 16 + right_high_low + 1];
-    local low_nibbles = bitwise_table_and[left_low_high * 16 + right_low_high + 1];
-    local low_bits = bitwise_table_and[left_low_low * 16 + right_low_low + 1];
 
-    return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
+    result = (bitwise_table_and[(left_high // 16) * 16 + (right_high // 16) + 1] * 16)
+        + bitwise_table_and[(left_high % 16) * 16 + (right_high % 16) + 1];
+
+    return (result * 256)
+        + (bitwise_table_and[(left_low // 16) * 16 + (right_low // 16) + 1] * 16)
+        + bitwise_table_and[(left_low % 16) * 16 + (right_low % 16) + 1];
 }
 
-# Bitwise OR over 16 bits, through the nibble OR table.
+# Bitwise OR over 16 bits, through the nibble table.
 func bitwise_or(left, right) {
     local left_word = $left % 65536;
     local right_word = $right % 65536;
+    local result = 0;
 
     if left_word < 256 and right_word < 256 {
-        return bitwise_table_byte_or[left_word * 256 + right_word + 1];
+        result = bitwise_table_or[(left_word // 16) * 16 + (right_word // 16) + 1] * 16;
+
+        return result + bitwise_table_or[(left_word % 16) * 16 + (right_word % 16) + 1];
     }
 
     local left_high = left_word // 256;
     local right_high = right_word // 256;
     local left_low = left_word % 256;
     local right_low = right_word % 256;
-    local left_high_high = left_high // 16;
-    local right_high_high = right_high // 16;
-    local left_high_low = left_high % 16;
-    local right_high_low = right_high % 16;
-    local left_low_high = left_low // 16;
-    local right_low_high = right_low // 16;
-    local left_low_low = left_low % 16;
-    local right_low_low = right_low % 16;
-    local high_nibbles = bitwise_table_or[left_high_high * 16 + right_high_high + 1];
-    local high_bits = bitwise_table_or[left_high_low * 16 + right_high_low + 1];
-    local low_nibbles = bitwise_table_or[left_low_high * 16 + right_low_high + 1];
-    local low_bits = bitwise_table_or[left_low_low * 16 + right_low_low + 1];
 
-    return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
+    result = (bitwise_table_or[(left_high // 16) * 16 + (right_high // 16) + 1] * 16)
+        + bitwise_table_or[(left_high % 16) * 16 + (right_high % 16) + 1];
+
+    return (result * 256)
+        + (bitwise_table_or[(left_low // 16) * 16 + (right_low // 16) + 1] * 16)
+        + bitwise_table_or[(left_low % 16) * 16 + (right_low % 16) + 1];
 }
 
-# Bitwise XOR over 16 bits, through the nibble XOR table.
+# Bitwise XOR over 16 bits, through the nibble table.
 func bitwise_xor(left, right) {
     local left_word = $left % 65536;
     local right_word = $right % 65536;
+    local result = 0;
 
     if left_word < 256 and right_word < 256 {
-        return bitwise_table_byte_xor[left_word * 256 + right_word + 1];
+        result = bitwise_table_xor[(left_word // 16) * 16 + (right_word // 16) + 1] * 16;
+
+        return result + bitwise_table_xor[(left_word % 16) * 16 + (right_word % 16) + 1];
     }
 
     local left_high = left_word // 256;
     local right_high = right_word // 256;
     local left_low = left_word % 256;
     local right_low = right_word % 256;
-    local left_high_high = left_high // 16;
-    local right_high_high = right_high // 16;
-    local left_high_low = left_high % 16;
-    local right_high_low = right_high % 16;
-    local left_low_high = left_low // 16;
-    local right_low_high = right_low // 16;
-    local left_low_low = left_low % 16;
-    local right_low_low = right_low % 16;
-    local high_nibbles = bitwise_table_xor[left_high_high * 16 + right_high_high + 1];
-    local high_bits = bitwise_table_xor[left_high_low * 16 + right_high_low + 1];
-    local low_nibbles = bitwise_table_xor[left_low_high * 16 + right_low_high + 1];
-    local low_bits = bitwise_table_xor[left_low_low * 16 + right_low_low + 1];
 
-    return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
+    result = (bitwise_table_xor[(left_high // 16) * 16 + (right_high // 16) + 1] * 16)
+        + bitwise_table_xor[(left_high % 16) * 16 + (right_high % 16) + 1];
+
+    return (result * 256)
+        + (bitwise_table_xor[(left_low // 16) * 16 + (right_low // 16) + 1] * 16)
+        + bitwise_table_xor[(left_low % 16) * 16 + (right_low % 16) + 1];
+}
+
+# Byte-specialized entry points: no width test and no 16-bit split, just the "% 256" that keeps
+# a list index in range. The console's masks, flag tests, and controller words are bytes by
+# construction, so callers that know that use these and skip two comparisons per call.
+func bitwise_and_byte(left, right) {
+    local left_byte = $left % 256;
+    local right_byte = $right % 256;
+
+    return (bitwise_table_and[(left_byte // 16) * 16 + (right_byte // 16) + 1] * 16)
+        + bitwise_table_and[(left_byte % 16) * 16 + (right_byte % 16) + 1];
+}
+
+func bitwise_or_byte(left, right) {
+    local left_byte = $left % 256;
+    local right_byte = $right % 256;
+
+    return (bitwise_table_or[(left_byte // 16) * 16 + (right_byte // 16) + 1] * 16)
+        + bitwise_table_or[(left_byte % 16) * 16 + (right_byte % 16) + 1];
+}
+
+func bitwise_xor_byte(left, right) {
+    local left_byte = $left % 256;
+    local right_byte = $right % 256;
+
+    return (bitwise_table_xor[(left_byte // 16) * 16 + (right_byte // 16) + 1] * 16)
+        + bitwise_table_xor[(left_byte % 16) * 16 + (right_byte % 16) + 1];
 }

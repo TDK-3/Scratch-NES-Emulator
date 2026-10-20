@@ -160,9 +160,31 @@ proc cpu_check_opcode_table {
     }
 }
 
+# Converts the generated list from the strings a file-backed list loads into to the numbers
+# every decode wants. Runs once at boot, from the Stage's green flag, before the self test or
+# the first instruction: 1,538 coercions paid once instead of four per decoded instruction for
+# the life of the run.
+#
+# This is the port's accepted form of "emit the table as numeric literals". A generated .gs
+# header would need the build to create a project source, and the source lint requires every
+# include directive to resolve to a checked-in file, so the table stays a data list and is
+# normalized here instead.
+proc cpu_opcode_table_normalize {
+    local index = 1;
+
+    until index > cpu_opcode_layout.header_values
+        + (cpu_opcode_layout.opcode_count * cpu_opcode_layout.fields_per_opcode) {
+        cpu_opcode_table[index] = cpu_opcode_table[index] + "";
+        index = index + 1;
+    }
+}
+
 # Decodes one opcode byte into the cpu_opcode_* globals. Every byte from 0 through 255 is
 # defined by the reference table, so a zero mnemonic id means the generated list did not load
 # or is out of date rather than that the opcode is unknown; the error code records that.
+#
+# This is the full six-field decode, used by the shared-vector self test, which compares all
+# six fields with the reference. The running console uses cpu_decode_opcode_hot below.
 proc cpu_decode_opcode opcode {
     local numeric_opcode = $opcode % 256;
     local record_start = (cpu_opcode_layout.header_values + 1)
@@ -177,6 +199,28 @@ proc cpu_decode_opcode opcode {
     cpu_opcode_access = cpu_opcode_table[record_start + cpu_opcode_field.operand_access] + "";
     cpu_opcode_page_cross_cycle = cpu_opcode_table[record_start + cpu_opcode_field.page_cross_cycle] + "";
     cpu_opcode_official = cpu_opcode_table[record_start + cpu_opcode_field.official] + "";
+    cpu_opcode_error = cpu_opcode_error_code.none;
+
+    if cpu_opcode_mnemonic == 0 {
+        cpu_opcode_error = cpu_opcode_error_code.unknown_opcode;
+    }
+}
+
+# Decodes the four fields an executing instruction reads: mnemonic, addressing mode, operand
+# access, and the official flag. The base cycle count and the page-cross flag are read only by
+# the self test's opcode vectors, so the hot path does not pay two list reads for them.
+#
+# The list is numeric by the time this runs (cpu_opcode_table_normalize), so no field needs the
+# "+ \"\"" coercion the full decode keeps as a guard against a list that was never normalized.
+proc cpu_decode_opcode_hot opcode {
+    local numeric_opcode = $opcode % 256;
+    local record_start = (cpu_opcode_layout.header_values + 1)
+        + (numeric_opcode * cpu_opcode_layout.fields_per_opcode);
+
+    cpu_opcode_mnemonic = cpu_opcode_table[record_start + cpu_opcode_field.mnemonic];
+    cpu_opcode_mode = cpu_opcode_table[record_start + cpu_opcode_field.addressing_mode];
+    cpu_opcode_access = cpu_opcode_table[record_start + cpu_opcode_field.operand_access];
+    cpu_opcode_official = cpu_opcode_table[record_start + cpu_opcode_field.official];
     cpu_opcode_error = cpu_opcode_error_code.none;
 
     if cpu_opcode_mnemonic == 0 {

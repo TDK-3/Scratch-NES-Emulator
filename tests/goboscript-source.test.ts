@@ -162,6 +162,9 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/numeric.gs", declaration: "bitwise_and", mirror: "bitwise_and" },
     { source: "src/numeric.gs", declaration: "bitwise_or", mirror: "bitwise_or" },
     { source: "src/numeric.gs", declaration: "bitwise_xor", mirror: "bitwise_xor" },
+    { source: "src/numeric.gs", declaration: "bitwise_and_byte", mirror: "bitwise_and_byte" },
+    { source: "src/numeric.gs", declaration: "bitwise_or_byte", mirror: "bitwise_or_byte" },
+    { source: "src/numeric.gs", declaration: "bitwise_xor_byte", mirror: "bitwise_xor_byte" },
     {
         source: "src/bitwise_tables.gs",
         declaration: "bitwise_table_init",
@@ -173,24 +176,42 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_status.gs", declaration: "set_status_flag", mirror: "set_status_flag" },
     {
         source: "src/cpu_status.gs",
+        declaration: "cpu_status_table_init",
+        mirror: "cpu_status_table_init",
+    },
+    {
+        source: "src/cpu_status.gs",
         declaration: "update_zero_negative_flags",
         mirror: "update_zero_negative_flags",
     },
     { source: "src/cpu_status.gs", declaration: "pack_status_for_stack", mirror: "pack_status_for_stack" },
     { source: "src/cpu_status.gs", declaration: "unpack_status_from_stack", mirror: "unpack_status_from_stack" },
     { source: "src/cpu_alu.gs", declaration: "alu_add_with_carry", mirror: "alu_add_with_carry" },
+    { source: "src/cpu_alu.gs", declaration: "alu_add_with_carry_byte", mirror: "alu_add_with_carry_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_subtract_with_carry", mirror: "alu_subtract_with_carry" },
+    { source: "src/cpu_alu.gs", declaration: "alu_subtract_with_carry_byte", mirror: "alu_subtract_with_carry_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_and", mirror: "alu_and" },
+    { source: "src/cpu_alu.gs", declaration: "alu_and_byte", mirror: "alu_and_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_ora", mirror: "alu_ora" },
+    { source: "src/cpu_alu.gs", declaration: "alu_ora_byte", mirror: "alu_ora_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_eor", mirror: "alu_eor" },
+    { source: "src/cpu_alu.gs", declaration: "alu_eor_byte", mirror: "alu_eor_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_shift_left", mirror: "alu_shift_left" },
+    { source: "src/cpu_alu.gs", declaration: "alu_shift_left_byte", mirror: "alu_shift_left_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_shift_right", mirror: "alu_shift_right" },
+    { source: "src/cpu_alu.gs", declaration: "alu_shift_right_byte", mirror: "alu_shift_right_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_rotate_left", mirror: "alu_rotate_left" },
+    { source: "src/cpu_alu.gs", declaration: "alu_rotate_left_byte", mirror: "alu_rotate_left_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_rotate_right", mirror: "alu_rotate_right" },
+    { source: "src/cpu_alu.gs", declaration: "alu_rotate_right_byte", mirror: "alu_rotate_right_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_compare", mirror: "alu_compare" },
+    { source: "src/cpu_alu.gs", declaration: "alu_compare_byte", mirror: "alu_compare_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_bit_test", mirror: "alu_bit_test" },
+    { source: "src/cpu_alu.gs", declaration: "alu_bit_test_byte", mirror: "alu_bit_test_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_increment", mirror: "alu_increment" },
+    { source: "src/cpu_alu.gs", declaration: "alu_increment_byte", mirror: "alu_increment_byte" },
     { source: "src/cpu_alu.gs", declaration: "alu_decrement", mirror: "alu_decrement" },
+    { source: "src/cpu_alu.gs", declaration: "alu_decrement_byte", mirror: "alu_decrement_byte" },
     { source: "src/controller.gs", declaration: "controller_reset", mirror: "GoboscriptControllerPorts.reset" },
     {
         source: "src/controller.gs",
@@ -213,6 +234,11 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_read_io", mirror: "GoboscriptCpuBus.read_io" },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_write", mirror: "GoboscriptCpuBus.write" },
     { source: "src/cpu_bus.gs", declaration: "cpu_clock_dma_cycle", mirror: "GoboscriptCpuBus.clock_dma_cycle" },
+    {
+        source: "src/cpu_bus.gs",
+        declaration: "cpu_bus_run_dma",
+        mirror: "GoboscriptCpuBus.run_dma",
+    },
     { source: "src/cpu_bus.gs", declaration: "cpu_bus_clear_ram", mirror: "GoboscriptCpuBus.clear_ram" },
     {
         source: "src/cpu_core.gs",
@@ -321,6 +347,16 @@ const MIRROR_CONTRACT: readonly {
         source: "src/cpu_opcode.gs",
         declaration: "cpu_decode_opcode",
         mirror: "GoboscriptCpuOpcodeDecoder.decode",
+    },
+    {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_opcode_table_normalize",
+        mirror: "GoboscriptCpuOpcodeDecoder.normalize_table",
+    },
+    {
+        source: "src/cpu_opcode.gs",
+        declaration: "cpu_decode_opcode_hot",
+        mirror: "GoboscriptCpuOpcodeDecoder.decode_hot",
     },
     {
         source: "src/cpu_sequence.gs",
@@ -752,6 +788,12 @@ const MIRROR_CONTRACT: readonly {
         mirror: null,
         reason: "writes the precomputed PPUMASK fields the renderer and dot loop read per pixel",
     },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_refresh_output_terms",
+        mirror: null,
+        reason: "caches the emphasis and backdrop terms the pixel path would recompute per pixel",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_control_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_scroll_register", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_write_address_register", mirror: null, reason: "ppu pending mirror" },
@@ -760,6 +802,18 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_increment_vram_address", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_clock_ppu_dot", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_clock_cpu_cycle", mirror: null, reason: "ppu pending mirror" },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_run_dots",
+        mirror: null,
+        reason: "batched dot loop the frame loop drives once per instruction",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_clock_cpu_cycles",
+        mirror: null,
+        reason: "one call per instruction that clocks three dots per CPU cycle",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_advance_dot", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_is_rendering_enabled", mirror: null, reason: "ppu pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_is_visible_or_pre_render_scanline", mirror: null, reason: "ppu pending mirror" },
@@ -781,6 +835,28 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_clear_frame_output", mirror: null, reason: "ppu rendering pending mirror" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_shift_pixel", mirror: "ppu_shift_pixel" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_select_palette_offset", mirror: "ppu_select_palette_offset" },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_reverse_table_init",
+        mirror: "ppu_reverse_table_init",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_reverse_byte_bits_slow",
+        mirror: "ppu_reverse_byte_bits_slow",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_decode_control_register",
+        mirror: null,
+        reason: "caches two PPUCTRL fields the rendering pipeline reads; the mirror decodes them where it needs them",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_greyscale_table_init",
+        mirror: null,
+        reason: "fills the 64-entry greyscale list; the mirror has no PPU rendering pipeline to feed",
+    },
     { source: "src/ppu_2c02.gs", declaration: "ppu_reverse_byte_bits", mirror: "ppu_reverse_byte_bits" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_sprite_row", mirror: "ppu_sprite_row" },
     { source: "src/ppu_2c02.gs", declaration: "ppu_sprite_pattern_address", mirror: "ppu_sprite_pattern_address" },
@@ -1095,6 +1171,32 @@ test("only the Stage declares shared state", () => {
     }
 });
 
+test("no translation unit declares the same name twice", () => {
+    // GoboScript rejects a second declaration of a name in one translation unit, so a duplicate
+    // header declaration or a leftover copy of a variable is a build error rather than a quiet
+    // shadow. Locals and arguments are per-body and are not collected here: they repeat by
+    // design, and an enum name is its own namespace (the port pairs an enum with a variable of
+    // the same name on purpose, as in cpu_dma_phase).
+    for (const source of sources) {
+        const declarations = new Map<string, string[]>();
+
+        for (const path of [source.path, ...collect_includes(source)]) {
+            const unit = get_source(path);
+
+            for (const declaration of unit.declarations) {
+                const locations = declarations.get(declaration.name) ?? [];
+                locations.push(`${path}:${declaration.line}`);
+                declarations.set(declaration.name, locations);
+            }
+
+        }
+
+        for (const [name, locations] of declarations) {
+            assert.ok(locations.length === 1, `${source.path}: "${name}" is declared twice (${locations.join(", ")})`);
+        }
+    }
+});
+
 test("no proc returns and every func ends with a return", () => {
     for (const source of sources) {
         for (const declaration of source.declarations) {
@@ -1117,6 +1219,65 @@ test("no proc returns and every func ends with a return", () => {
             assert.match(last, /^return\b/, `${location}: func ${declaration.name} does not end with a return`);
         }
     }
+});
+
+test("a closing brace is indented with the line that opened its block", () => {
+    // A body left at its opener's indent still compiles (the language is brace-delimited), so
+    // nothing else in this file would notice it. It does make a nested block read as a sibling,
+    // which is how the sprite-evaluation body shipped one level short. A wrapped condition puts
+    // its brace on a continuation line, so the opener is the statement's first line.
+    const continuations = /^(and|or|&|\+|-|\*|\/)/;
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        const openers: { indent: number; line: number }[] = [];
+        let statement_indent = 0;
+        let statement_line = 0;
+
+        for (const [index, line] of source.lines.entries()) {
+            const trimmed = strip_comments_and_strings(line).trim();
+
+            if (trimmed === "" || trimmed.startsWith("%")) {
+                continue;
+            }
+
+            const indent = line.length - line.trimStart().length;
+            const closes_first = trimmed.startsWith("}");
+
+            if (closes_first) {
+                const opener = openers.pop();
+                assert.ok(opener, `${source.path}:${index + 1}: closing brace with no opener`);
+
+                if (opener?.indent !== indent) {
+                    violations.push(
+                        `${source.path}:${index + 1}: closes a block opened at column ${opener?.indent} on line ${opener?.line}`,
+                    );
+                }
+
+                // A `} else {` chain opens its next block on the closing line itself.
+                statement_indent = indent;
+                statement_line = index + 1;
+            } else if (!continuations.test(trimmed)) {
+                statement_indent = indent;
+                statement_line = index + 1;
+            }
+
+            const opens = (trimmed.match(/\{/g) ?? []).length;
+            const closes = (trimmed.match(/\}/g) ?? []).length - (closes_first ? 1 : 0);
+
+            for (let count = 0; count < opens; count++) {
+                openers.push({ indent: statement_indent, line: statement_line });
+            }
+
+            for (let count = 0; count < closes; count++) {
+                openers.pop();
+            }
+        }
+
+        assert.equal(openers.length, 0, `${source.path}: ${openers.length} unclosed block(s)`);
+    }
+
+    assert.deepEqual(violations, []);
 });
 
 test("no local is declared inside a loop body", () => {
@@ -1762,10 +1923,26 @@ test("the display sprite draws each finished frame with the pen extension in col
     const ppu = get_source("src/ppu_2c02.gs");
     const clock_dot = ppu.declarations.find((declaration) => declaration.name === "ppu_clock_ppu_dot");
     assert.ok(clock_dot, "ppu_clock_ppu_dot is missing");
-    const clock_body = clock_dot.body.join("\n");
+
+    // The one-dot entry point forwards to the batched dot loop, which owns the per-dot order.
+    // The frame loop calls the batched form once per instruction, so both names have to exist
+    // and the single-dot form must stay a wrapper around the same body.
+    assert.match(
+        clock_dot.body.join("\n"),
+        /ppu_run_dots 1;/,
+        "ppu_clock_ppu_dot must clock one dot through the shared dot loop",
+    );
+
+    const run_dots = ppu.declarations.find((declaration) => declaration.name === "ppu_run_dots");
+    assert.ok(run_dots, "ppu_run_dots is missing");
+    const clock_body = run_dots.body.join("\n");
     assert.match(clock_body, /ppu_frame_ready = 1;/, "vblank start must offer the finished frame");
 
-    const render_at = clock_body.indexOf("ppu_render_pixel;");
+    // The per-pixel body lives inline in the dot loop (the call cost 61,440 custom blocks a
+    // frame), so the ordering pin looks at the framebuffer write that body ends with.
+    const render_at = clock_body.indexOf("ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] =");
+    const render_proc = ppu.declarations.find((declaration) => declaration.name === "ppu_render_pixel");
+    assert.ok(render_proc, "ppu_render_pixel stays as the documented per-pixel entry point");
     const pipeline_at = clock_body.indexOf("ppu_clock_rendering_pipeline;");
     const advance_at = clock_body.indexOf("ppu_advance_dot;");
     assert.ok(render_at >= 0 && pipeline_at > render_at, "each dot renders its pixel before the fetch pipeline");
@@ -1941,8 +2118,8 @@ test("mask arithmetic divides by mask-plus-one at every ported use site", () => 
     assert.match(ppu.text, /ppu_sprite_pixel_attributes % 4/, "the sprite palette field is attributes & $03");
     assert.match(
         ppu.text,
-        /ppu_palette_ram\[palette_offset \+ 1\] % 64/,
-        "the six-bit color index is the palette byte & $3F",
+        /ppu_palette_color\[palette_offset \+ 1\]/,
+        "the six-bit color index comes from the masked palette cache",
     );
 
     // APU is stubbed (no triangle channel); the mask-divide-by-plus-one invariant is

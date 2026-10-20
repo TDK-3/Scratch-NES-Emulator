@@ -52,10 +52,11 @@ proc cpu_reset_instruction_error {
     cpu_instruction_error = cpu_instruction_error_code.none;
 }
 
-# Fetches the opcode byte and decodes it, leaving the six fields in the cpu_opcode_* globals.
+# Fetches the opcode byte and decodes it, leaving the four hot fields in the cpu_opcode_*
+# globals. The self test keeps its own full decode, cpu_decode_opcode, for the two cycle fields.
 proc cpu_fetch_and_decode_opcode {
     cpu_fetch_byte;
-    cpu_decode_opcode cpu_fetched_byte;
+    cpu_decode_opcode_hot cpu_fetched_byte;
 }
 
 # Branches are exactly the official opcodes whose decoded mode is relative, so the dispatch tests
@@ -63,30 +64,36 @@ proc cpu_fetch_and_decode_opcode {
 # every writer, so each condition reads its flag bit directly instead of through
 # has_status_flag; the branches are ordered by how often compiled code takes them. The operand resolution and the
 # taken, page-crossing, and not-taken cycle counts are the ported relative-branch sequence.
+# The status bit each pair of top opcode bits selects for a relative branch: bits 7-6 are 00 for
+# the negative flag, 01 for overflow, 10 for carry, and 11 for zero.
+list cpu_branch_flag_weights = [128, 64, 1, 2];
+
+# The eight relative branches this proc dispatches by arithmetic, named here because the branch
+# table no longer compares against each one: cpu_mnemonic.op_bcc, cpu_mnemonic.op_bcs,
+# cpu_mnemonic.op_bne, cpu_mnemonic.op_beq, cpu_mnemonic.op_bpl, cpu_mnemonic.op_bmi,
+# cpu_mnemonic.op_bvc, cpu_mnemonic.op_bvs. Any other mnemonic cannot carry the relative
+# addressing mode, so the arithmetic below reaches exactly these eight opcodes.
+
 proc cpu_execute_branch {
     local taken = 0;
+    local opcode_byte = cpu_fetched_byte % 256;
+    local flag_weight = 0;
+
+    # The opcode byte is captured before the operand is resolved, because a relative operand is
+    # an immediate fetch and that overwrites cpu_fetched_byte with the offset.
     cpu_resolve_operand cpu_addressing_mode.relative, cpu_operand_access.read;
 
     if cpu_resolved_error != cpu_operand_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.unresolved_operand;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcc {
-        taken = 1 - (cpu_status % 2);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcs {
-        taken = cpu_status % 2;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bne {
-        taken = 1 - ((cpu_status // 2) % 2);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_beq {
-        taken = (cpu_status // 2) % 2;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bpl {
-        taken = 1 - (cpu_status // 128);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bmi {
-        taken = cpu_status // 128;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvc {
-        taken = 1 - ((cpu_status // 64) % 2);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvs {
-        taken = (cpu_status // 64) % 2;
     } else {
-        cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
+        # The eight branch opcodes differ in exactly two fields: bits 7-6 pick the flag and bit
+        # 5 picks whether the branch is taken on set or clear. Two divisions and one list read
+        # replace a chain of up to eight mnemonic comparisons and eight flag expressions.
+        flag_weight = cpu_branch_flag_weights[((opcode_byte // 64) % 4) + 1];
+
+        if ((cpu_status // flag_weight) % 2) == ((opcode_byte // 32) % 2) {
+            taken = 1;
+        }
     }
 
     if cpu_instruction_error == cpu_instruction_error_code.none {
@@ -147,22 +154,22 @@ proc cpu_execute_regular_instruction {
 proc cpu_apply_implied_instruction {
     if cpu_opcode_mnemonic == cpu_mnemonic.op_inx {
         cpu_x = (cpu_x + 1) % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_x + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_dex {
         cpu_x = (cpu_x - 1) % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_x + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_txa {
         cpu_a = cpu_x;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tya {
         cpu_a = cpu_y;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tax {
         cpu_x = cpu_a;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_x + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tay {
         cpu_y = cpu_a;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_y + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_nop {
         # NOP changes no register and spends only the dummy read, so the branch keeps the error
         # at none with an explicit assignment; GoboScript drops an empty branch.
@@ -177,13 +184,13 @@ proc cpu_apply_implied_instruction {
         cpu_status = cpu_status + (4 * (1 - ((cpu_status // 4) % 2)));
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_iny {
         cpu_y = (cpu_y + 1) % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_y + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_dey {
         cpu_y = (cpu_y - 1) % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_y + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_tsx {
         cpu_x = cpu_stack_pointer;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_x + 1];
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_txs {
         cpu_stack_pointer = cpu_x;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_clv {
@@ -203,44 +210,44 @@ proc cpu_apply_implied_instruction {
 proc cpu_apply_read_instruction mnemonic, value {
     if $mnemonic == cpu_mnemonic.op_lda {
         cpu_a = $value % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
     } elif $mnemonic == cpu_mnemonic.op_ldx {
         cpu_x = $value % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_x);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_x + 1];
     } elif $mnemonic == cpu_mnemonic.op_ldy {
         cpu_y = $value % 256;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_y);
+        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_y + 1];
     } elif $mnemonic == cpu_mnemonic.op_adc {
-        alu_add_with_carry cpu_a, $value, cpu_status;
+        alu_add_with_carry_byte cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_and {
-        alu_and cpu_a, $value, cpu_status;
+        alu_and_byte cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_cmp {
-        alu_compare cpu_a, $value, cpu_status;
+        alu_compare_byte cpu_a, $value, cpu_status;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_ora {
-        alu_ora cpu_a, $value, cpu_status;
+        alu_ora_byte cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_eor {
-        alu_eor cpu_a, $value, cpu_status;
+        alu_eor_byte cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_cpx {
-        alu_compare cpu_x, $value, cpu_status;
+        alu_compare_byte cpu_x, $value, cpu_status;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_cpy {
-        alu_compare cpu_y, $value, cpu_status;
+        alu_compare_byte cpu_y, $value, cpu_status;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_sbc {
-        alu_subtract_with_carry cpu_a, $value, cpu_status;
+        alu_subtract_with_carry_byte cpu_a, $value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
     } elif $mnemonic == cpu_mnemonic.op_bit {
-        alu_bit_test cpu_a, $value, cpu_status;
+        alu_bit_test_byte cpu_a, $value, cpu_status;
         cpu_status = alu_status;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
@@ -292,17 +299,17 @@ proc cpu_compute_store_value {
 # result and its status are left in alu_value and alu_status for the caller to store.
 proc cpu_modify_value mnemonic, value {
     if $mnemonic == cpu_mnemonic.op_inc {
-        alu_increment $value, cpu_status;
+        alu_increment_byte $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_dec {
-        alu_decrement $value, cpu_status;
+        alu_decrement_byte $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_asl {
-        alu_shift_left $value, cpu_status;
+        alu_shift_left_byte $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_lsr {
-        alu_shift_right $value, cpu_status;
+        alu_shift_right_byte $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_rol {
-        alu_rotate_left $value, cpu_status;
+        alu_rotate_left_byte $value, cpu_status;
     } elif $mnemonic == cpu_mnemonic.op_ror {
-        alu_rotate_right $value, cpu_status;
+        alu_rotate_right_byte $value, cpu_status;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
     }
@@ -319,7 +326,7 @@ proc cpu_execute_instruction {
     # one decode are pure call overhead.
     cpu_instruction_error = cpu_instruction_error_code.none;
     cpu_fetch_byte;
-    cpu_decode_opcode cpu_fetched_byte;
+    cpu_decode_opcode_hot cpu_fetched_byte;
 
     if cpu_opcode_error != cpu_opcode_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.undecodable_opcode;
@@ -340,23 +347,32 @@ proc cpu_execute_instruction {
         cpu_execute_brk_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rti {
         cpu_execute_rti_cycles;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pha {
-        cpu_read_cycle cpu_program_counter;
-        cpu_push_byte cpu_a;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_php {
-        cpu_read_cycle cpu_program_counter;
-        cpu_push_status 1;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pla {
-        cpu_read_cycle cpu_program_counter;
-        cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
-        cpu_pop_byte;
-        cpu_a = cpu_popped_byte;
-        cpu_status = update_zero_negative_flags(cpu_status, cpu_a);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_plp {
-        cpu_read_cycle cpu_program_counter;
-        cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
-        cpu_pop_byte;
-        cpu_restore_status_from_stack cpu_popped_byte;
+    } elif cpu_opcode_mode == cpu_addressing_mode.implied {
+        # Implied mode is a large share of what a game runs, and the regular path would resolve
+        # an operand that implied mode never reads. The four stack instructions keep their own
+        # sequences; everything else is one dummy read of the opcode byte plus the register and
+        # flag effects.
+        if cpu_opcode_mnemonic == cpu_mnemonic.op_pha {
+            cpu_read_cycle cpu_program_counter;
+            cpu_push_byte cpu_a;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pla {
+            cpu_read_cycle cpu_program_counter;
+            cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
+            cpu_pop_byte;
+            cpu_a = cpu_popped_byte;
+            cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_php {
+            cpu_read_cycle cpu_program_counter;
+            cpu_push_status 1;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_plp {
+            cpu_read_cycle cpu_program_counter;
+            cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
+            cpu_pop_byte;
+            cpu_restore_status_from_stack cpu_popped_byte;
+        } else {
+            cpu_read_cycle cpu_program_counter;
+            cpu_apply_implied_instruction;
+        }
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jmp {
         cpu_execute_jump;
     } else {

@@ -78,7 +78,9 @@ proc cpu_set_irq_line asserted {
 
 # The jam sequence. Three vector reads the first time the CPU jams, one read per jam afterwards.
 proc cpu_execute_jammed_cycles {
-    cpu_selected_sequence = cpu_sequence_kind.jam;
+    if cpu_access_log_enabled == 1 {
+        cpu_selected_sequence = cpu_sequence_kind.jam;
+    }
 
     if cpu_jam_vector_reads_issued == 0 {
         cpu_jam_vector_reads_issued = 1;
@@ -129,16 +131,88 @@ proc cpu_begin_next_sequence {
     } elif cpu_nmi_pending == 1 {
         cpu_nmi_pending = 0;
         cpu_irq_poll_mask_override_active = 0;
-        cpu_selected_sequence = cpu_sequence_kind.nmi;
+
+        if cpu_access_log_enabled == 1 {
+            cpu_selected_sequence = cpu_sequence_kind.nmi;
+        }
+
         cpu_execute_hardware_interrupt_cycles cpu_interrupt_source.nmi;
     } elif cpu_irq_line_asserted == 1 and interrupt_disabled_for_poll == 0 {
         cpu_irq_poll_mask_override_active = 0;
-        cpu_selected_sequence = cpu_sequence_kind.irq;
+
+        if cpu_access_log_enabled == 1 {
+            cpu_selected_sequence = cpu_sequence_kind.irq;
+        }
+
         cpu_execute_hardware_interrupt_cycles cpu_interrupt_source.irq;
     } else {
         cpu_irq_poll_mask_override_active = 0;
-        cpu_selected_sequence = cpu_sequence_kind.instruction;
-        cpu_execute_instruction;
-        cpu_finish_instruction interrupt_disabled_before;
+
+        if cpu_access_log_enabled == 1 {
+            cpu_selected_sequence = cpu_sequence_kind.instruction;
+        }
+
+        # cpu_execute_instruction inlined: this is the one path every emulated instruction
+        # takes, and the call it used to make bought nothing but a frame. Keep this body and
+        # cpu_execute_instruction in lockstep; that proc remains the standalone entry point the
+        # shared-vector self test drives, and the dispatch it holds is the documented shape.
+        cpu_instruction_error = cpu_instruction_error_code.none;
+        cpu_fetch_byte;
+        cpu_decode_opcode_hot cpu_fetched_byte;
+
+        if cpu_opcode_error != cpu_opcode_error_code.none {
+            cpu_instruction_error = cpu_instruction_error_code.undecodable_opcode;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_kil {
+            cpu_read_cycle cpu_program_counter;
+            cpu_jammed = 1;
+        } elif cpu_opcode_official == 0 {
+            cpu_instruction_error = cpu_instruction_error_code.unofficial_opcode;
+        } elif cpu_opcode_mode == cpu_addressing_mode.relative {
+            cpu_execute_branch;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jsr {
+            cpu_execute_jsr_cycles;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rts {
+            cpu_execute_rts_cycles;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_brk {
+            cpu_execute_brk_cycles;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rti {
+            cpu_execute_rti_cycles;
+        } elif cpu_opcode_mode == cpu_addressing_mode.implied {
+            # Implied mode is a large share of what a game runs, and the regular path would
+            # resolve an operand that implied mode never reads. The four stack instructions
+            # keep their own sequences; everything else is one dummy read of the opcode byte
+            # plus the register and flag effects.
+            if cpu_opcode_mnemonic == cpu_mnemonic.op_pha {
+                cpu_read_cycle cpu_program_counter;
+                cpu_push_byte cpu_a;
+            } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pla {
+                cpu_read_cycle cpu_program_counter;
+                cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
+                cpu_pop_byte;
+                cpu_a = cpu_popped_byte;
+                cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
+            } elif cpu_opcode_mnemonic == cpu_mnemonic.op_php {
+                cpu_read_cycle cpu_program_counter;
+                cpu_push_status 1;
+            } elif cpu_opcode_mnemonic == cpu_mnemonic.op_plp {
+                cpu_read_cycle cpu_program_counter;
+                cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
+                cpu_pop_byte;
+                cpu_restore_status_from_stack cpu_popped_byte;
+            } else {
+                cpu_read_cycle cpu_program_counter;
+                cpu_apply_implied_instruction;
+            }
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jmp {
+            cpu_execute_jump;
+        } else {
+            cpu_execute_regular_instruction;
+        }
+
+        # Only CLI, SEI, and PLP leave a poll-mask override behind, and all three are implied
+        # mode, so the call (and its three comparisons) is skipped for every other instruction.
+        if cpu_opcode_mode == cpu_addressing_mode.implied {
+            cpu_finish_instruction interrupt_disabled_before;
+        }
     }
 }

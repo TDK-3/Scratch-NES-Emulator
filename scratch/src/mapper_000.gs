@@ -193,20 +193,13 @@ proc nrom_apply_memory_limits prg_ram_bytes, chr_ram_bytes {
     }
 }
 
-# Puts every region back to the zeroes a freshly constructed board holds, sizing both ROM lists to
-# the declared payload so the copies and the vector records can replace items inside them.
+# Puts every region back to the zeroes a freshly constructed board holds. The two ROM lists are
+# only emptied here: nrom_copy_prg_rom and nrom_copy_chr_rom size them by appending the payload,
+# so filling them with zeroes first would write every ROM byte twice.
 proc nrom_reset_memory {
     local index = 1;
     delete nrom_prg_rom;
     delete nrom_chr_rom;
-
-    repeat cartridge_prg_rom_bytes {
-        add 0 to nrom_prg_rom;
-    }
-
-    repeat cartridge_chr_rom_bytes {
-        add 0 to nrom_chr_rom;
-    }
 
     repeat nrom_limit.prg_ram_bytes {
         nrom_prg_ram[index] = 0;
@@ -225,8 +218,12 @@ proc nrom_reset_memory {
 proc nrom_copy_prg_rom {
     local index = 0;
 
+    # Appending the real bytes sizes the list as it fills it: the reset's zero fill and this
+    # loop used to write every ROM byte twice.
+    delete nrom_prg_rom;
+
     repeat cartridge_prg_rom_bytes {
-        nrom_prg_rom[index + 1] = to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]);
+        add to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]) to nrom_prg_rom;
         index++;
     }
 }
@@ -235,8 +232,10 @@ proc nrom_copy_prg_rom {
 proc nrom_copy_chr_rom {
     local index = 0;
 
+    delete nrom_chr_rom;
+
     repeat cartridge_chr_rom_bytes {
-        nrom_chr_rom[index + 1] = to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]);
+        add to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]) to nrom_chr_rom;
         index++;
     }
 }

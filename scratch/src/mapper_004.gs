@@ -280,20 +280,13 @@ proc mmc3_validate {
     }
 }
 
-# Puts every memory region back to the zeroes a freshly constructed board holds, sizing both ROM
-# lists to the declared payload so the copies and the vector records can replace items inside them.
+# Puts every memory region back to the zeroes a freshly constructed board holds. The two ROM
+# lists are only emptied here: mmc3_copy_prg_rom and mmc3_copy_chr_rom size them by appending the
+# payload, so filling them with zeroes first would write every ROM byte twice.
 proc mmc3_reset_memory {
     local index = 1;
     delete mmc3_prg_rom;
     delete mmc3_chr_rom;
-
-    repeat mmc3_prg_rom_bytes {
-        add 0 to mmc3_prg_rom;
-    }
-
-    repeat mmc3_chr_rom_bytes {
-        add 0 to mmc3_chr_rom;
-    }
 
     repeat mmc3_limit.prg_ram_bytes {
         mmc3_prg_ram[index] = 0;
@@ -312,8 +305,12 @@ proc mmc3_reset_memory {
 proc mmc3_copy_prg_rom {
     local index = 0;
 
+    # Appending the real bytes sizes the list as it fills it: the reset's zero fill and this
+    # loop used to write every ROM byte twice.
+    delete mmc3_prg_rom;
+
     repeat mmc3_prg_rom_bytes {
-        mmc3_prg_rom[index + 1] = to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]);
+        add to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]) to mmc3_prg_rom;
         index++;
     }
 }
@@ -322,8 +319,10 @@ proc mmc3_copy_prg_rom {
 proc mmc3_copy_chr_rom {
     local index = 0;
 
+    delete mmc3_chr_rom;
+
     repeat mmc3_chr_rom_bytes {
-        mmc3_chr_rom[index + 1] = to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]);
+        add to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]) to mmc3_chr_rom;
         index++;
     }
 }
@@ -430,21 +429,26 @@ func mmc3_chr_bank(slot) {
 # count the next clock loads, IRQ reload empties the counter and asks the next clock to load it, IRQ
 # disable turns the counter off and acknowledges the line, and IRQ enable turns the counter on.
 proc mmc3_write_register address, value {
-    local register_id = bitwise_and(normalize_word($address), 57345);
-    local bank_value = normalize_byte($value);
+    # The register mask $E001 keeps bits 15-13 and bit 0 of the address, which is the same as
+    # "the $2000-aligned group plus the low bit": one division, one multiply, one add, and no
+    # 65,536-entry word path through the bitwise helper. $8000-$FFFF is already a word here.
+    local register_id = (($address // 8192) * 8192) + ($address % 2);
+    local bank_value = $value % 256;
 
     if register_id == mmc3_register.bank_select {
-        mmc3_bank_select = bitwise_and(bank_value, 7);
-        mmc3_prg_mode = bit_at(bank_value, 64);
-        mmc3_chr_mode = bit_at(bank_value, 128);
+        mmc3_bank_select = bank_value % 8;
+        mmc3_prg_mode = (bank_value // 64) % 2;
+        mmc3_chr_mode = (bank_value // 128) % 2;
         mmc3_refresh_chr_cache;
     } elif register_id == mmc3_register.bank_data {
+        # $FE, $3F, and $7F clear one bit or the top two; on a byte that is a subtraction of
+        # the remainder, which is two reporters where the bitwise helper was a call.
         if mmc3_bank_select == 0 or mmc3_bank_select == 1 {
-            bank_value = bitwise_and(bank_value, 254);
+            bank_value = bank_value - (bank_value % 2);
         } elif mmc3_bank_select == 6 {
-            bank_value = bitwise_and(bank_value, 63);
+            bank_value = bank_value - (bank_value % 64);
         } elif mmc3_bank_select == 7 {
-            bank_value = bitwise_and(bank_value, 127);
+            bank_value = bank_value - (bank_value % 128);
         }
 
         mmc3_bank_registers[mmc3_bank_select + 1] = bank_value;
@@ -453,15 +457,15 @@ proc mmc3_write_register address, value {
         if mmc3_four_screen == 0 {
             # The mirroring ids are the cartridge parser's: 1 horizontal, 2 vertical, 3 four-screen.
             # A zero low bit selects vertical, as the reference's write does.
-            if bitwise_and(bank_value, 1) == 0 {
+            if bank_value % 2 == 0 {
                 mmc3_mirroring = 2;
             } else {
                 mmc3_mirroring = 1;
             }
         }
     } elif register_id == mmc3_register.prg_ram_protect {
-        mmc3_prg_ram_enabled = bit_at(bank_value, 128);
-        mmc3_prg_ram_write_protected = bit_at(bank_value, 64);
+        mmc3_prg_ram_enabled = (bank_value // 128) % 2;
+        mmc3_prg_ram_write_protected = (bank_value // 64) % 2;
     } elif register_id == mmc3_register.irq_latch {
         mmc3_irq_latch = bank_value;
     } elif register_id == mmc3_register.irq_reload {
@@ -517,7 +521,11 @@ proc mmc3_read_cpu address {
             }
         }
 
-        offset = ((prg_bank % mmc3_prg_bank_count) * mmc3_limit.prg_bank_bytes) + (numeric_address % 8192);
+        # The slot is already the bank-aligned quotient, so the offset inside the bank is the
+        # address minus the window start minus the slot's own span: one multiply and two
+        # subtractions replace a second modulo on every PRG ROM read.
+        offset = ((prg_bank % mmc3_prg_bank_count) * mmc3_limit.prg_bank_bytes)
+            + (numeric_address - mmc3_limit.prg_rom_start - (slot * mmc3_limit.prg_bank_bytes));
         mmc3_cpu_mapped = 1;
         mmc3_cpu_value = mmc3_prg_rom[offset + 1];
         mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
@@ -552,10 +560,14 @@ proc mmc3_write_cpu address, value {
 # Reads one pattern-table byte from the CHR bank its slot selects, out of CHR ROM when the board has
 # it and out of CHR RAM otherwise. Uses the cache built on register writes to avoid per-dot decode.
 proc mmc3_read_pattern address {
-    local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
+    # The PPU bus has already folded the address into the 16 KiB pattern space, and 16384
+    # divides 65536, so the two-step mask is one modulo. The offset inside the 1 KiB CHR bank
+    # is the address minus the slot's own span rather than a second modulo.
+    local numeric_address = $address % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
     local chr_bank = mmc3_chr_bank_cache[slot + 1];
-    local offset = (chr_bank * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
+    local offset = (chr_bank * mmc3_limit.chr_bank_bytes)
+        + (numeric_address - (slot * mmc3_limit.chr_bank_bytes));
     mmc3_pattern_value = 0;
 
     if mmc3_chr_rom_bytes > 0 {
@@ -567,10 +579,11 @@ proc mmc3_read_pattern address {
 
 # Writes one pattern-table byte. A CHR ROM board drops the write, as the reference does.
 proc mmc3_write_pattern address, value {
-    local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
+    local numeric_address = $address % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
     local chr_bank = mmc3_chr_bank_cache[slot + 1];
-    local offset = (chr_bank * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
+    local offset = (chr_bank * mmc3_limit.chr_bank_bytes)
+        + (numeric_address - (slot * mmc3_limit.chr_bank_bytes));
     mmc3_pattern_write_accepted = 0;
 
     if mmc3_chr_ram_bytes > 0 {
@@ -609,25 +622,24 @@ func mmc3_get_irq_line_asserted() {
 # only when A12 has been low for at least ten dots, which is the filter that keeps a background-only
 # frame from firing the IRQ; either edge clears the low-dot count.
 proc mmc3_observe_ppu_a12 address {
-    local numeric_address = to_number($address);
+    # A12 ($1000) is the 4096s bit of the address, so its state is one division instead of a
+    # bit_at call, and the reference's Number.isInteger test is the floor comparison below,
+    # which is checked before the division uses the value.
     local next_high = 0;
     mmc3_ppu_observed = 0;
 
-    # Floor division by one is the integer test: a fractional address does not equal its own floor,
-    # which is the case the reference's Number.isInteger check refuses.
-    if numeric_address == numeric_address // 1 {
-        if numeric_address >= 0 and numeric_address < mmc3_limit.ppu_address_space_bytes {
-            mmc3_ppu_observed = 1;
-            next_high = bit_at(numeric_address, mmc3_limit.a12_weight);
+    if $address >= 0 and $address < mmc3_limit.ppu_address_space_bytes
+        and $address == $address // 1 {
+        next_high = ($address // mmc3_limit.a12_weight) % 2;
+        mmc3_ppu_observed = 1;
 
-            if next_high != mmc3_ppu_a12_high {
-                if next_high == 1 and mmc3_a12_low_dots >= mmc3_limit.a12_filter_dots {
-                    mmc3_clock_irq_counter;
-                }
-
-                mmc3_ppu_a12_high = next_high;
-                mmc3_a12_low_dots = 0;
+        if next_high != mmc3_ppu_a12_high {
+            if next_high == 1 and mmc3_a12_low_dots >= mmc3_limit.a12_filter_dots {
+                mmc3_clock_irq_counter;
             }
+
+            mmc3_ppu_a12_high = next_high;
+            mmc3_a12_low_dots = 0;
         }
     }
 }

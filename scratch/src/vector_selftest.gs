@@ -37,6 +37,14 @@
 %include src/rom_loader
 %include src/shared_vectors
 
+# Whether the green flag replays the shared vectors before it boots the console. The replay is
+# a diagnostic, not part of running a ROM: it detaches every device, empties the cartridge
+# window, and leaves both the bus and the CPU registers to be reset by the boot. Leaving it off
+# is what a normal run does; setting it to 1 in the editor runs the suite on the next green
+# flag, which is the one place the Stage reads this flag. Stage-owned state, like every other
+# header's.
+var port_self_test_enabled = 0;
+
 enum port_suite {
     numeric = 1,
     cpu = 2,
@@ -123,15 +131,23 @@ proc run_port_self_test {
     port_self_test_done = 0;
     port_self_test_summary = "";
     cpu_access_log_enabled = 1;
-    rom_header_report;
-    cartridge_load_board;
+
+    # The table check is a length comparison and two coercions, so it runs on every boot: a table
+    # that failed to load has to surface in the summary instead of decoding every opcode as
+    # unknown. The flag gates the replay, the board load, and the vector work below.
     cpu_check_opcode_table;
 
-    if schema_version != 1 {
-        port_self_test_summary = "unsupported shared vector schema " & schema_version;
-    } elif cpu_opcode_error != cpu_opcode_error_code.none {
+    if cpu_opcode_error != cpu_opcode_error_code.none {
         port_self_test_summary = "opcode table failed its length and header check";
+    } elif port_self_test_enabled == 0 {
+        # A normal boot: rom_run_start loads the cartridge once and no vector is replayed.
+        port_self_test_summary = "skipped";
+    } elif schema_version != 1 {
+        port_self_test_summary = "unsupported shared vector schema " & schema_version;
     } else {
+        rom_header_report;
+        cartridge_load_board;
+
         repeat record_count {
             run_next_port_vector;
         }
@@ -795,6 +811,19 @@ proc run_nrom_memory_vector input_start {
     add nrom_prg_ram_bytes to port_actual_values;
     add nrom_chr_ram_bytes to port_actual_values;
     nrom_reset_memory;
+
+    # The reset no longer zero-fills the two ROM lists (the real load appends every byte), so the
+    # sparse preparation below sizes them here: a byte the vector does not prepare has to read
+    # as 0, which is what a sized list of zeroes holds and what a write past the end of an empty
+    # list would not.
+    repeat cartridge_prg_rom_bytes {
+        add 0 to nrom_prg_rom;
+    }
+
+    repeat cartridge_chr_rom_bytes {
+        add 0 to nrom_chr_rom;
+    }
+
     index = 0;
 
     repeat prg_count {
@@ -911,6 +940,12 @@ proc run_cartridge_bus_vector input_start {
     if nrom_ok == 1 and attach_board == 1 {
         attached = 1;
         nrom_reset_memory;
+
+        # Sized for the same reason as the memory vector above: an unprepared byte reads as 0.
+        repeat cartridge_prg_rom_bytes {
+            add 0 to nrom_prg_rom;
+        }
+
         index = 0;
 
         repeat prg_count {
@@ -1008,6 +1043,17 @@ proc run_mmc3_vector input_start {
     add mmc3_error_code to port_actual_values;
     add mmc3_prg_ram_bytes to port_actual_values;
     mmc3_reset_memory;
+
+    # Sized for the same reason as the NROM vectors above: an unprepared byte reads as 0. The
+    # board's own sizes are the ones its reset used to fill.
+    repeat mmc3_prg_rom_bytes {
+        add 0 to mmc3_prg_rom;
+    }
+
+    repeat mmc3_chr_rom_bytes {
+        add 0 to mmc3_chr_rom;
+    }
+
     index = 0;
 
     repeat prg_count {

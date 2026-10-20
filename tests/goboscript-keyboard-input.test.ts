@@ -212,11 +212,12 @@ test("a polled mask reaches the console through the reference controller's seria
     assert.deepEqual(serial_report(controllers, 0, 1), [1], "reads past the eighth button report the fill bit");
 });
 
-test("the run loop samples the keyboard once per chunk, from one place", () => {
-    // A frame costs about 29,780 cycles, so the loop needs roughly 300 chunks of 100 cycles to
-    // finish one. Sampling only when a frame completed would hand the console a press seconds
-    // after it happened and would drop a tap shorter than an emulated frame, so the sampler
-    // runs on every pass of the loop instead.
+test("the run loop samples the keyboard from one place, at a bounded interval", () => {
+    // A frame costs 29,780 cycles, so the loop runs about 60 chunks of 500 cycles to finish one.
+    // Sampling only when a frame completed would hand the console a press up to 16 ms after it
+    // happened, so the sampler runs on a countdown of a few chunks instead: at the default
+    // interval of four chunks a press lands within about 1.1 ms of emulated time, while the 16
+    // key_pressed device lookups stop running sixty times a frame.
     assert.match(ROM_RUN_SOURCE, /%include src\/keyboard_input/, "the run loop can call the sampler");
     assert.equal(
         (ROM_RUN_SOURCE.match(/keyboard_poll_controllers;/g) ?? []).length,
@@ -231,8 +232,19 @@ test("the run loop samples the keyboard once per chunk, from one place", () => {
     const chunk_at = body.indexOf("frame_loop_run_chunk;");
     const frame_at = body.indexOf("if frame_loop_frame_complete == 1 {");
     const sample_at = body.indexOf("keyboard_poll_controllers;");
-    assert.ok(chunk_at >= 0 && sample_at > chunk_at, "the sampler runs after a chunk of cycles");
-    assert.ok(frame_at > sample_at, "the sampler runs every chunk, not only at the frame boundary");
+    assert.ok(sample_at >= 0, "the run loop must sample the host keyboard");
+    assert.ok(frame_at > sample_at, "the sampler is not tied to the frame boundary");
+    assert.match(
+        body,
+        /rom_run_poll_countdown = rom_run_poll_countdown - 1;/,
+        "the sampler runs on the poll countdown",
+    );
+    assert.match(
+        body,
+        /if rom_run_poll_countdown <= 0 \{/,
+        "the sampler runs only when the countdown expires",
+    );
+    assert.ok(chunk_at >= 0, "the loop still runs one chunk per iteration");
 });
 
 test("the sampler writes both pads and nothing else", () => {
