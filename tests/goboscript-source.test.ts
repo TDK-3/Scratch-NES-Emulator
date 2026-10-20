@@ -1221,6 +1221,65 @@ test("no proc returns and every func ends with a return", () => {
     }
 });
 
+test("a closing brace is indented with the line that opened its block", () => {
+    // A body left at its opener's indent still compiles (the language is brace-delimited), so
+    // nothing else in this file would notice it. It does make a nested block read as a sibling,
+    // which is how the sprite-evaluation body shipped one level short. A wrapped condition puts
+    // its brace on a continuation line, so the opener is the statement's first line.
+    const continuations = /^(and|or|&|\+|-|\*|\/)/;
+    const violations: string[] = [];
+
+    for (const source of sources) {
+        const openers: { indent: number; line: number }[] = [];
+        let statement_indent = 0;
+        let statement_line = 0;
+
+        for (const [index, line] of source.lines.entries()) {
+            const trimmed = strip_comments_and_strings(line).trim();
+
+            if (trimmed === "" || trimmed.startsWith("%")) {
+                continue;
+            }
+
+            const indent = line.length - line.trimStart().length;
+            const closes_first = trimmed.startsWith("}");
+
+            if (closes_first) {
+                const opener = openers.pop();
+                assert.ok(opener, `${source.path}:${index + 1}: closing brace with no opener`);
+
+                if (opener?.indent !== indent) {
+                    violations.push(
+                        `${source.path}:${index + 1}: closes a block opened at column ${opener?.indent} on line ${opener?.line}`,
+                    );
+                }
+
+                // A `} else {` chain opens its next block on the closing line itself.
+                statement_indent = indent;
+                statement_line = index + 1;
+            } else if (!continuations.test(trimmed)) {
+                statement_indent = indent;
+                statement_line = index + 1;
+            }
+
+            const opens = (trimmed.match(/\{/g) ?? []).length;
+            const closes = (trimmed.match(/\}/g) ?? []).length - (closes_first ? 1 : 0);
+
+            for (let count = 0; count < opens; count++) {
+                openers.push({ indent: statement_indent, line: statement_line });
+            }
+
+            for (let count = 0; count < closes; count++) {
+                openers.pop();
+            }
+        }
+
+        assert.equal(openers.length, 0, `${source.path}: ${openers.length} unclosed block(s)`);
+    }
+
+    assert.deepEqual(violations, []);
+});
+
 test("no local is declared inside a loop body", () => {
     // `local` compiles to a `procname:x` variable; declaring one inside a loop body shadows
     // the previous iteration's value and is undefined behavior in recursive or non-warp procs.

@@ -20,7 +20,7 @@ measurements.
 >
 > What a tick means after the 2026-10-20 pass: the source change described in the item is present in
 > `scratch/`, its mirror and `MIRROR_CONTRACT` row exist where the declaration inventory demands one, and
-> `npm test` (1304 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
+> `npm test` (1305 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
 > suites) passes. It does **not** mean the saving was measured on a running Scratch project: the measurement
 > work in section 4.10 is still blocked, so every ticked item's saving is an estimate. Items that would need
 > the compiler, a Scratch runtime, or a rendering comparison carry a written `Blocked` line instead of a
@@ -93,7 +93,7 @@ The whole catalogue below was worked through against the current source. What th
 | `src/rom_input.gs`, `src/rom_run.gs`, `src/frame_loop.gs` | staged byte count, four-chunk poll, whole-DMA batching |
 | `tests/` | mirror functions and contract rows for every new declaration, the palette-cache pin, the inlined-pixel ordering pin |
 
-Every change kept `npm test` at 1304/1304. The paragraph below about measurement still stands: these are
+Every change kept `npm test` at 1305/1305. The paragraph below about measurement still stands: these are
 structural savings, and none of them has been measured on a running Scratch project.
 
 ---
@@ -1692,8 +1692,9 @@ reference algorithms, the mirror functions, and the source lint. What the review
 | Finding | Fix |
 |---|---|
 | `src/vector_selftest.gs` declared `var port_self_test_enabled` twice in one translation unit (the second copy arrived with the gate in B2) | the duplicate is gone; the surviving declaration carries the explanation |
-| A name declared twice in one translation unit used to pass the lint (`tests/goboscript-source.test.ts` resolved names but never counted them) | new lint: "no translation unit declares the same name twice", one failure message per colliding name |
+| A name declared twice in one translation unit used to pass the lint (`tests/goboscript-source.test.ts` resolved names but never counted them) | new lint: "no translation unit declares the same name twice", one failure message per colliding name. It also confirms that the `cpu_dma_phase` enum-variable pairing is the only same-name declaration in the project |
 | Removing the ROM zero fill in B4 made `nrom_reset_memory`/`mmc3_reset_memory` leave the lists empty, and the shared-vector handlers write prepared bytes by index into what used to be a sized list | the three vector handlers size the two lists themselves before preparing bytes, so an unprepared byte still reads as 0 |
+| The body of `ppu_evaluate_sprites_for_next_scanline`'s `if visible_scanline == 1` block sat at its opener's indent (pre-existing), so a nested block read as a sibling | the proc was re-indented to its brace depth, whitespace only; a new lint ("a closing brace is indented with the line that opened its block") fails on the shape that shipped and passes on the fix |
 | The greyscale table's comment sat above `ppu_reverse_table_init` | moved to `ppu_greyscale_table_init` |
 | `frame_loop.gs`, `mapper_000.gs`, and `mapper_004.gs` described the per-dot dot clock and the zero fill they no longer do | comments rewritten to match the code |
 | The inlined dispatch in `cpu_control.gs` and the standalone `cpu_execute_instruction` are two copies of one body (K10) | compared statement by statement; they are identical apart from the caller's inline comment, and both were re-verified by the branch/ALU sweeps |
@@ -1751,7 +1752,7 @@ Corrections, so the next reader does not trust stale notes:
    no-op stub that nothing includes (Appendix A, B8).
 2. It stated that hoisting globals into `local`s saves global reads because locals are cheaper. They are not:
    `local` lowers to a target variable (see `AGENTS.md` and section 1.1). Only the *count* of reads matters.
-3. It reported `1304/1304` passing tests and a compiled `.sb3` self-test result. Neither is a measurement of
+3. It reported `1305/1305` passing tests and a compiled `.sb3` self-test result. Neither is a measurement of
    this branch, and the toolchain to produce the second is not installed here. This revision records no
    pass counts and no runtime results.
 4. It listed the PPU pixel path as "deferred because inlining risks warp correctness". Warp is a per-proc

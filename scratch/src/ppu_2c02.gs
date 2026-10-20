@@ -1524,86 +1524,86 @@ proc ppu_evaluate_sprites_for_next_scanline {
     }
 
     if visible_scanline == 1 {
-    local found_count = 0;
-    local elapsed_dots = 0;
-    local overflow_offset = 0;
-    local overflow_dot = 0;
-    local oam_index = 0;
-    local evaluation_done = 0;
-    local checking_overflow = 0;
-    local candidate_address = 0;
-    local candidate_base = 0;
-    local candidate_row = 0;
-    local slot_index = 0;
-    local copy_index = 1;
+        local found_count = 0;
+        local elapsed_dots = 0;
+        local overflow_offset = 0;
+        local overflow_dot = 0;
+        local oam_index = 0;
+        local evaluation_done = 0;
+        local checking_overflow = 0;
+        local candidate_address = 0;
+        local candidate_base = 0;
+        local candidate_row = 0;
+        local slot_index = 0;
+        local copy_index = 1;
 
-    if ppu_scanline == PPU_FRAME_HEIGHT - 1 {
-        target_scanline = 0;
-    } else {
-        target_scanline = ppu_scanline + 1;
-    }
-
-    if (ppu_control_register // PPU_SPRITE_SIZE_SELECT) % 2 == 1 {
-        sprite_height = 16;
-    }
-
-    ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
-
-    until oam_index >= PPU_SPRITE_COUNT or evaluation_done == 1 {
-        checking_overflow = 0;
-
-        if found_count == PPU_SECONDARY_SPRITE_LIMIT {
-            checking_overflow = 1;
-        }
-
-        # The OAM byte offset is carried forward by four per entry instead of multiplied out
-        # of the index on all sixty-four candidates of every evaluated line.
-        candidate_address = candidate_base;
-
-        if checking_overflow == 1 {
-            candidate_address = candidate_address + overflow_offset;
-        }
-
-        # The OAM read and ppu_sprite_row() inlined: the address is always inside 0-255 for
-        # this loop, and the row is one floored modulo. Sprite evaluation walks up to 64 OAM
-        # entries per line, so the two saved calls per entry matter.
-        candidate_row = (target_scanline - (ppu_oam[candidate_address + 1] + 1)) % 256;
-
-        if checking_overflow == 1 {
-            if candidate_row < sprite_height {
-                overflow_dot = 65 + elapsed_dots + 1;
-
-                if overflow_dot <= 256 {
-                    ppu_sprite_overflow_set_dot = overflow_dot;
-                }
-
-                evaluation_done = 1;
-            } else {
-                overflow_offset = (overflow_offset + 1) % PPU_BYTES_PER_SPRITE;
-                elapsed_dots = elapsed_dots + 2;
-            }
-        } elif candidate_row >= sprite_height {
-            elapsed_dots = elapsed_dots + 2;
+        if ppu_scanline == PPU_FRAME_HEIGHT - 1 {
+            target_scanline = 0;
         } else {
-            slot_index = found_count + 1;
-            ppu_secondary_sprite_y[slot_index] = ppu_oam[candidate_address + 1];
-            ppu_secondary_sprite_row[slot_index] = candidate_row;
-            ppu_secondary_sprite_oam_index[slot_index] = oam_index;
-            ppu_secondary_sprite_tile[slot_index] = ppu_oam[candidate_address + 2];
-            ppu_secondary_sprite_attributes[slot_index] = ppu_oam[candidate_address + 3];
-            ppu_secondary_sprite_x[slot_index] = ppu_oam[candidate_address + 4];
-            found_count = found_count + 1;
-            elapsed_dots = elapsed_dots + 8;
+            target_scanline = ppu_scanline + 1;
         }
 
-        candidate_base = candidate_base + PPU_BYTES_PER_SPRITE;
-        oam_index = oam_index + 1;
-    }
+        if (ppu_control_register // PPU_SPRITE_SIZE_SELECT) % 2 == 1 {
+            sprite_height = 16;
+        }
 
-    ppu_secondary_sprite_count = found_count;
+        ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
 
-    if target_scanline == 0 {
-        ppu_line_zero_sprite_count = found_count;
+        until oam_index >= PPU_SPRITE_COUNT or evaluation_done == 1 {
+            checking_overflow = 0;
+
+            if found_count == PPU_SECONDARY_SPRITE_LIMIT {
+                checking_overflow = 1;
+            }
+
+            # The OAM byte offset is carried forward by four per entry instead of multiplied out
+            # of the index on all sixty-four candidates of every evaluated line.
+            candidate_address = candidate_base;
+
+            if checking_overflow == 1 {
+                candidate_address = candidate_address + overflow_offset;
+            }
+
+            # The OAM read and ppu_sprite_row() inlined: the address is always inside 0-255 for
+            # this loop, and the row is one floored modulo. Sprite evaluation walks up to 64 OAM
+            # entries per line, so the two saved calls per entry matter.
+            candidate_row = (target_scanline - (ppu_oam[candidate_address + 1] + 1)) % 256;
+
+            if checking_overflow == 1 {
+                if candidate_row < sprite_height {
+                    overflow_dot = 65 + elapsed_dots + 1;
+
+                    if overflow_dot <= 256 {
+                        ppu_sprite_overflow_set_dot = overflow_dot;
+                    }
+
+                    evaluation_done = 1;
+                } else {
+                    overflow_offset = (overflow_offset + 1) % PPU_BYTES_PER_SPRITE;
+                    elapsed_dots = elapsed_dots + 2;
+                }
+            } elif candidate_row >= sprite_height {
+                elapsed_dots = elapsed_dots + 2;
+            } else {
+                slot_index = found_count + 1;
+                ppu_secondary_sprite_y[slot_index] = ppu_oam[candidate_address + 1];
+                ppu_secondary_sprite_row[slot_index] = candidate_row;
+                ppu_secondary_sprite_oam_index[slot_index] = oam_index;
+                ppu_secondary_sprite_tile[slot_index] = ppu_oam[candidate_address + 2];
+                ppu_secondary_sprite_attributes[slot_index] = ppu_oam[candidate_address + 3];
+                ppu_secondary_sprite_x[slot_index] = ppu_oam[candidate_address + 4];
+                found_count = found_count + 1;
+                elapsed_dots = elapsed_dots + 8;
+            }
+
+            candidate_base = candidate_base + PPU_BYTES_PER_SPRITE;
+            oam_index = oam_index + 1;
+        }
+
+        ppu_secondary_sprite_count = found_count;
+
+        if target_scanline == 0 {
+            ppu_line_zero_sprite_count = found_count;
 
             # Only the slots the evaluation filled are copied: a line with two sprites copies
             # two entries instead of eight, and every source value is already a number, so the
