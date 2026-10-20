@@ -246,11 +246,13 @@ proc ppu_bus_write_ppu address, value {
 # Reads one nametable byte for the rendering pipeline. The address is already
 # the $2000-$3EFF window the PPU computes, so the generic read's address
 # normalization and region decode would only repeat work: this proc folds
-# $3000-$3EFF back by hand, reports the access to the board exactly as
-# ppu_bus_read_ppu does, and maps the four logical tables through the
+# $3000-$3EFF back by hand and maps the four logical tables through the
 # attached board's mirroring mode inline. The pipeline calls this several
 # dozen times per scanline, which makes the two saved custom-block calls
 # worth the duplicated arithmetic. CPU reads still take ppu_bus_read_ppu.
+#
+# Nametable addresses ($2000-$2FFF) have A12=0, so they never trigger the MMC3 A12 rising edge;
+# observing them was pure overhead (15k+ calls/frame). Only pattern reads ($0000-$1FFF) are observed.
 proc ppu_bus_read_nametable address {
     local base_address = $address;
     local logical_table = 0;
@@ -261,10 +263,7 @@ proc ppu_bus_read_nametable address {
         base_address = base_address - 4096;
     }
 
-    # ppu_bus_observe_access() inlined: this read runs several dozen times per scanline, the
-    # observation is one comparison on NROM, and the mirroring query is the same board check.
     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-        mmc3_observe_ppu_access ppu_bus_access.read, $address;
         mirroring = mmc3_mirroring;
     } elif ppu_bus_mapper_kind == mapper_kind.nrom {
         mirroring = cartridge_mirroring;

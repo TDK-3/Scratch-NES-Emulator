@@ -97,6 +97,8 @@ var mmc3_prg_nvram_bytes = 0;
 var mmc3_chr_nvram_bytes = 0;
 var mmc3_prg_bank_count = 0;
 var mmc3_chr_bank_count = 0;
+var mmc3_last_prg_bank = 0;
+var mmc3_second_last_prg_bank = 0;
 var mmc3_four_screen = 0;
 var mmc3_header_mirroring = 1;
 var mmc3_mirroring = 1;
@@ -121,6 +123,10 @@ list mmc3_chr_rom;
 list mmc3_prg_ram = [0; 8192];
 list mmc3_chr_ram = [0; 8192];
 list mmc3_bank_registers = [0; 8];
+
+# Cached CHR banks per PPU slot (0-7 -> CHR bank index), refreshed on bank/mode writes so
+# pattern reads avoid 6-branch decode and func call per PPU dot (~30k reads/frame).
+list mmc3_chr_bank_cache = [0; 8];
 
 # The board's nonvolatile memory, copied out by a snapshot and copied back by a restore. The
 # reference slices the tail of each RAM region, so the bank registers decide which part of CHR RAM a
@@ -152,6 +158,17 @@ var mmc3_nvram_loaded = 0;
 var mmc3_pattern_value = 0;
 var mmc3_pattern_write_accepted = 0;
 
+# Refreshes the CHR bank cache from current registers/modes. 8 func calls per register write is
+# trivial (writes are ~10/frame) vs 30k decode branches saved per frame.
+proc mmc3_refresh_chr_cache {
+    local slot = 0;
+
+    repeat 8 {
+        mmc3_chr_bank_cache[slot + 1] = mmc3_chr_bank(slot);
+        slot++;
+    }
+}
+
 # Puts the registers and the IRQ state back to what Mmc3Mapper.reset() leaves, without touching the
 # board's memory: a reset keeps RAM and CHR RAM contents.
 proc mmc3_reset {
@@ -174,6 +191,8 @@ proc mmc3_reset {
         mmc3_bank_registers[index] = 0;
         index++;
     }
+
+    mmc3_refresh_chr_cache;
 }
 
 # Validates a parsed header as an MMC3 board, in the order Mmc3Mapper.create checks it: the mapper
@@ -247,6 +266,8 @@ proc mmc3_validate {
 
                 mmc3_prg_bank_count = mmc3_prg_rom_bytes // mmc3_limit.prg_bank_bytes;
                 mmc3_chr_bank_count = (mmc3_chr_rom_bytes + mmc3_chr_ram_bytes) // mmc3_limit.chr_bank_bytes;
+                mmc3_last_prg_bank = mmc3_prg_bank_count - 1;
+                mmc3_second_last_prg_bank = mmc3_prg_bank_count - 2;
                 mmc3_four_screen = 0;
 
                 if mmc3_header_mirroring == 3 {
@@ -335,8 +356,8 @@ proc mmc3_load_payload {
 # registers do not control always hold the last and second-to-last banks, which is what makes an MMC3
 # image boot: the reset vector lives in the last bank.
 func mmc3_prg_bank(slot) {
-    local last_bank = mmc3_prg_bank_count - 1;
-    local second_last_bank = mmc3_prg_bank_count - 2;
+    local last_bank = mmc3_last_prg_bank;
+    local second_last_bank = mmc3_second_last_prg_bank;
     local bank6 = mmc3_bank_registers[7];
     local bank7 = mmc3_bank_registers[8];
     local bank = 0;
@@ -416,6 +437,7 @@ proc mmc3_write_register address, value {
         mmc3_bank_select = bitwise_and(bank_value, 7);
         mmc3_prg_mode = bit_at(bank_value, 64);
         mmc3_chr_mode = bit_at(bank_value, 128);
+        mmc3_refresh_chr_cache;
     } elif register_id == mmc3_register.bank_data {
         if mmc3_bank_select == 0 or mmc3_bank_select == 1 {
             bank_value = bitwise_and(bank_value, 254);
@@ -426,6 +448,7 @@ proc mmc3_write_register address, value {
         }
 
         mmc3_bank_registers[mmc3_bank_select + 1] = bank_value;
+        mmc3_refresh_chr_cache;
     } elif register_id == mmc3_register.mirroring {
         if mmc3_four_screen == 0 {
             # The mirroring ids are the cartridge parser's: 1 horizontal, 2 vertical, 3 four-screen.
@@ -466,10 +489,35 @@ proc mmc3_read_cpu address {
     mmc3_cpu_driven_mask = 0;
 
     if numeric_address >= mmc3_limit.prg_rom_start {
-        # One division per slot, and the in-bank offset is the address modulo the bank size:
-        # this is the path every instruction fetch in mapped PRG ROM takes.
+        # Inlined mmc3_prg_bank to save 1 func call per PRG read (~23k/frame). Same logic as func.
+        local last_bank = mmc3_last_prg_bank;
+        local second_last_bank = mmc3_second_last_prg_bank;
+        local prg_bank = 0;
         slot = (numeric_address - mmc3_limit.prg_rom_start) // mmc3_limit.prg_bank_bytes;
-        offset = (mmc3_prg_bank(slot) * mmc3_limit.prg_bank_bytes) + (numeric_address % 8192);
+
+        if mmc3_prg_mode == 0 {
+            if slot == 0 {
+                prg_bank = mmc3_bank_registers[7];
+            } elif slot == 1 {
+                prg_bank = mmc3_bank_registers[8];
+            } elif slot == 2 {
+                prg_bank = second_last_bank;
+            } else {
+                prg_bank = last_bank;
+            }
+        } else {
+            if slot == 0 {
+                prg_bank = second_last_bank;
+            } elif slot == 1 {
+                prg_bank = mmc3_bank_registers[8];
+            } elif slot == 2 {
+                prg_bank = mmc3_bank_registers[7];
+            } else {
+                prg_bank = last_bank;
+            }
+        }
+
+        offset = ((prg_bank % mmc3_prg_bank_count) * mmc3_limit.prg_bank_bytes) + (numeric_address % 8192);
         mmc3_cpu_mapped = 1;
         mmc3_cpu_value = mmc3_prg_rom[offset + 1];
         mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
@@ -502,11 +550,12 @@ proc mmc3_write_cpu address, value {
 }
 
 # Reads one pattern-table byte from the CHR bank its slot selects, out of CHR ROM when the board has
-# it and out of CHR RAM otherwise.
+# it and out of CHR RAM otherwise. Uses the cache built on register writes to avoid per-dot decode.
 proc mmc3_read_pattern address {
     local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
-    local offset = (mmc3_chr_bank(slot) * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
+    local chr_bank = mmc3_chr_bank_cache[slot + 1];
+    local offset = (chr_bank * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
     mmc3_pattern_value = 0;
 
     if mmc3_chr_rom_bytes > 0 {
@@ -520,7 +569,8 @@ proc mmc3_read_pattern address {
 proc mmc3_write_pattern address, value {
     local numeric_address = ($address % 65536) % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
-    local offset = (mmc3_chr_bank(slot) * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
+    local chr_bank = mmc3_chr_bank_cache[slot + 1];
+    local offset = (chr_bank * mmc3_limit.chr_bank_bytes) + (numeric_address % 1024);
     mmc3_pattern_write_accepted = 0;
 
     if mmc3_chr_ram_bytes > 0 {

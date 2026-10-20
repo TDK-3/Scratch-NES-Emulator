@@ -61,6 +61,13 @@ var rom_run_frames_drawn = 0;
 # The CPU cycles the console has run since the boot.
 var rom_run_cycles = 0;
 
+# FPS tracking via Scratch timer (seconds since green flag).
+var rom_run_fps = 0;
+var rom_run_last_fps_update_frame = 0;
+var rom_run_last_fps_update_timer = 0;
+var rom_run_start_timer = 0;
+var rom_run_frames_skipped = 0;
+
 # One summary line for the display sprite.
 var rom_run_state_text = "";
 
@@ -73,9 +80,9 @@ proc rom_run_start {
     rom_run_cycles = 0;
     rom_run_state_text = "not started";
 
-    # The self test detached every device and emptied the cartridge window.
+    # The self test detached every device and emptied the cartridge window
+    # (APU is stubbed and always undriven).
     cpu_bus_ppu_attached = 1;
-    cpu_bus_apu_attached = 1;
     cpu_bus_controllers_attached = 1;
 
     cartridge_load_board;
@@ -99,6 +106,11 @@ proc rom_run_start {
 
         rom_run_started = 1;
         rom_run_state_text = "running " & cartridge_board_state_text;
+        rom_run_fps = 0;
+        rom_run_last_fps_update_frame = 0;
+        rom_run_last_fps_update_timer = timer;
+        rom_run_start_timer = timer;
+        rom_run_frames_skipped = 0;
     } else {
         rom_run_state_text = "boot failed " & cartridge_board_state_text;
     }
@@ -111,6 +123,8 @@ proc rom_run_start {
 # warp window, and so the presentation broadcast can wait for the display sprite to finish
 # drawing.
 nowarp proc rom_run_loop {
+    local elapsed = 0;
+    local should_skip = 0;
     forever {
         # A pending ROM load is serviced before the console runs any more cycles, so the
         # image cannot be replaced under a frame that is already half run.
@@ -131,6 +145,18 @@ nowarp proc rom_run_loop {
             frame_loop_reset;
             rom_run_frame_count = rom_run_frame_count + 1;
 
+            # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
+            if rom_run_frame_count - rom_run_last_fps_update_frame >= 60 {
+                elapsed = timer - rom_run_last_fps_update_timer;
+
+                if elapsed > 0 {
+                    rom_run_fps = 60 / elapsed;
+                }
+
+                rom_run_last_fps_update_frame = rom_run_frame_count;
+                rom_run_last_fps_update_timer = timer;
+            }
+
             # The summary line is rebuilt once per emulated frame instead of once per chunk:
             # the report cannot change faster than the counters it shows, and a chunk is only
             # a hundred cycles of one frame.
@@ -138,14 +164,29 @@ nowarp proc rom_run_loop {
         }
 
         if ppu_frame_ready == 1 {
-            ppu_frame_ready = 0;
-            rom_run_frames_drawn = rom_run_frames_drawn + 1;
+            # Frame-skip when lagging: if emulated frames are >2 ahead of drawn
+            # or FPS is known to be <30, drop every other frame to keep CPU
+            # at 60Hz even when pen drawing is slow. Skipped frames still
+            # advance PPU/CPU but do not block on the sprite.
+            should_skip = 0;
 
-            # Recompute the pen geometry from the current pen_fit_to_screen
-            # setting before handing the frame over, so a toggle takes
-            # effect on this frame and stays fixed while the sprite draws.
-            pen_display_update_geometry;
-            broadcast_and_wait "draw frame";
+            if rom_run_fps > 0 and rom_run_fps < 30 {
+                if rom_run_frame_count % 2 == 0 {
+                    should_skip = 1;
+                }
+            } elif rom_run_frame_count > rom_run_frames_drawn + 2 {
+                should_skip = 1;
+            }
+
+            if should_skip == 1 {
+                ppu_frame_ready = 0;
+                rom_run_frames_skipped = rom_run_frames_skipped + 1;
+            } else {
+                ppu_frame_ready = 0;
+                rom_run_frames_drawn = rom_run_frames_drawn + 1;
+                pen_display_update_geometry;
+                broadcast_and_wait "draw frame";
+            }
         }
 
         wait 0;
@@ -193,8 +234,21 @@ proc rom_run_load_input_image {
 # Rebuilds the summary line the display sprite shows.
 proc rom_run_update_status {
     if rom_run_started == 1 {
+        local fps_text = "";
+        local skip_text = "";
+
+        if rom_run_fps > 0 {
+            fps_text = " fps " & (rom_run_fps // 1);
+        }
+
+        if rom_run_frames_skipped > 0 {
+            skip_text = " skipped " & rom_run_frames_skipped;
+        }
+
         rom_run_state_text = rom_run_image_name & " frame " & rom_run_frame_count
             & " drawn " & rom_run_frames_drawn
+            & skip_text
+            & fps_text
             & " cycles " & rom_run_cycles
             & " pc " & cpu_program_counter
             & " " & cartridge_board_state_text;

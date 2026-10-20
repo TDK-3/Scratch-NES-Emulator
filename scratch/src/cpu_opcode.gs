@@ -168,22 +168,16 @@ proc cpu_decode_opcode opcode {
     local record_start = (cpu_opcode_layout.header_values + 1)
         + (numeric_opcode * cpu_opcode_layout.fields_per_opcode);
 
-    # cpu_reset_opcode_decode() inlined, and each field coerces its list item with the same
-    # numeric add to_number performs instead of a custom-block call: this runs once per
-    # emulated instruction, and the seven calls it used to make were most of what it cost.
-    cpu_opcode_mnemonic = 0;
-    cpu_opcode_mode = 0;
-    cpu_opcode_base_cycles = 0;
-    cpu_opcode_access = 0;
-    cpu_opcode_page_cross_cycle = 0;
-    cpu_opcode_official = 0;
-    cpu_opcode_error = cpu_opcode_error_code.none;
+    # Each field coerces its list item with the same numeric add to_number performs instead of a
+    # custom-block call: this runs once per emulated instruction, and the seven calls it used to
+    # make were most of what it cost. Redundant zeroing removed - fields are overwritten below.
     cpu_opcode_mnemonic = cpu_opcode_table[record_start + cpu_opcode_field.mnemonic] + "";
     cpu_opcode_mode = cpu_opcode_table[record_start + cpu_opcode_field.addressing_mode] + "";
     cpu_opcode_base_cycles = cpu_opcode_table[record_start + cpu_opcode_field.base_cycles] + "";
     cpu_opcode_access = cpu_opcode_table[record_start + cpu_opcode_field.operand_access] + "";
     cpu_opcode_page_cross_cycle = cpu_opcode_table[record_start + cpu_opcode_field.page_cross_cycle] + "";
     cpu_opcode_official = cpu_opcode_table[record_start + cpu_opcode_field.official] + "";
+    cpu_opcode_error = cpu_opcode_error_code.none;
 
     if cpu_opcode_mnemonic == 0 {
         cpu_opcode_error = cpu_opcode_error_code.unknown_opcode;

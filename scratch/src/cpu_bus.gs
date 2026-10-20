@@ -2,16 +2,18 @@
 #
 # Ports the parts of src/nes/cpu/nes_cpu_bus.ts that the current shared vectors cover:
 # 2 KiB RAM mirrored across $0000-$1FFF, the open-bus data latch with per-device driven
-# masks, the $2000-$3FFF PPU register window, the $4015 APU status register, the
-# $4016/$4017 controller ports, the APU register writes, the $4014 OAM DMA stall with
-# alignment cycle, the cartridge window an attached board drives, and the "undriven read
-# returns the retained latch" rule.
+# masks, the $2000-$3FFF PPU register window, the $4016/$4017 controller ports, the
+# $4014 OAM DMA stall with alignment cycle, the cartridge window an attached board
+# drives, and the "undriven read returns the retained latch" rule. The APU
+# ($4000-$4013, $4015, $4017 frame counter) is not ported here; the whole APU
+# was removed in the no-audio branch (see scratch/src/apu_2a03.gs stub and
+# backup branch arena/54bc3f09-scratch-nes-emulator-backup).
 #
 # Each device window can be detached, which is what an absent device does in the
 # TypeScript decoder: the window is left undriven, so its reads return the retained latch
-# and its writes are dropped. The emulator attaches every device; the shared-vector replay
-# detaches the devices the TypeScript reference replays without, so both sides see the
-# same open-bus behavior.
+# and its writes are dropped. The emulator attaches every device it ports; the
+# shared-vector replay detaches the devices the TypeScript reference replays
+# without, so both sides see the same open-bus behavior.
 #
 # Scratch lists are 1-indexed, so the RAM window conversion happens in one place here.
 
@@ -22,7 +24,6 @@
 %include src/mapper_004
 %include src/ppu_bus
 %include src/ppu_2c02
-%include src/apu_2a03
 
 list cpu_ram = [0; 2048];
 var cpu_open_bus = 0;
@@ -53,10 +54,10 @@ var cpu_bus_cartridge_kind = 0;
 
 # Which devices the bus drives. A detached device leaves its window undriven: reads return the
 # retained latch and writes are dropped, exactly as the reference bus behaves with an absent
-# device. The emulator keeps all three attached; the shared-vector replay detaches the ones
-# the TypeScript reference replays without.
+# device. The emulator keeps the PPU and controllers attached; the APU window is not ported
+# and always returns the retained latch. The shared-vector replay detaches the devices the
+# TypeScript reference replays without, so both sides see the same open-bus behavior.
 var cpu_bus_ppu_attached = 1;
-var cpu_bus_apu_attached = 1;
 var cpu_bus_controllers_attached = 1;
 
 # Clears the bus latch like NesCpuBus.reset(); RAM contents survive a reset.
@@ -72,7 +73,6 @@ proc cpu_bus_reset {
     cpu_dma_sequence_cycle = 0;
     cpu_dma_alignment_cycle_needed = 0;
     ppu_reset;
-    apu_reset;
 }
 
 # Zeroes RAM. NesCpuBus starts every instance with cleared RAM, so a shared-vector record
@@ -114,8 +114,27 @@ func cpu_apply_driven_value(value, driven_mask) {
 
 # Reads one CPU address; mirrors read_cpu() for the ported windows.
 func cpu_bus_read(address) {
-    local numeric_address = normalize_word($address);
+    local numeric_address = $address % 65536; # normalize_word inlined
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
+
+    # PRG ROM fast path: >80% of bus reads are $8000-$FFFF; handle before PPU decode to save 2 compares.
+    if numeric_address >= 32768 {
+        if cpu_bus_cartridge_kind == mapper_kind.nrom {
+            nrom_read_cpu numeric_address;
+
+            if nrom_cpu_mapped == 1 {
+                return cpu_apply_driven_value(nrom_cpu_value, nrom_cpu_driven_mask);
+            }
+        } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+            mmc3_read_cpu numeric_address;
+
+            if mmc3_cpu_mapped == 1 {
+                return cpu_apply_driven_value(mmc3_cpu_value, mmc3_cpu_driven_mask);
+            }
+        }
+
+        return cpu_open_bus;
+    }
 
     if numeric_address < 8192 {
         # RAM drives every data line, so the read is the byte itself both as the return
@@ -170,12 +189,8 @@ func cpu_bus_read(address) {
 }
 
 # Reads the $4000-$401F I/O window; a detached device drives no data lines.
+# APU ($4015 status) is not ported and always returns the retained latch.
 func cpu_bus_read_io(address) {
-    if $address == 16405 and cpu_bus_apu_attached == 1 {
-        apu_read_status;
-        return cpu_apply_driven_value(apu_status_value, apu_status_driven_mask);
-    }
-
     if $address == 16406 and cpu_bus_controllers_attached == 1 {
         return cpu_apply_driven_value(controller_serial_read(0), 1);
     }
@@ -193,12 +208,19 @@ func cpu_bus_read_io(address) {
 # nothing else, which is the write a game makes most often; everything below it is reached
 # only for an address in the I/O or cartridge window.
 proc cpu_bus_write address, value {
-    local numeric_address = normalize_word($address);
-    local numeric_value = normalize_byte($value);
+    local numeric_address = $address % 65536; # normalize_word inlined
+    local numeric_value = $value % 256; # normalize_byte inlined
     cpu_open_bus = numeric_value;
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
-    if numeric_address < 8192 {
+    if numeric_address >= 32768 {
+        # PRG ROM fast path: $8000-$FFFF mapper registers / PRG writes, skips PPU/IO decode.
+        if cpu_bus_cartridge_kind == mapper_kind.nrom {
+            nrom_write_cpu numeric_address, numeric_value;
+        } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
+            mmc3_write_cpu numeric_address, numeric_value;
+        }
+    } elif numeric_address < 8192 {
         # $0000-$1FFF: 2 KiB of RAM, mirrored across the window.
         cpu_ram[(numeric_address % 2048) + 1] = numeric_value;
     } elif numeric_address < 16384 {
@@ -208,16 +230,8 @@ proc cpu_bus_write address, value {
             ppu_write_cpu_register numeric_address % 8, numeric_value;
         }
     } else {
-        if cpu_bus_apu_attached == 1 {
-            # $4000-$4013 and $4015/$4017 are APU registers; $4014 is the bus's own OAM DMA
-            # and $4016 belongs to the controller port, so neither reaches the APU.
-            if numeric_address <= 16403 {
-                apu_write_register numeric_address, numeric_value;
-            } elif numeric_address == 16405 or numeric_address == 16407 {
-                apu_write_register numeric_address, numeric_value;
-            }
-        }
-
+        # APU ($4000-$4013, $4015, $4017) is not ported; those writes are dropped and return
+        # the retained latch, matching the stub APU behavior.
         if numeric_address == 16406 and cpu_bus_controllers_attached == 1 {
             controller_write_strobe numeric_value;
         }

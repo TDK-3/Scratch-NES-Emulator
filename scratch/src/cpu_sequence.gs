@@ -72,7 +72,8 @@ proc cpu_execute_reset_cycles {
     vector_low = cpu_cycle_value;
     cpu_read_cycle cpu_vector_address.reset_high;
     cpu_program_counter = join_bytes(cpu_cycle_value, vector_low);
-    cpu_status = set_status_flag(cpu_status, cpu_flag.interrupt_disable, 1);
+    # set_status_flag(cpu_status, interrupt_disable, 1) inlined.
+    cpu_status = cpu_status + (4 * (1 - ((cpu_status // 4) % 2)));
 }
 
 # Seven accesses: the padding byte after the BRK opcode, the program counter pushed high byte
@@ -83,7 +84,8 @@ proc cpu_execute_brk_cycles {
     cpu_fetch_byte;
     cpu_push_word cpu_program_counter;
     cpu_push_status 1;
-    cpu_status = set_status_flag(cpu_status, cpu_flag.interrupt_disable, 1);
+    # set_status_flag(cpu_status, interrupt_disable, 1) inlined.
+    cpu_status = cpu_status + (4 * (1 - ((cpu_status // 4) % 2)));
     cpu_read_cycle cpu_vector_address.irq_brk_low;
     vector_low = cpu_cycle_value;
     cpu_read_cycle cpu_vector_address.irq_brk_high;
@@ -144,7 +146,8 @@ proc cpu_execute_hardware_interrupt_cycles source {
     cpu_read_cycle cpu_program_counter;
     cpu_push_word cpu_program_counter;
     cpu_push_status 0;
-    cpu_status = set_status_flag(cpu_status, cpu_flag.interrupt_disable, 1);
+    # set_status_flag(cpu_status, interrupt_disable, 1) inlined.
+    cpu_status = cpu_status + (4 * (1 - ((cpu_status // 4) % 2)));
     cpu_read_cycle vector_low_address;
     vector_low = cpu_cycle_value;
     cpu_read_cycle vector_high_address;

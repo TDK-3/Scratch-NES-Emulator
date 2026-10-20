@@ -68,6 +68,8 @@ proc pen_draw_frame {
     local run_key = 0;
     local current_key = 0;
     local framebuffer_index = 0;
+    local cached_scale = 0;
+    local cached_first_x = 0;
 
     say "";
     pen_up;
@@ -75,6 +77,8 @@ proc pen_draw_frame {
     set_pen_size pen_display_scale;
     set_pen_transparency 0;
     pen_current_color_key = 512;
+    cached_scale = pen_display_scale;
+    cached_first_x = pen_display_first_x;
 
     repeat 240 {
         stage_y = pen_display_first_y - (row * pen_display_scale);
@@ -82,8 +86,7 @@ proc pen_draw_frame {
         pixel_x = 0;
         run_start = 0;
         framebuffer_index = row_base + 1;
-        run_key = (ppu_framebuffer_emphasis[framebuffer_index] * 64)
-            + ppu_framebuffer_colors[framebuffer_index];
+        run_key = ppu_framebuffer_packed[framebuffer_index];
 
         # The remaining 255 pixels of the row, with the framebuffer index carried forward
         # instead of being recomputed from the pixel number: a repeat loop and one addition
@@ -91,17 +94,32 @@ proc pen_draw_frame {
         repeat 255 {
             pixel_x = pixel_x + 1;
             framebuffer_index = framebuffer_index + 1;
-            current_key = (ppu_framebuffer_emphasis[framebuffer_index] * 64)
-                + ppu_framebuffer_colors[framebuffer_index];
+            current_key = ppu_framebuffer_packed[framebuffer_index];
 
             if current_key != run_key {
-                pen_draw_run run_start, pixel_x - 1, stage_y, run_key;
+                if run_key != pen_current_color_key {
+                    pen_current_color_key = run_key;
+                    set_pen_color nes_pen_colors[run_key + 1];
+                }
+
+                goto cached_first_x + (run_start * cached_scale), stage_y;
+                pen_down;
+                set_x cached_first_x + ((pixel_x - 1) * cached_scale);
+                pen_up;
                 run_start = pixel_x;
                 run_key = current_key;
             }
         }
 
-        pen_draw_run run_start, 255, stage_y, run_key;
+        if run_key != pen_current_color_key {
+            pen_current_color_key = run_key;
+            set_pen_color nes_pen_colors[run_key + 1];
+        }
+
+        goto cached_first_x + (run_start * cached_scale), stage_y;
+        pen_down;
+        set_x cached_first_x + (255 * cached_scale);
+        pen_up;
         row = row + 1;
     }
 

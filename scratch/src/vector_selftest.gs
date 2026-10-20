@@ -4,7 +4,7 @@
 # record through the ported GoboScript modules, and compares the results with the values
 # recorded from the TypeScript reference. Records for suites that are not ported yet are
 # counted as skipped instead of being silently treated as passing. Today that is suite 2
-# (CPU core) and suite 4 (mapper selection).
+# (CPU core), suite 4 (mapper selection), and suite 6 (APU, stubbed no-audio port).
 #
 # The replay runs against the same bus the TypeScript reference replays against: the
 # devices a record's reference run leaves absent stay detached here, so both sides see the
@@ -192,13 +192,11 @@ proc run_next_port_vector {
         run_mmc3_vector input_start;
     } elif suite_id == port_suite.ppu {
         run_ppu_vector input_start;
-    } elif suite_id == port_suite.apu {
-        run_apu_vector input_start;
     } elif suite_id == port_suite.mmc3_irq {
         # Suite 19 shares suite 18's record layout and its board; only the operations differ.
         run_mmc3_vector input_start;
     } else {
-        # Suite 2 (CPU core) and suite 4 (mapper selection) are not ported yet.
+        # Suite 2 (CPU core), suite 4 (mapper selection), and suite 6 (APU, stubbed) are not ported.
         skipped = 1;
     }
 
@@ -290,11 +288,11 @@ proc run_alu_vector operation, input_start {
 }
 
 # Detaches every device from the CPU bus, so a record replays against the same open-bus
-# behavior the TypeScript reference produces with absent devices: the PPU, APU, and
-# controller windows go undriven and the cartridge window has no board.
+# behavior the TypeScript reference produces with absent devices: the PPU and
+# controller windows go undriven and the cartridge window has no board. APU is
+# stubbed and always undriven, so it has no attachment flag.
 proc port_detach_bus_devices {
     cpu_bus_ppu_attached = 0;
-    cpu_bus_apu_attached = 0;
     cpu_bus_controllers_attached = 0;
     cpu_bus_cartridge_kind = mapper_kind.none;
 }
@@ -964,28 +962,11 @@ proc run_ppu_vector input_start {
     add ppu_take_nmi_edge() to port_actual_values;
 }
 
-# Suite 6: one APU register-write record. Inputs are the write count followed by (address, value)
-# pairs. Expected values are the $4015 status byte, pulse channel 1 DAC output, and pulse channel 1
-# length counter. The handler resets the APU, applies each write, reads $4015 status, and reports
-# the three values.
+# Suite 6: APU register-write records are not ported; the APU is a no-audio stub.
+# The fixture still carries the records, but the shared-vector gate marks the suite
+# as skipped instead of producing values. This proc is retained only for the
+# source-level mirror contract and does nothing.
 proc run_apu_vector input_start {
-    local write_count = to_number(shared_port_vectors[$input_start]);
-    local offset = 1;
-    local address = 0;
-    local value = 0;
-    apu_reset;
-
-    repeat write_count {
-        address = to_number(shared_port_vectors[$input_start + offset]);
-        value = to_number(shared_port_vectors[$input_start + offset + 1]);
-        apu_write_register address, value;
-        offset += 2;
-    }
-
-    apu_read_status;
-    add apu_status_value to port_actual_values;
-    add apu_get_pulse_output(1) to port_actual_values;
-    add apu_get_pulse_length(1) to port_actual_values;
 }
 
 # Suites 18 and 19: one MMC3 board. Inputs are the declared image length, the sixteen header bytes,

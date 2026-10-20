@@ -17,11 +17,10 @@
 #   and inline the arithmetic they need.
 # - A bitwise AND used to walk one bit per iteration (16 iterations of modulus, division,
 #   comparison and addition) for every masked bus read. It now looks up the low and high
-#   nibble pair in a 256-entry table of nibble ANDs, four table reads and a few operators.
-#   OR and XOR are derived from AND with the two identities a | b = a + b - (a & b) and
-#   a ^ b = a + b - 2 * (a & b), which hold for every non-negative pair, so only the AND
-#   table has to exist. src/bitwise_tables.gs fills it from the Stage's green flag before
-#   anything reads a bus byte.
+#   nibble pair in 256-entry tables. The AND table answers AND, the OR table answers OR,
+#   and the XOR table answers XOR, each via two lookups for a byte and four for a word,
+#   without deriving OR/XOR from AND arithmetic. src/bitwise_tables.gs fills them from the
+#   Stage's green flag before anything reads a bus byte.
 
 %include src/bitwise_tables
 
@@ -93,35 +92,83 @@ func bitwise_and(left, right) {
     local right_word = $right % 65536;
 
     if left_word < 256 and right_word < 256 {
-        return (bitwise_table_and[((left_word // 16) * 16) + (right_word // 16) + 1] * 16)
-            + bitwise_table_and[((left_word % 16) * 16) + (right_word % 16) + 1];
+        return bitwise_table_byte_and[left_word * 256 + right_word + 1];
     }
 
     local left_high = left_word // 256;
     local right_high = right_word // 256;
     local left_low = left_word % 256;
     local right_low = right_word % 256;
-    local high_nibbles = bitwise_table_and[((left_high // 16) * 16) + (right_high // 16) + 1];
-    local high_bits = bitwise_table_and[((left_high % 16) * 16) + (right_high % 16) + 1];
-    local low_nibbles = bitwise_table_and[((left_low // 16) * 16) + (right_low // 16) + 1];
-    local low_bits = bitwise_table_and[((left_low % 16) * 16) + (right_low % 16) + 1];
+    local left_high_high = left_high // 16;
+    local right_high_high = right_high // 16;
+    local left_high_low = left_high % 16;
+    local right_high_low = right_high % 16;
+    local left_low_high = left_low // 16;
+    local right_low_high = right_low // 16;
+    local left_low_low = left_low % 16;
+    local right_low_low = right_low % 16;
+    local high_nibbles = bitwise_table_and[left_high_high * 16 + right_high_high + 1];
+    local high_bits = bitwise_table_and[left_high_low * 16 + right_high_low + 1];
+    local low_nibbles = bitwise_table_and[left_low_high * 16 + right_low_high + 1];
+    local low_bits = bitwise_table_and[left_low_low * 16 + right_low_low + 1];
 
     return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
 }
 
-# Bitwise OR over 16 bits. a | b is exactly a + b - (a & b) for non-negative operands, so
-# the nibble table only has to answer AND.
+# Bitwise OR over 16 bits, through the nibble OR table.
 func bitwise_or(left, right) {
     local left_word = $left % 65536;
     local right_word = $right % 65536;
 
-    return (left_word + right_word) - bitwise_and(left_word, right_word);
+    if left_word < 256 and right_word < 256 {
+        return bitwise_table_byte_or[left_word * 256 + right_word + 1];
+    }
+
+    local left_high = left_word // 256;
+    local right_high = right_word // 256;
+    local left_low = left_word % 256;
+    local right_low = right_word % 256;
+    local left_high_high = left_high // 16;
+    local right_high_high = right_high // 16;
+    local left_high_low = left_high % 16;
+    local right_high_low = right_high % 16;
+    local left_low_high = left_low // 16;
+    local right_low_high = right_low // 16;
+    local left_low_low = left_low % 16;
+    local right_low_low = right_low % 16;
+    local high_nibbles = bitwise_table_or[left_high_high * 16 + right_high_high + 1];
+    local high_bits = bitwise_table_or[left_high_low * 16 + right_high_low + 1];
+    local low_nibbles = bitwise_table_or[left_low_high * 16 + right_low_high + 1];
+    local low_bits = bitwise_table_or[left_low_low * 16 + right_low_low + 1];
+
+    return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
 }
 
-# Bitwise XOR over 16 bits. a ^ b is exactly a + b - 2 * (a & b) for non-negative operands.
+# Bitwise XOR over 16 bits, through the nibble XOR table.
 func bitwise_xor(left, right) {
     local left_word = $left % 65536;
     local right_word = $right % 65536;
 
-    return (left_word + right_word) - (2 * bitwise_and(left_word, right_word));
+    if left_word < 256 and right_word < 256 {
+        return bitwise_table_byte_xor[left_word * 256 + right_word + 1];
+    }
+
+    local left_high = left_word // 256;
+    local right_high = right_word // 256;
+    local left_low = left_word % 256;
+    local right_low = right_word % 256;
+    local left_high_high = left_high // 16;
+    local right_high_high = right_high // 16;
+    local left_high_low = left_high % 16;
+    local right_high_low = right_high % 16;
+    local left_low_high = left_low // 16;
+    local right_low_high = right_low // 16;
+    local left_low_low = left_low % 16;
+    local right_low_low = right_low % 16;
+    local high_nibbles = bitwise_table_xor[left_high_high * 16 + right_high_high + 1];
+    local high_bits = bitwise_table_xor[left_high_low * 16 + right_high_low + 1];
+    local low_nibbles = bitwise_table_xor[left_low_high * 16 + right_low_high + 1];
+    local low_bits = bitwise_table_xor[left_low_low * 16 + right_low_low + 1];
+
+    return (((high_nibbles * 16) + high_bits) * 256) + ((low_nibbles * 16) + low_bits);
 }
