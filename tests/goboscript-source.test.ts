@@ -178,7 +178,8 @@ const MIRROR_CONTRACT: readonly {
         source: "src/cpu_status.gs",
         declaration: "cpu_status_table_init",
         mirror: "cpu_status_table_init",
-    },    {
+    },
+    {
         source: "src/cpu_status.gs",
         declaration: "update_zero_negative_flags",
         mirror: "update_zero_negative_flags",
@@ -1166,6 +1167,32 @@ test("only the Stage declares shared state", () => {
                 [],
                 `${source.path} includes ${included}, which declares shared state`,
             );
+        }
+    }
+});
+
+test("no translation unit declares the same name twice", () => {
+    // GoboScript rejects a second declaration of a name in one translation unit, so a duplicate
+    // header declaration or a leftover copy of a variable is a build error rather than a quiet
+    // shadow. Locals and arguments are per-body and are not collected here: they repeat by
+    // design, and an enum name is its own namespace (the port pairs an enum with a variable of
+    // the same name on purpose, as in cpu_dma_phase).
+    for (const source of sources) {
+        const declarations = new Map<string, string[]>();
+
+        for (const path of [source.path, ...collect_includes(source)]) {
+            const unit = get_source(path);
+
+            for (const declaration of unit.declarations) {
+                const locations = declarations.get(declaration.name) ?? [];
+                locations.push(`${path}:${declaration.line}`);
+                declarations.set(declaration.name, locations);
+            }
+
+        }
+
+        for (const [name, locations] of declarations) {
+            assert.ok(locations.length === 1, `${source.path}: "${name}" is declared twice (${locations.join(", ")})`);
         }
     }
 });

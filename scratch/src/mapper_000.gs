@@ -193,8 +193,9 @@ proc nrom_apply_memory_limits prg_ram_bytes, chr_ram_bytes {
     }
 }
 
-# Puts every region back to the zeroes a freshly constructed board holds, sizing both ROM lists to
-# the declared payload so the copies and the vector records can replace items inside them.
+# Puts every region back to the zeroes a freshly constructed board holds. The two ROM lists are
+# only emptied here: nrom_copy_prg_rom and nrom_copy_chr_rom size them by appending the payload,
+# so filling them with zeroes first would write every ROM byte twice.
 proc nrom_reset_memory {
     local index = 1;
     delete nrom_prg_rom;

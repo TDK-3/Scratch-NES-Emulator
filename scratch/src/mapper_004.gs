@@ -280,8 +280,9 @@ proc mmc3_validate {
     }
 }
 
-# Puts every memory region back to the zeroes a freshly constructed board holds, sizing both ROM
-# lists to the declared payload so the copies and the vector records can replace items inside them.
+# Puts every memory region back to the zeroes a freshly constructed board holds. The two ROM
+# lists are only emptied here: mmc3_copy_prg_rom and mmc3_copy_chr_rom size them by appending the
+# payload, so filling them with zeroes first would write every ROM byte twice.
 proc mmc3_reset_memory {
     local index = 1;
     delete mmc3_prg_rom;

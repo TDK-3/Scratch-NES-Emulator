@@ -362,9 +362,6 @@ proc ppu_clear_frame_output {
     ppu_frame_ready = 0;
 }
 
-# Fills the greyscale table: a six-bit color index with its low four bits cleared by the
-# PPUMASK greyscale bit. 64 iterations per reset replace two divisions and a multiply on every
-# pixel of a greyscale frame.
 # Fills the byte-reversal table: eight shifts per entry, 256 entries, once per reset.
 proc ppu_reverse_table_init {
     local value = 0;
@@ -385,6 +382,9 @@ proc ppu_reverse_table_init {
     }
 }
 
+# Fills the greyscale table: a six-bit color index with its low four bits cleared by the
+# PPUMASK greyscale bit. 64 iterations per reset replace two divisions and a multiply on every
+# pixel of a greyscale frame.
 proc ppu_greyscale_table_init {
     local index = 0;
 

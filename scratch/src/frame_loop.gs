@@ -64,10 +64,10 @@ proc frame_loop_reset {
 # frame-IRQ contribution are omitted (see apu_2a03.gs stub).
 #
 # This is the innermost loop of the whole emulator, so it avoids custom-block calls wherever
-# a comparison will do: the DMA state is tested directly instead of through
-# frame_loop_check_dma, the PPU's three dots per CPU cycle are issued as three dot clocks
-# rather than through ppu_clock_cpu_cycle, and the NMI latch is read directly rather than
-# through ppu_take_nmi_edge. The standalone procs and funcs stay for the self test
+# a comparison will do: the DMA state is tested directly and the transfer runs in one call
+# (cpu_bus_run_dma), the PPU advances by a whole sequence's worth of dots in one call
+# (ppu_clock_cpu_cycles), and the NMI latch is read directly rather than through
+# ppu_take_nmi_edge. The standalone procs and funcs stay for the self test
 # and as the documented description of each step.
 proc frame_loop_run_chunk {
     frame_loop_chunk_cycles_run = 0;

@@ -41,7 +41,8 @@
 # a diagnostic, not part of running a ROM: it detaches every device, empties the cartridge
 # window, and leaves both the bus and the CPU registers to be reset by the boot. Leaving it off
 # is what a normal run does; setting it to 1 in the editor runs the suite on the next green
-# flag. Stage-owned state, like every other header's.
+# flag, which is the one place the Stage reads this flag. Stage-owned state, like every other
+# header's.
 var port_self_test_enabled = 0;
 
 enum port_suite {
@@ -113,12 +114,6 @@ var port_vectors_skipped = 0;
 var port_first_failure = "";
 var port_self_test_done = 0;
 var port_self_test_summary = "";
-
-# Whether the green flag replays the shared vector fixture. The replay is the port's correctness
-# check, not part of booting a game: it costs 582 vectors, the CPU sequence replays with the
-# access log on, and a cartridge load. Leave it at 1 in a test build and at 0 for a playable
-# one; the Stage still calls run_port_self_test either way, which keeps the boot order pinned.
-var port_self_test_enabled = 0;
 list port_actual_values;
 list port_bus_reads;
 list port_sequence_kinds;
@@ -819,6 +814,19 @@ proc run_nrom_memory_vector input_start {
     add nrom_prg_ram_bytes to port_actual_values;
     add nrom_chr_ram_bytes to port_actual_values;
     nrom_reset_memory;
+
+    # The reset no longer zero-fills the two ROM lists (the real load appends every byte), so the
+    # sparse preparation below sizes them here: a byte the vector does not prepare has to read
+    # as 0, which is what a sized list of zeroes holds and what a write past the end of an empty
+    # list would not.
+    repeat cartridge_prg_rom_bytes {
+        add 0 to nrom_prg_rom;
+    }
+
+    repeat cartridge_chr_rom_bytes {
+        add 0 to nrom_chr_rom;
+    }
+
     index = 0;
 
     repeat prg_count {
@@ -935,6 +943,12 @@ proc run_cartridge_bus_vector input_start {
     if nrom_ok == 1 and attach_board == 1 {
         attached = 1;
         nrom_reset_memory;
+
+        # Sized for the same reason as the memory vector above: an unprepared byte reads as 0.
+        repeat cartridge_prg_rom_bytes {
+            add 0 to nrom_prg_rom;
+        }
+
         index = 0;
 
         repeat prg_count {
@@ -1032,6 +1046,17 @@ proc run_mmc3_vector input_start {
     add mmc3_error_code to port_actual_values;
     add mmc3_prg_ram_bytes to port_actual_values;
     mmc3_reset_memory;
+
+    # Sized for the same reason as the NROM vectors above: an unprepared byte reads as 0. The
+    # board's own sizes are the ones its reset used to fill.
+    repeat mmc3_prg_rom_bytes {
+        add 0 to mmc3_prg_rom;
+    }
+
+    repeat mmc3_chr_rom_bytes {
+        add 0 to mmc3_chr_rom;
+    }
+
     index = 0;
 
     repeat prg_count {
