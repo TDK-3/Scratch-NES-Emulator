@@ -287,14 +287,6 @@ proc mmc3_reset_memory {
     delete mmc3_prg_rom;
     delete mmc3_chr_rom;
 
-    repeat mmc3_prg_rom_bytes {
-        add 0 to mmc3_prg_rom;
-    }
-
-    repeat mmc3_chr_rom_bytes {
-        add 0 to mmc3_chr_rom;
-    }
-
     repeat mmc3_limit.prg_ram_bytes {
         mmc3_prg_ram[index] = 0;
         index++;
@@ -312,8 +304,12 @@ proc mmc3_reset_memory {
 proc mmc3_copy_prg_rom {
     local index = 0;
 
+    # Appending the real bytes sizes the list as it fills it: the reset's zero fill and this
+    # loop used to write every ROM byte twice.
+    delete mmc3_prg_rom;
+
     repeat mmc3_prg_rom_bytes {
-        mmc3_prg_rom[index + 1] = to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]);
+        add to_number(cartridge_bytes[cartridge_prg_rom_offset + index + 1]) to mmc3_prg_rom;
         index++;
     }
 }
@@ -322,8 +318,10 @@ proc mmc3_copy_prg_rom {
 proc mmc3_copy_chr_rom {
     local index = 0;
 
+    delete mmc3_chr_rom;
+
     repeat mmc3_chr_rom_bytes {
-        mmc3_chr_rom[index + 1] = to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]);
+        add to_number(cartridge_bytes[cartridge_chr_rom_offset + index + 1]) to mmc3_chr_rom;
         index++;
     }
 }

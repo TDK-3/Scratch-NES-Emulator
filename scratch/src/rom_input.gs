@@ -137,7 +137,7 @@ proc rom_input_parse_text {
                 if has_pending_nibble == 0 {
                     pending_nibble = nibble_value;
                     has_pending_nibble = 1;
-                } elif length rom_input_bytes >= rom_input_limit.max_bytes {
+                } elif rom_input_byte_count >= rom_input_limit.max_bytes {
                     rom_input_error_code = rom_input_error.too_many_bytes;
                 } else {
                     add ((pending_nibble * 16) + nibble_value) to rom_input_bytes;

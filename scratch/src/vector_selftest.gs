@@ -113,6 +113,12 @@ var port_vectors_skipped = 0;
 var port_first_failure = "";
 var port_self_test_done = 0;
 var port_self_test_summary = "";
+
+# Whether the green flag replays the shared vector fixture. The replay is the port's correctness
+# check, not part of booting a game: it costs 582 vectors, the CPU sequence replays with the
+# access log on, and a cartridge load. Leave it at 1 in a test build and at 0 for a playable
+# one; the Stage still calls run_port_self_test either way, which keeps the boot order pinned.
+var port_self_test_enabled = 0;
 list port_actual_values;
 list port_bus_reads;
 list port_sequence_kinds;
@@ -130,17 +136,28 @@ proc run_port_self_test {
     port_self_test_done = 0;
     port_self_test_summary = "";
     cpu_access_log_enabled = 1;
-    rom_header_report;
-    cartridge_load_board;
-    cpu_check_opcode_table;
 
-    if schema_version != 1 {
+    if port_self_test_enabled == 0 {
+        # Nothing below this branch runs on a normal boot: no board load (rom_run_start loads
+        # the cartridge once), no opcode-table rescan, no 582-vector replay.
+        port_self_test_summary = "skipped";
+        port_self_test_done = 1;
+    } elif schema_version != 1 {
         port_self_test_summary = "unsupported shared vector schema " & schema_version;
     } elif cpu_opcode_error != cpu_opcode_error_code.none {
         port_self_test_summary = "opcode table failed its length and header check";
     } else {
-        repeat record_count {
-            run_next_port_vector;
+        # The enabled path still needs the board and the opcode table before it can replay.
+        rom_header_report;
+        cartridge_load_board;
+        cpu_check_opcode_table;
+
+        if cpu_opcode_error != cpu_opcode_error_code.none {
+            port_self_test_summary = "opcode table failed its length and header check";
+        } else {
+            repeat record_count {
+                run_next_port_vector;
+            }
         }
 
         port_self_test_summary = "port vectors " & port_vectors_passed & "/" & port_vectors_run;
