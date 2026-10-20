@@ -28,7 +28,7 @@ var alu_status = 0;
 proc alu_add_with_carry accumulator, operand, status {
     local left = $accumulator % 256;
     local right = $operand % 256;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local carry_in = normalized % 2;
     local sum = (left + right) + carry_in;
     local value = sum % 256;
@@ -75,7 +75,7 @@ proc alu_add_with_carry accumulator, operand, status {
 proc alu_subtract_with_carry accumulator, operand, status {
     local left = $accumulator % 256;
     local right = $operand % 256;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local borrow = 1 - (normalized % 2);
     local difference = (left - right) - borrow;
     local value = difference % 256;
@@ -144,7 +144,7 @@ proc alu_shift_left value, status {
     local byte = $value % 256;
     local shifted = byte * 2;
     local result = shifted % 256;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local updated = 0;
 
     if shifted > 255 {
@@ -161,7 +161,7 @@ proc alu_shift_left value, status {
 proc alu_shift_right value, status {
     local byte = $value % 256;
     local result = byte // 2;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local updated = 0;
 
     if byte % 2 == 1 {
@@ -177,7 +177,7 @@ proc alu_shift_right value, status {
 # ROL; mirrors the CPU's accumulator rotate-left step.
 proc alu_rotate_left value, status {
     local byte = $value % 256;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local shifted = (byte * 2) + (normalized % 2);
     local result = shifted % 256;
     local updated = 0;
@@ -195,7 +195,7 @@ proc alu_rotate_left value, status {
 # ROR; mirrors the CPU's accumulator rotate-right step.
 proc alu_rotate_right value, status {
     local byte = $value % 256;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local shifted = byte + ((normalized % 2) * 256);
     local result = shifted // 2;
     local updated = 0;
@@ -215,7 +215,7 @@ proc alu_compare register_value, operand, status {
     local left = $register_value % 256;
     local right = $operand % 256;
     local difference = left - right;
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local updated = 0;
 
     if difference >= 0 {
@@ -233,7 +233,7 @@ proc alu_bit_test accumulator, operand, status {
     local left = $accumulator % 256;
     local memory = $operand % 256;
     local tested = bitwise_and(left, memory);
-    local normalized = normalize_status($status);
+    local normalized = $status % 256; # normalized already; %256 cheaper than normalize_status
     local updated = 0;
 
     if tested == 0 {
