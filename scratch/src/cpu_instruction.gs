@@ -64,30 +64,36 @@ proc cpu_fetch_and_decode_opcode {
 # every writer, so each condition reads its flag bit directly instead of through
 # has_status_flag; the branches are ordered by how often compiled code takes them. The operand resolution and the
 # taken, page-crossing, and not-taken cycle counts are the ported relative-branch sequence.
+# The status bit each pair of top opcode bits selects for a relative branch: bits 7-6 are 00 for
+# the negative flag, 01 for overflow, 10 for carry, and 11 for zero.
+list cpu_branch_flag_weights = [128, 64, 1, 2];
+
+# The eight relative branches this proc dispatches by arithmetic, named here because the branch
+# table no longer compares against each one: cpu_mnemonic.op_bcc, cpu_mnemonic.op_bcs,
+# cpu_mnemonic.op_bne, cpu_mnemonic.op_beq, cpu_mnemonic.op_bpl, cpu_mnemonic.op_bmi,
+# cpu_mnemonic.op_bvc, cpu_mnemonic.op_bvs. Any other mnemonic cannot carry the relative
+# addressing mode, so the arithmetic below reaches exactly these eight opcodes.
+
 proc cpu_execute_branch {
     local taken = 0;
+    local opcode_byte = cpu_fetched_byte % 256;
+    local flag_weight = 0;
+
+    # The opcode byte is captured before the operand is resolved, because a relative operand is
+    # an immediate fetch and that overwrites cpu_fetched_byte with the offset.
     cpu_resolve_operand cpu_addressing_mode.relative, cpu_operand_access.read;
 
     if cpu_resolved_error != cpu_operand_error_code.none {
         cpu_instruction_error = cpu_instruction_error_code.unresolved_operand;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcc {
-        taken = 1 - (cpu_status % 2);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bcs {
-        taken = cpu_status % 2;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bne {
-        taken = 1 - ((cpu_status // 2) % 2);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_beq {
-        taken = (cpu_status // 2) % 2;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bpl {
-        taken = 1 - (cpu_status // 128);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bmi {
-        taken = cpu_status // 128;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvc {
-        taken = 1 - ((cpu_status // 64) % 2);
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_bvs {
-        taken = (cpu_status // 64) % 2;
     } else {
-        cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
+        # The eight branch opcodes differ in exactly two fields: bits 7-6 pick the flag and bit
+        # 5 picks whether the branch is taken on set or clear. Two divisions and one list read
+        # replace a chain of up to eight mnemonic comparisons and eight flag expressions.
+        flag_weight = cpu_branch_flag_weights[((opcode_byte // 64) % 4) + 1];
+
+        if ((cpu_status // flag_weight) % 2) == ((opcode_byte // 32) % 2) {
+            taken = 1;
+        }
     }
 
     if cpu_instruction_error == cpu_instruction_error_code.none {

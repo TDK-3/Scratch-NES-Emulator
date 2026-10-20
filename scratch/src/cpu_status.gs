@@ -47,27 +47,44 @@ func set_status_flag(status, flag, enabled) {
     return normalize_status(updated);
 }
 
+# The zero and negative bits one result byte produces, at slot value + 1: 2 when the byte is
+# zero, 128 when its high bit is set, and their sum when both hold.
+list cpu_zero_negative_bits = [0; 256];
+
+# Fills the table above once per run. 256 iterations at the green flag replace two comparisons
+# and two branches on every flag update, and this is the hottest helper in the emulator: it runs
+# for most ALU, load, increment, shift, and transfer instructions.
+proc cpu_status_table_init {
+    local value = 0;
+    local bits = 0;
+
+    until value == 256 {
+        bits = 0;
+
+        if value == 0 {
+            bits = bits + cpu_flag.zero;
+        }
+
+        if value >= 128 {
+            bits = bits + cpu_flag.negative;
+        }
+
+        cpu_zero_negative_bits[value + 1] = bits;
+        value = value + 1;
+    }
+}
+
 # Updates zero and negative from an eight-bit result; mirrors update_zero_negative_flags().
-# Only the zero and negative bits change, so the byte is normalized once and the two bits are
-# written in place: both set_status_flag calls this replaces would have renormalized a value
-# that already satisfies the invariant.
+# Only the zero and negative bits change, so the byte is normalized once, bits 7 and 1 are
+# cleared arithmetically, and the two new bits come from one table read: both set_status_flag
+# calls this replaces would have renormalized a value that already satisfies the invariant.
 func update_zero_negative_flags(status, value) {
     local byte = $value % 256;
     local normalized = normalize_status($status);
-    local without_zero = normalized - (2 * ((normalized // 2) % 2));
-    local without_negative = without_zero - (128 * (without_zero // 128));
-    local zero_bit = 0;
-    local negative_bit = 0;
 
-    if byte == 0 {
-        zero_bit = cpu_flag.zero;
-    }
-
-    if byte >= 128 {
-        negative_bit = cpu_flag.negative;
-    }
-
-    return without_negative + zero_bit + negative_bit;
+    # Bit 7 is the whole top half of the byte, so dropping it is a modulo by 128; bit 1 is
+    # cleared by subtracting its weight when it is set.
+    return (normalized % 128) - (2 * ((normalized // 2) % 2)) + cpu_zero_negative_bits[byte + 1];
 }
 
 # Packs the break bit for a software BRK push; mirrors pack_status_for_stack(status, "brk").

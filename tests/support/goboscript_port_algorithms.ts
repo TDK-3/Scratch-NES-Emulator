@@ -244,15 +244,32 @@ export function set_status_flag(status: number, flag: number, enabled: number): 
 }
 
 /** Mirror of `update_zero_negative_flags(status, value)`: one normalize, two bits in place. */
+/**
+ * Mirror of the `cpu_zero_negative_bits` table and `cpu_status_table_init` proc: the zero and
+ * negative bits one result byte contributes, at slot value + 1. The port builds it once at the
+ * green flag; the mirror can build it at load because it has no green flag.
+ */
+export const CPU_ZERO_NEGATIVE_BITS: readonly number[] = Array.from({ length: 256 }, (_unused, value) => {
+    const zero_bit = value === 0 ? CPU_FLAG.ZERO : 0;
+    const negative_bit = value >= 128 ? CPU_FLAG.NEGATIVE : 0;
+
+    return zero_bit + negative_bit;
+});
+
+/** Mirror of `update_zero_negative_flags(status, value)`. */
 export function update_zero_negative_flags(status: number, value: number): number {
     const byte = scratch_mod(value, 256);
     const normalized = normalize_status(status);
-    const without_zero = normalized - 2 * scratch_mod(scratch_floor_divide(normalized, 2), 2);
-    const without_negative = without_zero - 128 * scratch_floor_divide(without_zero, 128);
-    const zero_bit = byte === 0 ? CPU_FLAG.ZERO : 0;
-    const negative_bit = byte >= 128 ? CPU_FLAG.NEGATIVE : 0;
+    const without_negative = scratch_mod(normalized, 128);
+    const without_zero = without_negative - 2 * scratch_mod(scratch_floor_divide(normalized, 2), 2);
 
-    return without_negative + zero_bit + negative_bit;
+    return without_zero + (CPU_ZERO_NEGATIVE_BITS[byte] ?? 0);
+}
+
+/** Mirror of the `cpu_status_table_init` proc; the mirror's table is built at load. */
+export function cpu_status_table_init(): void {
+    // The TypeScript table above is a const array built at module load, so there is nothing to
+    // fill in here. The function exists so the declaration inventory stays one-to-one.
 }
 
 /** Mirror of `pack_status_for_stack(status, break_enabled)`. */

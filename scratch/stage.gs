@@ -38,6 +38,7 @@ onflag {
     # a bus byte. The opcode table is converted from the strings its data file loads to the
     # numbers every decode wants in the same place.
     bitwise_table_init;
+    cpu_status_table_init;
     nes_palette_init;
     cpu_opcode_table_normalize;
 

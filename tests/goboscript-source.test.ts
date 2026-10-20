@@ -176,6 +176,10 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/cpu_status.gs", declaration: "set_status_flag", mirror: "set_status_flag" },
     {
         source: "src/cpu_status.gs",
+        declaration: "cpu_status_table_init",
+        mirror: "cpu_status_table_init",
+    },    {
+        source: "src/cpu_status.gs",
         declaration: "update_zero_negative_flags",
         mirror: "update_zero_negative_flags",
     },
