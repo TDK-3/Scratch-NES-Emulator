@@ -136,6 +136,10 @@ var ppu_mask_emphasis = 0;
 
 var ppu_scanline = 261;
 var ppu_dot = 0;
+# Dots clocked since ppu_reset, counted by ppu_run_dots. ppu_sync_to_cycle compares it with the
+# CPU cycle count, so the PPU runs exactly as far ahead of the CPU as the reference's per-cycle
+# scheduler does.
+var ppu_dots_clocked = 0;
 var ppu_frame_number = 0;
 var ppu_odd_frame = 0;
 var ppu_nmi_output = 0;
@@ -311,6 +315,7 @@ proc ppu_reset {
     ppu_scanline = PPU_PRE_RENDER_SCANLINE;
     ppu_framebuffer_row_base = PPU_PRE_RENDER_SCANLINE * PPU_FRAME_WIDTH;
     ppu_dot = 0;
+    ppu_dots_clocked = 0;
     ppu_frame_number = 0;
     ppu_odd_frame = 0;
     ppu_nmi_output = 0;
@@ -935,11 +940,29 @@ proc ppu_run_dots count {
 
         dots_remaining = dots_remaining - 1;
     }
+
+    ppu_dots_clocked = ppu_dots_clocked + $count;
 }
 
 # Advances three NTSC PPU dots for one CPU cycle.
 proc ppu_clock_cpu_cycle {
     ppu_run_dots 3;
+}
+
+# Brings the PPU up to the CPU's schedule for a bus action that follows `cycle_count` completed
+# CPU cycles. Measured against the reference's per-cycle trace (every instruction boundary and
+# every OAM DMA cycle of the first million CPU cycles of the supplied ROM), the PPU has clocked
+# 3 * cycle_count + 2 dots when the CPU makes that action. Every $2000-$3FFF access, every
+# cartridge write, and every OAM write calls this first, so a register read, a mapper write, or
+# a sprite-memory write sees the same PPU state as the reference, even inside one instruction.
+# The frame loop also calls it once per sequence, which is the whole PPU cost when nothing
+# touches the PPU mid-instruction.
+proc ppu_sync_to_cycle cycle_count {
+    local target_dots = $cycle_count * 3 + 2;
+
+    if target_dots > ppu_dots_clocked {
+        ppu_run_dots target_dots - ppu_dots_clocked;
+    }
 }
 
 # Advances the PPU by three dots for each of `count` CPU cycles, in one call. The frame loop

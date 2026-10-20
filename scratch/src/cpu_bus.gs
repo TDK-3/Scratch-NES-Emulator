@@ -354,7 +354,7 @@ func cpu_clock_dma_cycle() {
 # as the one-cycle form the shared vectors and the mirror use.
 var cpu_dma_cycles_run = 0;
 
-proc cpu_bus_run_dma {
+proc cpu_bus_run_dma cycle_base {
     local guard = 0;
     cpu_dma_cycles_run = 0;
 
@@ -376,6 +376,14 @@ proc cpu_bus_run_dma {
             cpu_dma_data_latch = cpu_bus_read((cpu_dma_page * 256) + cpu_dma_index);
             cpu_dma_phase = cpu_dma_phase.write;
         } else {
+            # Each OAM write lands on the PPU's own schedule: sync to this cycle first, as a
+            # $2004 register write does, so sprite evaluation sees the same bytes it would on
+            # the reference. This cycle is the (cycle_base + cycles run so far - 1)th of the
+            # transfer, counted from zero, so the PPU is brought up to the completed cycles.
+            if cpu_bus_ppu_attached == 1 {
+                ppu_sync_to_cycle $cycle_base + cpu_dma_cycles_run - 1;
+            }
+
             ppu_write_cpu_register 4, cpu_dma_data_latch;
             cpu_dma_index = cpu_dma_index + 1;
 
