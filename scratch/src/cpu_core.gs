@@ -124,6 +124,11 @@ proc cpu_read_cycle address {
             }
         }
     } else {
+        # $2000-$3FFF is the PPU's register window: the read must see the PPU at this cycle.
+        if numeric_address >= 8192 and numeric_address < 16384 and cpu_bus_ppu_attached == 1 {
+            ppu_sync_to_cycle cpu_cycles;
+        }
+
         bus_value = cpu_bus_read(numeric_address);
     }
 
@@ -159,12 +164,22 @@ proc cpu_write_cycle address, value {
         cpu_open_bus = numeric_value;
         cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
 
+        # A mapper write can change what the PPU's A12 line observes on the next dot, so the
+        # PPU is synced to this cycle first, the same way a register write is.
+        if cpu_bus_ppu_attached == 1 {
+            ppu_sync_to_cycle cpu_cycles;
+        }
+
         if cpu_bus_cartridge_kind == mapper_kind.nrom {
             nrom_write_cpu numeric_address, numeric_value;
         } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
             mmc3_write_cpu numeric_address, numeric_value;
         }
     } else {
+        if numeric_address >= 8192 and numeric_address < 16384 and cpu_bus_ppu_attached == 1 {
+            ppu_sync_to_cycle cpu_cycles;
+        }
+
         cpu_bus_write numeric_address, numeric_value;
     }
 

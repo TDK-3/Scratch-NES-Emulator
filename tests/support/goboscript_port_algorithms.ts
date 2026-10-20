@@ -989,11 +989,14 @@ export class GoboscriptCpuBus {
     private bus_cycle_count: number = 0;
 
     /**
-     * Mirror of `cpu_bus_run_dma`: runs a pending transfer to completion and returns the cycles
-     * it spent. The port inlines the whole state machine in one proc; this mirror drives the
-     * one-cycle form, which is the same sequence.
+     * Mirror of `cpu_bus_run_dma cycle_base`: runs a pending transfer to completion and returns
+     * the cycles it spent. The port inlines the whole state machine in one proc and syncs the
+     * PPU to `cycle_base + cycles` before each OAM write; this mirror has no PPU, so the base is
+     * accepted for the same signature and unused. It drives the one-cycle form, which is the
+     * same sequence.
      */
-    run_dma(): number {
+    run_dma(cycle_base: number): number {
+        void cycle_base;
         let cycles = 0;
 
         while (this.dma_phase !== 0 && cycles < 520) {

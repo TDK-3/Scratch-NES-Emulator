@@ -810,6 +810,12 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/ppu_2c02.gs",
+        declaration: "ppu_sync_to_cycle",
+        mirror: null,
+        reason: "PPU scheduler glue; the mirrored NES console already advances the PPU per CPU cycle",
+    },
+    {
+        source: "src/ppu_2c02.gs",
         declaration: "ppu_clock_cpu_cycles",
         mirror: null,
         reason: "one call per instruction that clocks three dots per CPU cycle",
@@ -2771,3 +2777,43 @@ function mirror_arity(path: string): number {
     assert.equal(typeof member, "function", `Mirror ${path} is not a method.`);
     return (member as (...args: unknown[]) => unknown).length;
 }
+
+test("MMC3 bank-data writes keep the low bits the reference masks keep", () => {
+    // The reference masks R0/R1 with $FE, R6 with $3F, and R7 with $7F, which keeps the low bits.
+    // Subtracting the remainder kept the high bits instead and mapped the wrong PRG bank, which
+    // sent the supplied ROM into garbage code and a black screen.
+    const mapper = get_source("src/mapper_004.gs");
+
+    assert.ok(mapper.text.includes("bank_value = bank_value % 64;"), "R6 must keep its low six bits");
+    assert.ok(mapper.text.includes("bank_value = bank_value % 128;"), "R7 must keep its low seven bits");
+    assert.ok(!mapper.text.includes("bank_value - (bank_value % 64)"), "R6 must not keep the high bits");
+    assert.ok(!mapper.text.includes("bank_value - (bank_value % 128)"), "R7 must not keep the high bits");
+});
+
+test("the PPU is synced to the CPU before every register, cartridge, and OAM access", () => {
+    // The PPU runs ahead of the CPU's bus actions on the reference's schedule, so a $2000-$3FFF
+    // access, a cartridge write, and an OAM write each sync to their own cycle first. Without
+    // that, a vblank poll reads the PPU up to a whole instruction late and the NMI lands in the
+    // wrong place.
+    const core = get_source("src/cpu_core.gs");
+    const bus = get_source("src/cpu_bus.gs");
+    const frame_loop = get_source("src/frame_loop.gs");
+
+    assert.equal(
+        core.text.split("ppu_sync_to_cycle cpu_cycles;").length - 1,
+        3,
+        "cpu_core.gs must sync for the PPU read, the PPU write, and the cartridge write",
+    );
+    assert.ok(
+        bus.text.includes("ppu_sync_to_cycle $cycle_base + cpu_dma_cycles_run - 1;"),
+        "cpu_bus_run_dma must sync to each OAM write's own cycle",
+    );
+    assert.ok(
+        frame_loop.text.includes("ppu_sync_to_cycle cpu_cycles;"),
+        "the frame loop must sync the PPU at each chunk and each sequence",
+    );
+    assert.ok(
+        !bus.text.includes("cpu_cycles"),
+        "cpu_bus.gs cannot name cpu_cycles: the DMA base is passed in",
+    );
+});

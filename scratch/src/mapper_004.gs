@@ -445,14 +445,16 @@ proc mmc3_write_register address, value {
         mmc3_chr_mode = (bank_value // 128) % 2;
         mmc3_refresh_chr_cache;
     } elif register_id == mmc3_register.bank_data {
-        # $FE, $3F, and $7F clear one bit or the top two; on a byte that is a subtraction of
-        # the remainder, which is two reporters where the bitwise helper was a call.
+        # The reference masks these registers with $FE (R0, R1: bit 0 dropped), $3F (R6: the
+        # top two bits dropped) and $7F (R7: the top bit dropped). Each mask keeps the low
+        # bits, so the value is the remainder: `% 64` keeps the low six bits. Subtracting the
+        # remainder instead kept the high bits and selected the wrong PRG bank.
         if mmc3_bank_select == 0 or mmc3_bank_select == 1 {
             bank_value = bank_value - (bank_value % 2);
         } elif mmc3_bank_select == 6 {
-            bank_value = bank_value - (bank_value % 64);
+            bank_value = bank_value % 64;
         } elif mmc3_bank_select == 7 {
-            bank_value = bank_value - (bank_value % 128);
+            bank_value = bank_value % 128;
         }
 
         mmc3_bank_registers[mmc3_bank_select + 1] = bank_value;

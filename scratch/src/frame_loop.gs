@@ -65,12 +65,16 @@ proc frame_loop_reset {
 #
 # This is the innermost loop of the whole emulator, so it avoids custom-block calls wherever
 # a comparison will do: the DMA state is tested directly and the transfer runs in one call
-# (cpu_bus_run_dma), the PPU advances by a whole sequence's worth of dots in one call
-# (ppu_clock_cpu_cycles), and the NMI latch is read directly rather than through
+# (cpu_bus_run_dma), the PPU is synced to the CPU once per sequence (ppu_sync_to_cycle), and the
+# NMI latch is read directly rather than through
 # ppu_take_nmi_edge. The standalone procs and funcs stay for the self test
 # and as the documented description of each step.
 proc frame_loop_run_chunk {
     frame_loop_chunk_cycles_run = 0;
+
+    # The PPU must sit at the CPU's schedule before the chunk's first bus action; a reset
+    # leaves it behind the reset cycles, and a chunk starts where the last one stopped.
+    ppu_sync_to_cycle cpu_cycles;
 
     until frame_loop_chunk_cycles_run >= FRAME_LOOP_CYCLES_PER_CHUNK or frame_loop_frame_complete == 1 {
         if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
@@ -79,11 +83,14 @@ proc frame_loop_run_chunk {
             # An OAM DMA transfer stalls the CPU: the bus runs the whole transfer in one call
             # and reports the cycles it spent, and the PPU advances by three dots per cycle in
             # another one. This used to be one call per DMA cycle plus three dot clocks each.
-            cpu_bus_run_dma;
+            # The transfer's cycles are CPU cycles: the bus syncs the PPU to each one as it runs,
+            # and the cycle total catches up once the transfer ends.
+            cpu_bus_run_dma cpu_cycles;
             frame_loop_dma_cycles = cpu_dma_cycles_run;
+            cpu_cycles = cpu_cycles + frame_loop_dma_cycles;
             frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_dma_cycles;
             frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_dma_cycles;
-            ppu_clock_cpu_cycles frame_loop_dma_cycles;
+            ppu_sync_to_cycle cpu_cycles;
         } else {
             # Run one CPU sequence (instruction, IRQ, NMI, or jam)
             frame_loop_cycles_before = cpu_cycles;
@@ -94,13 +101,10 @@ proc frame_loop_run_chunk {
             frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_sequence_cycles;
             frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_sequence_cycles;
 
-            # Advance the PPU by three dots per CPU cycle in one call. The instruction has
-            # already spent all of its bus cycles inside cpu_begin_next_sequence, so the PPU
-            # cannot be touched in between: batching the dots cannot reorder a register write
-            # against a dot. The cycle-count fast paths that used to unroll 2, 3, and 4 cycles
-            # into literal dot-clock statements are gone; they existed to avoid a loop header
-            # that is now amortized over a whole instruction.
-            ppu_clock_cpu_cycles frame_loop_sequence_cycles;
+            # Advance the PPU to the CPU's schedule in one call. The instruction's own PPU
+            # register accesses already synced the PPU to their cycle (see cpu_read_cycle and
+            # cpu_write_cycle), so this batch only covers the dots after the last access.
+            ppu_sync_to_cycle cpu_cycles;
 
             # Check for PPU NMI and forward to CPU
             if ppu_nmi_edge_pending == 1 {
@@ -127,7 +131,7 @@ proc frame_loop_run_chunk {
 # Checks if OAM DMA is active and runs the DMA cycles.
 # Sets frame_loop_dma_cycles to the number of DMA cycles run (0 if no DMA).
 proc frame_loop_check_dma {
-    cpu_bus_run_dma;
+    cpu_bus_run_dma cpu_cycles;
     frame_loop_dma_cycles = cpu_dma_cycles_run;
 }
 
