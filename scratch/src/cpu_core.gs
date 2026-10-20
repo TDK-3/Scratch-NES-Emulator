@@ -191,7 +191,14 @@ proc cpu_fetch_byte {
     local address = cpu_program_counter;
     cpu_read_cycle address;
     cpu_fetched_byte = cpu_cycle_value;
-    cpu_program_counter = (address + 1) % 65536;
+
+    # The counter is always an address, so its increment wraps by comparison instead of by a
+    # modulo: $FFFF is the only input that wraps.
+    if address == 65535 {
+        cpu_program_counter = 0;
+    } else {
+        cpu_program_counter = address + 1;
+    }
 }
 
 # Reads a little-endian word at the program counter into `cpu_fetched_word`, mirroring
@@ -202,11 +209,24 @@ proc cpu_fetch_word {
     local address = cpu_program_counter;
     cpu_read_cycle address;
     low_byte = cpu_cycle_value % 256;
-    address = (address + 1) % 65536;
+
+    # Both counter increments wrap by comparison rather than by modulo, exactly as
+    # cpu_fetch_byte does; only $FFFF can wrap.
+    if address == 65535 {
+        address = 0;
+    } else {
+        address = address + 1;
+    }
+
     cpu_read_cycle address;
     cpu_fetched_byte = cpu_cycle_value;
     cpu_fetched_word = ((cpu_cycle_value % 256) * 256) + low_byte;
-    cpu_program_counter = (address + 1) % 65536;
+
+    if address == 65535 {
+        cpu_program_counter = 0;
+    } else {
+        cpu_program_counter = address + 1;
+    }
 }
 
 # Pushes one byte and decrements the stack pointer, mirroring push_byte_cycle(). Scratch's

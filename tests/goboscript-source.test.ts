@@ -1842,7 +1842,11 @@ test("the display sprite draws each finished frame with the pen extension in col
     const clock_body = run_dots.body.join("\n");
     assert.match(clock_body, /ppu_frame_ready = 1;/, "vblank start must offer the finished frame");
 
-    const render_at = clock_body.indexOf("ppu_render_pixel;");
+    // The per-pixel body lives inline in the dot loop (the call cost 61,440 custom blocks a
+    // frame), so the ordering pin looks at the framebuffer write that body ends with.
+    const render_at = clock_body.indexOf("ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] =");
+    const render_proc = ppu.declarations.find((declaration) => declaration.name === "ppu_render_pixel");
+    assert.ok(render_proc, "ppu_render_pixel stays as the documented per-pixel entry point");
     const pipeline_at = clock_body.indexOf("ppu_clock_rendering_pipeline;");
     const advance_at = clock_body.indexOf("ppu_advance_dot;");
     assert.ok(render_at >= 0 && pipeline_at > render_at, "each dot renders its pixel before the fetch pipeline");

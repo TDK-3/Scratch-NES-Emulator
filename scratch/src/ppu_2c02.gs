@@ -782,6 +782,15 @@ proc ppu_clock_ppu_dot {
 proc ppu_run_dots count {
     local dots_remaining = $count;
 
+    # The temporaries of the inlined pixel body below, declared once per call instead of once
+    # per pixel. They are aliases for the same values ppu_render_pixel's locals hold.
+    local pixel_x = 0;
+    local background_pixel = 0;
+    local background_palette = 0;
+    local fine_weight = 0;
+    local palette_offset = 0;
+    local color_index = 0;
+
     until dots_remaining <= 0 {
         # ppu_bus_clock_ppu_dot() and the MMC3 low-dot counter it forwards to, written out here:
         # this runs 89,460 times a frame, and two custom-block calls per dot for one comparison
@@ -825,7 +834,61 @@ proc ppu_run_dots count {
             # greyscale test are already folded into ppu_backdrop_packed. That case is one list
             # write per pixel instead of the whole pixel proc.
             if ppu_mask_rendering_enable == 1 {
-                ppu_render_pixel;
+                # ppu_render_pixel inlined: this call site is the only one on the running path,
+                # and 61,440 custom-block calls per frame are the largest remaining per-frame
+                # cost in the port. The body is the same statements, in the same order; keep it
+                # and ppu_render_pixel in lockstep, because that proc stays as the documented,
+                # self-testable entry point.
+                pixel_x = ppu_dot - 1;
+
+                if ppu_mask_background_enable == 1 and (pixel_x >= 8 or ppu_mask_background_left_column_enable == 1) {
+                    fine_weight = ppu_fine_x_weight;
+                    background_pixel = ((ppu_background_pattern_low_shift // fine_weight) % 2)
+                        + (((ppu_background_pattern_high_shift // fine_weight) % 2) * 2);
+                    background_palette = ((ppu_background_attribute_low_shift // fine_weight) % 2)
+                        + (((ppu_background_attribute_high_shift // fine_weight) % 2) * 2);
+                } else {
+                    background_pixel = 0;
+                    background_palette = 0;
+                }
+
+                if ppu_mask_sprite_enable == 1
+                    and (pixel_x >= 8 or ppu_mask_sprite_left_column_enable == 1)
+                    and ppu_sprite_unit_active_count > 0 {
+                    ppu_read_sprite_pixel;
+                } else {
+                    ppu_sprite_pixel_found = 0;
+                }
+
+                if ppu_sprite_zero_in_line == 1 and ppu_sprite_pixel_found == 1 and ppu_sprite_pixel_oam_index == 0 {
+                    if background_pixel != 0 and pixel_x < PPU_FRAME_WIDTH - 1 {
+                        if ppu_status_register // PPU_SPRITE_ZERO_HIT_FLAG % 2 == 0 {
+                            ppu_status_register = ppu_status_register + PPU_SPRITE_ZERO_HIT_FLAG;
+                        }
+                    }
+                }
+
+                if ppu_sprite_pixel_found == 1
+                    and (background_pixel == 0
+                        or (ppu_sprite_pixel_attributes // PPU_SPRITE_PRIORITY_MASK) % 2 == 0) {
+                    palette_offset = 16 + ((ppu_sprite_pixel_attributes % 4) * 4) + ppu_sprite_pixel_value;
+                } elif background_pixel != 0 {
+                    palette_offset = (background_palette * 4) + background_pixel;
+                } else {
+                    palette_offset = 0;
+                }
+
+                color_index = ppu_palette_color[palette_offset + 1];
+
+                if ppu_mask_greyscale == 1 {
+                    color_index = ppu_greyscale_colors[color_index + 1];
+                }
+
+                ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_emphasis_packed + color_index;
+
+                if ppu_sprite_unit_active_count > 0 {
+                    ppu_clock_sprite_output_units;
+                }
             } else {
                 ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_backdrop_packed;
             }
