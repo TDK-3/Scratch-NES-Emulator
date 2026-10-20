@@ -1,0 +1,86 @@
+name: Deploy to GitHub Pages
+
+on:
+    workflow_run:
+        workflows:
+            - Build and package Scratch project
+        types:
+            - completed
+        branches:
+            - main
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    actions: read
+    pages: write
+    id-token: write
+
+concurrency:
+    group: pages
+    cancel-in-progress: false
+
+jobs:
+    deploy:
+        if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+        runs-on: ubuntu-latest
+        environment:
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        steps:
+            - name: Download packaged HTML artifact
+              if: github.event_name == 'workflow_run'
+              uses: actions/download-artifact@v4
+              with:
+                  name: packaged-html
+                  path: dist/pages
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  run-id: ${{ github.event.workflow_run.id }}
+
+            - name: Checkout repository
+              if: github.event_name == 'workflow_dispatch'
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              if: github.event_name == 'workflow_dispatch'
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Install npm dependencies
+              if: github.event_name == 'workflow_dispatch'
+              run: npm ci
+
+            - name: Cache GoboScript binary
+              if: github.event_name == 'workflow_dispatch'
+              uses: actions/cache@v4
+              with:
+                  path: ~/.cargo/bin/goboscript
+                  key: goboscript-${{ runner.os }}-${{ hashFiles('install_goboscript.sh') }}
+
+            - name: Install GoboScript
+              if: github.event_name == 'workflow_dispatch'
+              run: |
+                  if [ ! -x "$HOME/.cargo/bin/goboscript" ]; then
+                      bash install_goboscript.sh
+                  fi
+                  echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+            - name: Build and package Scratch project
+              if: github.event_name == 'workflow_dispatch'
+              run: |
+                  npm run build:scratch
+                  npm run package:scratch
+
+            - name: Configure Pages
+              uses: actions/configure-pages@v5
+
+            - name: Upload Pages artifact
+              uses: actions/upload-pages-artifact@v3
+              with:
+                  path: dist/pages
+
+            - name: Deploy to GitHub Pages
+              id: deployment
+              uses: actions/deploy-pages@v4
