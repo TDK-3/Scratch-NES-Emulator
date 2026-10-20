@@ -542,6 +542,12 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/mapper_004.gs", declaration: "mmc3_load_payload", mirror: "GoboscriptMmc3Mapper.load_payload" },
     { source: "src/mapper_004.gs", declaration: "mmc3_prg_bank", mirror: "GoboscriptMmc3Mapper.prg_bank" },
     { source: "src/mapper_004.gs", declaration: "mmc3_chr_bank", mirror: "GoboscriptMmc3Mapper.chr_bank" },
+    {
+        source: "src/mapper_004.gs",
+        declaration: "mmc3_refresh_chr_cache",
+        mirror: null,
+        reason: "CHR bank cache for PPU performance, not part of reference",
+    },
     { source: "src/mapper_004.gs", declaration: "mmc3_write_register", mirror: "GoboscriptMmc3Mapper.write_register" },
     { source: "src/mapper_004.gs", declaration: "mmc3_read_cpu", mirror: "GoboscriptMmc3Mapper.read_cpu" },
     { source: "src/mapper_004.gs", declaration: "mmc3_write_cpu", mirror: "GoboscriptMmc3Mapper.write_cpu" },

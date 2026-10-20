@@ -4,6 +4,10 @@ This is the implementation plan for the full system, not a claim of current comp
 by dependency. Mark a task done only after its behavior is tested, and keep external-runtime validation
 separate from TypeScript success.
 
+> **2026-10-20 Performance Audit:** A line-by-line audit of every `scratch/` GoboScript file, Scratch VM/TurboWarp execution model, and NES workload quantified every bottleneck and optimization. The full TODO lives in [`docs/PERFORMANCE_AUDIT_TODO.md`](PERFORMANCE_AUDIT_TODO.md) (457 lines, 129 prioritized P0-P3 items across CPU/bus/PPU/APU/platform). That document is the performance work queue; the sections below remain the correctness work queue. Both functionality and performance are key features.
+
+
+
 ## P0 - Compiler and fixture validation
 
 - [x] Check local PATH, npm, and upstream release metadata for a usable GoboScript compiler.

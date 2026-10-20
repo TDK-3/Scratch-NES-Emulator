@@ -218,6 +218,11 @@ var dmc_load_dma_delay = -1;
 
 # ---- frame sequencer state ----
 
+# Whether pulse/triangle/noise/DMC timers tick per CPU cycle. Frame sequencer IRQ always ticks
+# because games use it for timing. Default 1 for vector correctness; rom_run can set to 0 for
+# performance (saves ~400k ops/frame when no audio needed).
+var apu_audio_enabled = 1;
+
 var apu_cpu_cycle_count = 0;
 var apu_pulse_timer_phase = 0;
 var apu_frame_cycle_count = 0;
@@ -244,6 +249,7 @@ enum apu_register_status {
 # ---- reset ----
 
 proc apu_reset {
+    apu_audio_enabled = 1;
     # Populate the length counter table if not already done.
     if to_number(apu_length_table[1]) == 0 {
         apu_length_table[1] = 10;
@@ -720,60 +726,71 @@ proc apu_clock_cpu_cycle {
     local half = 0;
 
     apu_cpu_cycle_count = apu_cpu_cycle_count + 1;
-    apu_pulse_timer_phase = 1 - apu_pulse_timer_phase;
 
-    # Both pulse timers, at half the CPU rate. The standalone apu_clock_pulse_timer proc
-    # documents one channel's timer; the bodies are repeated here because this proc runs once
-    # per emulated CPU cycle, and a custom-block call per channel per cycle is the single
-    # most expensive thing the APU can do.
-    if apu_pulse_timer_phase == 1 {
-        if pulse1_timer_counter == 0 {
-            pulse1_timer_counter = pulse1_timer_period;
-            pulse1_duty_step = (pulse1_duty_step + 1) % 8;
-        } else {
-            pulse1_timer_counter = pulse1_timer_counter - 1;
-        }
+    # Audio timers gated by apu_audio_enabled: frame sequencer IRQ must always run, but pulse/
+    # triangle/noise/DMC waveform timers cost ~400k ops/frame with no audible output in Scratch.
+    if apu_audio_enabled == 1 {
+        apu_pulse_timer_phase = 1 - apu_pulse_timer_phase;
 
-        if pulse2_timer_counter == 0 {
-            pulse2_timer_counter = pulse2_timer_period;
-            pulse2_duty_step = (pulse2_duty_step + 1) % 8;
-        } else {
-            pulse2_timer_counter = pulse2_timer_counter - 1;
-        }
-    }
+        # Both pulse timers, at half the CPU rate. The standalone apu_clock_pulse_timer proc
+        # documents one channel's timer; the bodies are repeated here because this proc runs once
+        # per emulated CPU cycle, and a custom-block call per channel per cycle is the single
+        # most expensive thing the APU can do.
+        if apu_pulse_timer_phase == 1 {
+            if pulse1_timer_counter == 0 {
+                pulse1_timer_counter = pulse1_timer_period;
+                pulse1_duty_step = (pulse1_duty_step + 1) % 8;
+            } else {
+                pulse1_timer_counter = pulse1_timer_counter - 1;
+            }
 
-    # Triangle timer, clocked every CPU cycle.
-    if triangle_timer_counter == 0 {
-        triangle_timer_counter = triangle_timer_period;
-
-        # Advance sequence only if timer period >= 2 and both counters are active
-        if triangle_timer_period >= TRIANGLE_TIMER_MIN {
-            if triangle_length_counter > 0 and triangle_linear_counter > 0 {
-                triangle_sequence_step = (triangle_sequence_step + 1) % TRIANGLE_SEQUENCE_LENGTH;
+            if pulse2_timer_counter == 0 {
+                pulse2_timer_counter = pulse2_timer_period;
+                pulse2_duty_step = (pulse2_duty_step + 1) % 8;
+            } else {
+                pulse2_timer_counter = pulse2_timer_counter - 1;
             }
         }
-    } else {
-        triangle_timer_counter = triangle_timer_counter - 1;
-    }
 
-    # Noise timer, clocked every CPU cycle.
-    if noise_timer_counter == 0 {
-        noise_timer_counter = noise_timer_reload;
-        apu_shift_lfsr;
-    } else {
-        noise_timer_counter = noise_timer_counter - 1;
-    }
+        # Triangle timer, clocked every CPU cycle.
+        if triangle_timer_counter == 0 {
+            triangle_timer_counter = triangle_timer_period;
 
-    # DMC timer and its load-DMA delay, clocked every CPU cycle.
-    if dmc_load_dma_delay >= 0 {
-        dmc_load_dma_delay = dmc_load_dma_delay - 1;
-    }
+            # Advance sequence only if timer period >= 2 and both counters are active
+            if triangle_timer_period >= TRIANGLE_TIMER_MIN {
+                if triangle_length_counter > 0 and triangle_linear_counter > 0 {
+                    triangle_sequence_step = (triangle_sequence_step + 1) % TRIANGLE_SEQUENCE_LENGTH;
+                }
+            }
+        } else {
+            triangle_timer_counter = triangle_timer_counter - 1;
+        }
 
-    if dmc_timer_counter == 0 {
-        dmc_timer_counter = dmc_timer_reload;
-        apu_clock_dmc_output_unit;
+        # Noise timer, clocked every CPU cycle.
+        if noise_timer_counter == 0 {
+            noise_timer_counter = noise_timer_reload;
+            apu_shift_lfsr;
+        } else {
+            noise_timer_counter = noise_timer_counter - 1;
+        }
+
+        # DMC timer and its load-DMA delay, clocked every CPU cycle.
+        if dmc_load_dma_delay >= 0 {
+            dmc_load_dma_delay = dmc_load_dma_delay - 1;
+        }
+
+        if dmc_timer_counter == 0 {
+            dmc_timer_counter = dmc_timer_reload;
+            apu_clock_dmc_output_unit;
+        } else {
+            dmc_timer_counter = dmc_timer_counter - 1;
+        }
     } else {
-        dmc_timer_counter = dmc_timer_counter - 1;
+        # In performance mode keep pulse phase toggle for DMC/IRQ timing parity but skip waveform.
+        # DMC load delay still ticks because it gates DMC IRQ timing.
+        if dmc_load_dma_delay >= 0 {
+            dmc_load_dma_delay = dmc_load_dma_delay - 1;
+        }
     }
 
     # Frame sequencer, inlined from apu_clock_frame_sequencer so one cycle is one call. The

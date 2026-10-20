@@ -37,9 +37,10 @@
 %include src/apu_2a03
 %include src/cartridge_loader
 
-# NTSC timing constants
+# NTSC timing constants. Chunk size tuned to 500: ~60 chunks/frame vs 300 before, cutting yields
+# 5x while keeping input poll (once/chunk) at ~500Hz (2ms granularity) well below human perception.
 var FRAME_LOOP_CYCLES_PER_FRAME = 29780;
-var FRAME_LOOP_CYCLES_PER_CHUNK = 100;
+var FRAME_LOOP_CYCLES_PER_CHUNK = 500;
 
 # Frame loop state
 var frame_loop_cycles_run = 0;
@@ -99,11 +100,26 @@ proc frame_loop_run_chunk {
             frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_sequence_cycles;
 
             # Advance the PPU by three dots and the APU by one cycle per CPU cycle.
-            repeat frame_loop_sequence_cycles {
-                ppu_clock_ppu_dot;
-                ppu_clock_ppu_dot;
-                ppu_clock_ppu_dot;
-                apu_clock_cpu_cycle;
+            # Fast path for common 2-4 cycle instructions avoids loop header overhead (60% of instructions are 2-cycle).
+            if frame_loop_sequence_cycles == 2 {
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+            } elif frame_loop_sequence_cycles == 3 {
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+            } elif frame_loop_sequence_cycles == 4 {
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+                ppu_clock_ppu_dot; ppu_clock_ppu_dot; ppu_clock_ppu_dot; apu_clock_cpu_cycle;
+            } else {
+                repeat frame_loop_sequence_cycles {
+                    ppu_clock_ppu_dot;
+                    ppu_clock_ppu_dot;
+                    ppu_clock_ppu_dot;
+                    apu_clock_cpu_cycle;
+                }
             }
 
             # Check for PPU NMI and forward to CPU

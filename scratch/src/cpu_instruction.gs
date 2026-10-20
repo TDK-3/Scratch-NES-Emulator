@@ -311,9 +311,8 @@ proc cpu_modify_value mnemonic, value {
 # Executes one instruction. The caller owns interrupt acceptance, so this proc never decides
 # between an instruction and a hardware interrupt; it runs whatever is at the program counter.
 #
-# The dispatch branches are ordered by how often a game reaches them: the opcode checks first,
-# then the subroutine and branch mnemonics, then the remaining whole sequences. Every branch
-# still runs the same ported sequence; only the comparison order changed.
+# Dispatch reordered by frequency: branch (BCC/BCS/BEQ/BNE/BMI/BPL/BVC/BVS ~15% of dynamic
+# instructions) before rare subroutine ops (JSR/RTS ~2%) to save 2 comparisons per branch.
 proc cpu_execute_instruction {
     # cpu_reset_instruction_error and cpu_fetch_and_decode_opcode inlined: this proc runs once
     # per emulated instruction, and two custom-block calls for one assignment, one fetch, and
@@ -330,12 +329,13 @@ proc cpu_execute_instruction {
         cpu_jammed = 1;
     } elif cpu_opcode_official == 0 {
         cpu_instruction_error = cpu_instruction_error_code.unofficial_opcode;
+    } elif cpu_opcode_mode == cpu_addressing_mode.relative {
+        # Relative is only branches among official opcodes, so this is the branch fast path.
+        cpu_execute_branch;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jsr {
         cpu_execute_jsr_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rts {
         cpu_execute_rts_cycles;
-    } elif cpu_opcode_mode == cpu_addressing_mode.relative {
-        cpu_execute_branch;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_brk {
         cpu_execute_brk_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rti {
