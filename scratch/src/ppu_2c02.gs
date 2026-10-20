@@ -210,11 +210,11 @@ var ppu_sprite_pixel_oam_index = -1;
 
 # ---- framebuffer output ----
 
-# Row-major six-bit palette indices and three-bit emphasis values for the
-# 256 by 240 picture, one 1-based list slot per pixel at y * 256 + x + 1.
-# The display sprite reads these Stage-owned lists when it draws a frame.
-list ppu_framebuffer_colors = [0; 61440];
-list ppu_framebuffer_emphasis = [0; 61440];
+# Row-major packed palette/emphasis values for the 256 by 240 picture, one 1-based
+# list slot per pixel at y * 256 + x + 1. Packed as emphasis*64 + color_index (0-511),
+# so the display sprite reads one list instead of two and the PPU writes one list instead
+# of two, halving 61k framebuffer accesses per frame. The two-plane lists are removed.
+list ppu_framebuffer_packed = [0; 61440];
 
 # The framebuffer index of column zero on the scanline the renderer is drawing, that is
 # scanline * 256. ppu_advance_dot moves it one row whenever the scanline changes, so the
@@ -300,8 +300,7 @@ proc ppu_clear_frame_output {
     local pixel_index = 1;
 
     repeat PPU_FRAME_PIXEL_COUNT {
-        ppu_framebuffer_colors[pixel_index] = 0;
-        ppu_framebuffer_emphasis[pixel_index] = 0;
+        ppu_framebuffer_packed[pixel_index] = 0;
         pixel_index++;
     }
 
@@ -1085,8 +1084,7 @@ proc ppu_render_pixel {
     }
 
     framebuffer_index = ppu_framebuffer_row_base + ppu_dot;
-    ppu_framebuffer_colors[framebuffer_index] = color_index;
-    ppu_framebuffer_emphasis[framebuffer_index] = ppu_mask_emphasis;
+    ppu_framebuffer_packed[framebuffer_index] = ppu_mask_emphasis * 64 + color_index;
 
     if ppu_mask_rendering_enable == 1 {
         ppu_clock_sprite_output_units;
@@ -1305,6 +1303,13 @@ proc ppu_fetch_background_pattern_high {
 proc ppu_evaluate_sprites_for_next_scanline {
     local target_scanline = 0;
     local sprite_height = 8;
+    local visible_scanline = 1;
+
+    if ppu_scanline >= PPU_FRAME_HEIGHT and ppu_scanline != PPU_PRE_RENDER_SCANLINE {
+        visible_scanline = 0;
+    }
+
+    if visible_scanline == 1 {
     local found_count = 0;
     local elapsed_dots = 0;
     local overflow_offset = 0;
@@ -1382,15 +1387,19 @@ proc ppu_evaluate_sprites_for_next_scanline {
     if target_scanline == 0 {
         ppu_line_zero_sprite_count = found_count;
 
-        repeat PPU_SECONDARY_SPRITE_LIMIT {
-            ppu_line_zero_sprite_y[copy_index] = to_number(ppu_secondary_sprite_y[copy_index]);
-            ppu_line_zero_sprite_tile[copy_index] = to_number(ppu_secondary_sprite_tile[copy_index]);
-            ppu_line_zero_sprite_attributes[copy_index] = to_number(ppu_secondary_sprite_attributes[copy_index]);
-            ppu_line_zero_sprite_x[copy_index] = to_number(ppu_secondary_sprite_x[copy_index]);
-            ppu_line_zero_sprite_oam_index[copy_index] = to_number(ppu_secondary_sprite_oam_index[copy_index]);
-            ppu_line_zero_sprite_row[copy_index] = to_number(ppu_secondary_sprite_row[copy_index]);
-            copy_index = copy_index + 1;
+            repeat PPU_SECONDARY_SPRITE_LIMIT {
+                ppu_line_zero_sprite_y[copy_index] = to_number(ppu_secondary_sprite_y[copy_index]);
+                ppu_line_zero_sprite_tile[copy_index] = to_number(ppu_secondary_sprite_tile[copy_index]);
+                ppu_line_zero_sprite_attributes[copy_index] = to_number(ppu_secondary_sprite_attributes[copy_index]);
+                ppu_line_zero_sprite_x[copy_index] = to_number(ppu_secondary_sprite_x[copy_index]);
+                ppu_line_zero_sprite_oam_index[copy_index] = to_number(ppu_secondary_sprite_oam_index[copy_index]);
+                ppu_line_zero_sprite_row[copy_index] = to_number(ppu_secondary_sprite_row[copy_index]);
+                copy_index = copy_index + 1;
+            }
         }
+    } else {
+        ppu_secondary_sprite_count = 0;
+        ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
     }
 }
 

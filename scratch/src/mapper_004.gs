@@ -97,6 +97,8 @@ var mmc3_prg_nvram_bytes = 0;
 var mmc3_chr_nvram_bytes = 0;
 var mmc3_prg_bank_count = 0;
 var mmc3_chr_bank_count = 0;
+var mmc3_last_prg_bank = 0;
+var mmc3_second_last_prg_bank = 0;
 var mmc3_four_screen = 0;
 var mmc3_header_mirroring = 1;
 var mmc3_mirroring = 1;
@@ -264,6 +266,8 @@ proc mmc3_validate {
 
                 mmc3_prg_bank_count = mmc3_prg_rom_bytes // mmc3_limit.prg_bank_bytes;
                 mmc3_chr_bank_count = (mmc3_chr_rom_bytes + mmc3_chr_ram_bytes) // mmc3_limit.chr_bank_bytes;
+                mmc3_last_prg_bank = mmc3_prg_bank_count - 1;
+                mmc3_second_last_prg_bank = mmc3_prg_bank_count - 2;
                 mmc3_four_screen = 0;
 
                 if mmc3_header_mirroring == 3 {
@@ -352,8 +356,8 @@ proc mmc3_load_payload {
 # registers do not control always hold the last and second-to-last banks, which is what makes an MMC3
 # image boot: the reset vector lives in the last bank.
 func mmc3_prg_bank(slot) {
-    local last_bank = mmc3_prg_bank_count - 1;
-    local second_last_bank = mmc3_prg_bank_count - 2;
+    local last_bank = mmc3_last_prg_bank;
+    local second_last_bank = mmc3_second_last_prg_bank;
     local bank6 = mmc3_bank_registers[7];
     local bank7 = mmc3_bank_registers[8];
     local bank = 0;
@@ -486,8 +490,8 @@ proc mmc3_read_cpu address {
 
     if numeric_address >= mmc3_limit.prg_rom_start {
         # Inlined mmc3_prg_bank to save 1 func call per PRG read (~23k/frame). Same logic as func.
-        local last_bank = mmc3_prg_bank_count - 1;
-        local second_last_bank = mmc3_prg_bank_count - 2;
+        local last_bank = mmc3_last_prg_bank;
+        local second_last_bank = mmc3_second_last_prg_bank;
         local prg_bank = 0;
         slot = (numeric_address - mmc3_limit.prg_rom_start) // mmc3_limit.prg_bank_bytes;
 
