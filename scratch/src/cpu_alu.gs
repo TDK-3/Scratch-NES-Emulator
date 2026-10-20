@@ -208,8 +208,13 @@ proc alu_rotate_right_byte value, status {
 # CMP/CPX/CPY; mirrors the CPU's compare step, which leaves the source register unchanged.
 proc alu_compare register_value, operand, status {
     local normalized = normalize_status($status);
+    local register_byte = $register_value % 256;
 
-    alu_compare_byte $register_value % 256, $operand % 256, normalized;
+    alu_compare_byte register_byte, $operand % 256, normalized;
+
+    # The byte entry point leaves alu_value alone: a compare's callers read the status only, so
+    # the result store the general contract needs is paid here, off the hot path.
+    alu_value = register_byte;
 }
 
 proc alu_compare_byte register_value, operand, status {
@@ -222,15 +227,16 @@ proc alu_compare_byte register_value, operand, status {
     local updated = normalized - (normalized % 2) + (1 - ((difference // 256) % 2));
     local result = difference % 256;
 
-    alu_value = left;
     alu_status = (updated % 128) - (2 * ((updated // 2) % 2)) + cpu_zero_negative_bits[result + 1];
 }
 
 # BIT; mirrors the CPU's bit-test step: zero comes from A AND M, negative and overflow from M.
 proc alu_bit_test accumulator, operand, status {
     local normalized = normalize_status($status);
+    local accumulator_byte = $accumulator % 256;
 
-    alu_bit_test_byte $accumulator % 256, $operand % 256, normalized;
+    alu_bit_test_byte accumulator_byte, $operand % 256, normalized;
+    alu_value = accumulator_byte;
 }
 
 proc alu_bit_test_byte accumulator, operand, status {
@@ -252,7 +258,8 @@ proc alu_bit_test_byte accumulator, operand, status {
         - (64 * ((normalized // 64) % 2))) + (2 * zero_flag)
         + (128 * ((memory // 128) % 2)) + (64 * ((memory // 64) % 2));
 
-    alu_value = left;
+    # alu_value is the general contract's business: see alu_bit_test.
+
     alu_status = updated;
 }
 
