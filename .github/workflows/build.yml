@@ -1,0 +1,84 @@
+name: Build and package Scratch project
+
+on:
+    push:
+        branches:
+            - "**"
+        tags:
+            - "v*"
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+jobs:
+    build-and-package:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Install npm dependencies
+              run: npm ci
+
+            - name: Cache GoboScript binary
+              uses: actions/cache@v4
+              with:
+                  path: ~/.cargo/bin/goboscript
+                  key: goboscript-${{ runner.os }}-${{ hashFiles('install_goboscript.sh') }}
+
+            - name: Install GoboScript
+              run: |
+                  if [ ! -x "$HOME/.cargo/bin/goboscript" ]; then
+                      bash install_goboscript.sh
+                  fi
+                  echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+            - name: Build Scratch project with GoboScript
+              run: npm run build:scratch
+
+            - name: Package Scratch project with TurboWarp Packager
+              run: npm run package:scratch
+
+            - name: Upload Scratch .sb3 artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: scratch-sb3
+                  path: scratch/scratch.sb3
+
+            - name: Upload packaged HTML artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: packaged-html
+                  path: dist/pages/index.html
+
+            - name: Publish .sb3 to GitHub Releases
+              if: github.event_name != 'pull_request'
+              continue-on-error: true
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+                      TAG="${GITHUB_REF_NAME}"
+                      TITLE="Release ${TAG}"
+                  else
+                      TAG="latest"
+                      TITLE="Latest build"
+                  fi
+                  NOTES="Automated GoboScript build from commit ${GITHUB_SHA}."
+                  if gh release view "${TAG}" >/dev/null 2>&1; then
+                      if [ "${GITHUB_REF}" = "refs/heads/main" ] || [[ "${GITHUB_REF}" == refs/tags/* ]] || [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+                          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="${GITHUB_SHA}" -F force=true || true
+                          gh release upload "${TAG}" scratch/scratch.sb3 --clobber
+                          gh release edit "${TAG}" --target "${GITHUB_SHA}" --title "${TITLE}" --notes "${NOTES}"
+                      fi
+                  else
+                      gh release create "${TAG}" scratch/scratch.sb3 --target "${GITHUB_SHA}" --title "${TITLE}" --notes "${NOTES}"
+                  fi
