@@ -230,18 +230,36 @@ proc cpu_pop_byte {
 # operators rather than two byte_high/byte_low calls.
 proc cpu_push_word value {
     local word = $value % 65536;
-    cpu_push_byte word // 256;
-    cpu_push_byte word % 256;
+    local stack_address = cpu_stack_page.base + cpu_stack_pointer;
+
+    # cpu_push_byte inlined twice: the high byte first, then the low byte, each one write cycle
+    # and one stack-pointer decrement. Two custom-block calls per pushed word are gone, and the
+    # access order the reference spends is unchanged.
+    cpu_write_cycle stack_address, word // 256;
+    cpu_stack_pointer = (cpu_stack_pointer - 1) % 256;
+    stack_address = cpu_stack_page.base + cpu_stack_pointer;
+    cpu_write_cycle stack_address, word % 256;
+    cpu_stack_pointer = (cpu_stack_pointer - 1) % 256;
 }
 
 # Pops a word low byte first, mirroring pop_word_cycle(); the word is left in
 # `cpu_popped_word`.
 proc cpu_pop_word {
     local low_byte = 0;
-    cpu_pop_byte;
-    low_byte = cpu_popped_byte % 256;
-    cpu_pop_byte;
-    cpu_popped_word = ((cpu_popped_byte % 256) * 256) + low_byte;
+    local next_stack_pointer = 0;
+    local high_byte = 0;
+
+    # cpu_pop_byte inlined twice: the low byte first, then the high byte, in the order the
+    # reference spends the two read cycles.
+    next_stack_pointer = (cpu_stack_pointer + 1) % 256;
+    cpu_read_cycle cpu_stack_page.base + next_stack_pointer;
+    cpu_stack_pointer = next_stack_pointer;
+    low_byte = cpu_cycle_value % 256;
+    next_stack_pointer = (cpu_stack_pointer + 1) % 256;
+    cpu_read_cycle cpu_stack_page.base + next_stack_pointer;
+    cpu_stack_pointer = next_stack_pointer;
+    high_byte = cpu_cycle_value % 256;
+    cpu_popped_word = (high_byte * 256) + low_byte;
 }
 
 # Pushes the status byte, mirroring push_status_cycle(); `break_enabled` is 1 only for BRK,
