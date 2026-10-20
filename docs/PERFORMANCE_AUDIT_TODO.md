@@ -20,7 +20,7 @@ measurements.
 >
 > What a tick means after the 2026-10-20 pass: the source change described in the item is present in
 > `scratch/`, its mirror and `MIRROR_CONTRACT` row exist where the declaration inventory demands one, and
-> `npm test` (1303 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
+> `npm test` (1304 tests, including the source lint, the port-algorithm sweeps, and the bus/PPU/display
 > suites) passes. It does **not** mean the saving was measured on a running Scratch project: the measurement
 > work in section 4.10 is still blocked, so every ticked item's saving is an estimate. Items that would need
 > the compiler, a Scratch runtime, or a rendering comparison carry a written `Blocked` line instead of a
@@ -93,7 +93,7 @@ The whole catalogue below was worked through against the current source. What th
 | `src/rom_input.gs`, `src/rom_run.gs`, `src/frame_loop.gs` | staged byte count, four-chunk poll, whole-DMA batching |
 | `tests/` | mirror functions and contract rows for every new declaration, the palette-cache pin, the inlined-pixel ordering pin |
 
-Every change kept `npm test` at 1303/1303. The paragraph below about measurement still stands: these are
+Every change kept `npm test` at 1304/1304. The paragraph below about measurement still stands: these are
 structural savings, and none of them has been measured on a running Scratch project.
 
 ---
@@ -1218,7 +1218,11 @@ reporters. That is the number to attack.
   - **Done (2026-10-20):** see N7: the nibble tables replaced the byte tables.
 
 - [x] **B2 (P1, S) Gate the shared-vector self test behind a flag.**
-  - **Done (2026-10-20):** `port_self_test_enabled` gates the replay, the board load, and the opcode-table rescan. It stays 1 in a test build.
+  - **Done (2026-10-20):** `port_self_test_enabled` (declared once, in `src/vector_selftest.gs`) gates the replay
+    and the duplicate board load, and it ships at 0, so a normal green flag boots straight into the game. The
+    opcode-table length check stays on every boot: it is two coercions and a comparison, and a table that
+    failed to load has to surface. Flip the flag to 1 for a test build; `stage.gs` still calls
+    `run_port_self_test` either way.
   - Where: `stage.gs:41`, `vector_selftest.gs:114-150`.
   - Now: every green flag replays 582 vectors (18,363 list values with coercions, plus CPU sequences with
     logging on), loads and validates the cartridge, and parses the header, before the game boots.
@@ -1242,7 +1246,10 @@ reporters. That is the number to attack.
     must keep its name and the `ppu_frame_ready = 0` statement.
 
 - [x] **B4 (P2, S) Preallocate the board memory instead of `delete` plus `repeat add 0`.**
-  - **Done (2026-10-20):** the ROM copies append the payload, so `reset_memory` no longer zero-fills the two ROM lists.
+  - **Done (2026-10-20):** the ROM copies append the payload (`add ... to <list>` after a `delete`), so
+    `reset_memory` no longer zero-fills the two ROM lists: every byte is written once instead of twice.
+    The shared-vector handlers prepare bytes sparsely and so size the lists themselves; that is the one
+    caller that depended on the old zero fill.
   - Where: `mapper_004.gs:285-310`, `mapper_000.gs:198-223`.
   - Now: `delete` then `repeat N { add 0 }` for PRG ROM (up to 512 KiB on some MMC3 boards), CHR ROM
     (up to 256 KiB), and two RAM regions. The fixture alone is 32,768 + 8,192 adds.
@@ -1677,6 +1684,28 @@ as historical.
 
 ---
 
+## 12. Review pass over the implementation (2026-10-20, after the catalogue)
+
+Every commit between the pre-pass baseline and the end of the implementation pass was re-read against the
+reference algorithms, the mirror functions, and the source lint. What the review changed:
+
+| Finding | Fix |
+|---|---|
+| `src/vector_selftest.gs` declared `var port_self_test_enabled` twice in one translation unit (the second copy arrived with the gate in B2) | the duplicate is gone; the surviving declaration carries the explanation |
+| A name declared twice in one translation unit used to pass the lint (`tests/goboscript-source.test.ts` resolved names but never counted them) | new lint: "no translation unit declares the same name twice", one failure message per colliding name |
+| Removing the ROM zero fill in B4 made `nrom_reset_memory`/`mmc3_reset_memory` leave the lists empty, and the shared-vector handlers write prepared bytes by index into what used to be a sized list | the three vector handlers size the two lists themselves before preparing bytes, so an unprepared byte still reads as 0 |
+| The greyscale table's comment sat above `ppu_reverse_table_init` | moved to `ppu_greyscale_table_init` |
+| `frame_loop.gs`, `mapper_000.gs`, and `mapper_004.gs` described the per-dot dot clock and the zero fill they no longer do | comments rewritten to match the code |
+| The inlined dispatch in `cpu_control.gs` and the standalone `cpu_execute_instruction` are two copies of one body (K10) | compared statement by statement; they are identical apart from the caller's inline comment, and both were re-verified by the branch/ALU sweeps |
+
+Not changed by the review, and why:
+
+- `frame_loop_check_dma` is now a one-line wrapper with no caller in the running path. It stays as the
+  documented, mirrored entry point the checklist can call (`MIRROR_CONTRACT` pins it).
+- `ppu_clock_ppu_dot`, `ppu_clock_cpu_cycle`, and `cpu_clock_dma_cycle` are the same kind of kept entry: the
+  frame loop uses the batched forms, and the tick-counter mirrors use these.
+- The four `ppu_vram_address % 16384` sites stay separate statements, because the lint counts them (section 6).
+
 ## Appendix A - optimizations already in the source (verified by reading it)
 
 These are done; do not re-propose them. Each is present in the current source and matches its description.
@@ -1722,7 +1751,7 @@ Corrections, so the next reader does not trust stale notes:
    no-op stub that nothing includes (Appendix A, B8).
 2. It stated that hoisting globals into `local`s saves global reads because locals are cheaper. They are not:
    `local` lowers to a target variable (see `AGENTS.md` and section 1.1). Only the *count* of reads matters.
-3. It reported `1303/1303` passing tests and a compiled `.sb3` self-test result. Neither is a measurement of
+3. It reported `1304/1304` passing tests and a compiled `.sb3` self-test result. Neither is a measurement of
    this branch, and the toolchain to produce the second is not installed here. This revision records no
    pass counts and no runtime results.
 4. It listed the PPU pixel path as "deferred because inlining risks warp correctness". Warp is a per-proc

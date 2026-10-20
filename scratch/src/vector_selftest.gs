@@ -132,27 +132,24 @@ proc run_port_self_test {
     port_self_test_summary = "";
     cpu_access_log_enabled = 1;
 
-    if port_self_test_enabled == 0 {
-        # Nothing below this branch runs on a normal boot: no board load (rom_run_start loads
-        # the cartridge once), no opcode-table rescan, no 582-vector replay.
+    # The table check is a length comparison and two coercions, so it runs on every boot: a table
+    # that failed to load has to surface in the summary instead of decoding every opcode as
+    # unknown. The flag gates the replay, the board load, and the vector work below.
+    cpu_check_opcode_table;
+
+    if cpu_opcode_error != cpu_opcode_error_code.none {
+        port_self_test_summary = "opcode table failed its length and header check";
+    } elif port_self_test_enabled == 0 {
+        # A normal boot: rom_run_start loads the cartridge once and no vector is replayed.
         port_self_test_summary = "skipped";
-        port_self_test_done = 1;
     } elif schema_version != 1 {
         port_self_test_summary = "unsupported shared vector schema " & schema_version;
-    } elif cpu_opcode_error != cpu_opcode_error_code.none {
-        port_self_test_summary = "opcode table failed its length and header check";
     } else {
-        # The enabled path still needs the board and the opcode table before it can replay.
         rom_header_report;
         cartridge_load_board;
-        cpu_check_opcode_table;
 
-        if cpu_opcode_error != cpu_opcode_error_code.none {
-            port_self_test_summary = "opcode table failed its length and header check";
-        } else {
-            repeat record_count {
-                run_next_port_vector;
-            }
+        repeat record_count {
+            run_next_port_vector;
         }
 
         port_self_test_summary = "port vectors " & port_vectors_passed & "/" & port_vectors_run;
