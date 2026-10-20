@@ -103,8 +103,8 @@ proc cpu_set_memory_operand base_address, address, page_crossed {
 # and relative operands cover most of the instructions a game executes. The dummy-read and
 # cycle rules inside each branch are unchanged.
 proc cpu_resolve_operand mode, access {
-    local numeric_mode = to_number($mode);
-    local numeric_access = to_number($access);
+    local numeric_mode = $mode + ""; # to_number inlined
+    local numeric_access = $access + ""; # to_number inlined
     local base_address = 0;
     local address = 0;
     local index_register = 0;

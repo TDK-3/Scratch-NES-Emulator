@@ -114,7 +114,7 @@ func cpu_apply_driven_value(value, driven_mask) {
 
 # Reads one CPU address; mirrors read_cpu() for the ported windows.
 func cpu_bus_read(address) {
-    local numeric_address = normalize_word($address);
+    local numeric_address = $address % 65536; # normalize_word inlined
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
     if numeric_address >= 32768 {
@@ -211,8 +211,8 @@ func cpu_bus_read_io(address) {
 # nothing else, which is the write a game makes most often; everything below it is reached
 # only for an address in the I/O or cartridge window.
 proc cpu_bus_write address, value {
-    local numeric_address = normalize_word($address);
-    local numeric_value = normalize_byte($value);
+    local numeric_address = $address % 65536; # normalize_word inlined
+    local numeric_value = $value % 256; # normalize_byte inlined
     cpu_open_bus = numeric_value;
     cpu_bus_cycle_count = cpu_bus_cycle_count + 1;
 
