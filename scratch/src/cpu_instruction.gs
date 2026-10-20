@@ -347,23 +347,32 @@ proc cpu_execute_instruction {
         cpu_execute_brk_cycles;
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_rti {
         cpu_execute_rti_cycles;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pha {
-        cpu_read_cycle cpu_program_counter;
-        cpu_push_byte cpu_a;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_php {
-        cpu_read_cycle cpu_program_counter;
-        cpu_push_status 1;
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pla {
-        cpu_read_cycle cpu_program_counter;
-        cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
-        cpu_pop_byte;
-        cpu_a = cpu_popped_byte;
-        cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
-    } elif cpu_opcode_mnemonic == cpu_mnemonic.op_plp {
-        cpu_read_cycle cpu_program_counter;
-        cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
-        cpu_pop_byte;
-        cpu_restore_status_from_stack cpu_popped_byte;
+    } elif cpu_opcode_mode == cpu_addressing_mode.implied {
+        # Implied mode is a large share of what a game runs, and the regular path would resolve
+        # an operand that implied mode never reads. The four stack instructions keep their own
+        # sequences; everything else is one dummy read of the opcode byte plus the register and
+        # flag effects.
+        if cpu_opcode_mnemonic == cpu_mnemonic.op_pha {
+            cpu_read_cycle cpu_program_counter;
+            cpu_push_byte cpu_a;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_pla {
+            cpu_read_cycle cpu_program_counter;
+            cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
+            cpu_pop_byte;
+            cpu_a = cpu_popped_byte;
+            cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_php {
+            cpu_read_cycle cpu_program_counter;
+            cpu_push_status 1;
+        } elif cpu_opcode_mnemonic == cpu_mnemonic.op_plp {
+            cpu_read_cycle cpu_program_counter;
+            cpu_read_cycle cpu_stack_page.base + cpu_stack_pointer;
+            cpu_pop_byte;
+            cpu_restore_status_from_stack cpu_popped_byte;
+        } else {
+            cpu_read_cycle cpu_program_counter;
+            cpu_apply_implied_instruction;
+        }
     } elif cpu_opcode_mnemonic == cpu_mnemonic.op_jmp {
         cpu_execute_jump;
     } else {
