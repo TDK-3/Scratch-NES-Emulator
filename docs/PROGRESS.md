@@ -759,10 +759,20 @@ hardware validation remains open.
 
 ## Current milestone
 
-Latest change: the per-frame and per-chunk status broadcast that the display sprite used to say is removed. The E key
-halts the console and broadcasts one state dump (CPU and PPU registers, MMC3 registers and IRQ state, pad masks,
-frame counters) for the sprite to show. The halt is GoboScript-only, with no TypeScript mirror: the dump only reads
-state. Not runtime-verified, because the GoboScript compiler and TurboWarp are unavailable here.
+Latest change: the GoboScript run loop's frame-rate cap is raised from 30 to 60 emulated frames per second
+(`ROM_RUN_FRAME_RATE_CAP` in `scratch/src/rom_run.gs`), so the paced schedule matches the NES's 60 Hz frame rate
+and the 60 FPS the project already requests in `scratch/goboscript.toml`. The cap is still unmeasured on a real
+Scratch/TurboWarp runtime: a console that cannot finish a frame in 1/60 s is marked behind by
+`rom_run_pace_frame`, and every other completed frame then skips its pen draw. The TypeScript mirror in
+`tests/support/goboscript_port_algorithms.ts` and both GoboScript test suites now assert 60, and the standalone
+HTML that `scripts/package_scratch.mjs` emits asks TurboWarp for 60 FPS too, so the packaged runtime refreshes at
+the rate the paced console targets. `scratch/goboscript.toml` keeps TurboWarp's miscellaneous limits enabled and
+the pen layer at stage resolution (`high_quality_pen = false`); the lint and the research notes now record that,
+instead of the high-quality pen they described before. Earlier in this milestone, the per-frame and per-chunk
+status broadcast that the display sprite used to say was removed. The E key halts the console and broadcasts one
+state dump (CPU and PPU registers, MMC3 registers and IRQ state, pad masks, frame counters) for the sprite to
+show. The halt is GoboScript-only, with no TypeScript mirror: the dump only reads state. Not runtime-verified,
+because the GoboScript compiler and TurboWarp are unavailable here.
 
 **Milestone 2: GoboScript port of the tested helper layer.** All port components are now complete:
 numeric/status/ALU helpers, both controller ports, the CPU-bus (with RAM mirroring, open-bus, the PPU/APU/controller

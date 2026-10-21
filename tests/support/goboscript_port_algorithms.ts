@@ -4346,7 +4346,7 @@ export function rom_run_should_skip(skip_active: number, last_frame_skipped: num
 }
 
 /** Mirrors ROM_RUN_FRAME_RATE_CAP in scratch/src/rom_run.gs. */
-export const ROM_RUN_FRAME_RATE_CAP = 30;
+export const ROM_RUN_FRAME_RATE_CAP = 60;
 
 /** Mirrors rom_run_frame_due in scratch/src/rom_run.gs: the Scratch time frame_count is due. */
 export function rom_run_frame_due(origin: number, frame_count: number): number {

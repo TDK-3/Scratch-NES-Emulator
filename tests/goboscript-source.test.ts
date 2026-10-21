@@ -2074,7 +2074,16 @@ test("the display sprite draws each finished frame with the pen extension in col
     );
 
     const config = readFileSync(join(SCRATCH_DIRECTORY, "goboscript.toml"), "utf8");
-    assert.match(config, /high_quality_pen = true/, "TurboWarp renders the pen layer at display resolution");
+    assert.match(
+        config,
+        /high_quality_pen = false/,
+        "the pen layer stays at stage resolution until X1 measures the high-quality path",
+    );
+    assert.match(
+        config,
+        /no_miscellaneous_limits = false/,
+        "miscellaneous limits stay on until a TurboWarp run shows they can be lifted",
+    );
 });
 
 test("the PPU bus reports pattern and nametable accesses to an attached MMC3 board", () => {
@@ -2875,9 +2884,9 @@ test("the frame-skip policy has no lead test and no parity skip", () => {
     assert.match(body, /rom_run_pace_frame;/, "the loop must hold each completed frame to the cap");
 });
 
-test("the frame-rate cap holds emulation to 30 frames per second on the Scratch timer", () => {
+test("the frame-rate cap holds emulation to 60 frames per second on the Scratch timer", () => {
     const rom_run = get_source("src/rom_run.gs");
-    assert.match(rom_run.text, /var ROM_RUN_FRAME_RATE_CAP = 30;/, "the cap must be 30 frames per second");
+    assert.match(rom_run.text, /var ROM_RUN_FRAME_RATE_CAP = 60;/, "the cap must be 60 frames per second");
 
     const pace = rom_run.declarations.find((declaration) => declaration.name === "rom_run_pace_frame");
     assert.ok(pace, "rom_run_pace_frame is missing");

@@ -56,7 +56,7 @@ function decode_base85_chunks(html: string): Uint8Array {
     return new Uint8Array(out_buffer, 0, total_bytes);
 }
 
-test("packages the Scratch project into plain HTML with turbo mode, 30 FPS, and only the four control buttons", () => {
+test("packages the Scratch project into plain HTML with turbo mode, 60 FPS, and only the four control buttons", () => {
     const temporary_directory = mkdtempSync(join(tmpdir(), "scratch-packager-"));
     const output_path = join(temporary_directory, "index.html");
 
@@ -73,7 +73,7 @@ test("packages the Scratch project into plain HTML with turbo mode, 30 FPS, and 
         const html = readFileSync(output_path, "utf8");
         assert.match(html, /^<!DOCTYPE html>/);
         assert.match(html, /vm\.setTurboMode\(true\);/);
-        assert.match(html, /if \(vm\.setFramerate\) vm\.setFramerate\(30\);/);
+        assert.match(html, /if \(vm\.setFramerate\) vm\.setFramerate\(60\);/);
         assert.match(html, /if \(vm\.setInterpolation\) vm\.setInterpolation\(false\);/);
         assert.match(html, /if \(vm\.renderer\.setUseHighQualityRender\) vm\.renderer\.setUseHighQualityRender\(false\);/);
         assert.match(html, /green-flag-button/);

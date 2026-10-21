@@ -352,9 +352,10 @@ bitmap resolution, and a Stage notes file. It can also emit TurboWarp project co
 
 These are TurboWarp settings, not proof of compatibility with the Scratch website. Keep the intended runtime
 explicit. Test the compiled `.sb3` in the actual target runtime and document which settings are required.
-The configuration in this repository requests 60 FPS, disables miscellaneous limits, and enables
-high-quality pen for the TurboWarp target, because the display sprite draws every frame on the pen layer;
-the renderer and frame budget still need measurement.
+The configuration in this repository requests 60 FPS, keeps TurboWarp's miscellaneous limits enabled, and
+leaves the pen layer at stage resolution (`high_quality_pen = false`), because the display sprite draws every
+frame on the pen layer and neither setting has a measurement behind it yet; the renderer and frame budget still
+need measurement.
 
 ## Editor and preview loop
 
