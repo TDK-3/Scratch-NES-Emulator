@@ -191,7 +191,6 @@ proc rom_run_start {
         rom_run_start_timer = timer();
         rom_run_pace_origin = timer();
         rom_run_frames_skipped = 0;
-        hide;
     } else {
         rom_run_state_text = "boot failed " & cartridge_board_state_text;
     }
