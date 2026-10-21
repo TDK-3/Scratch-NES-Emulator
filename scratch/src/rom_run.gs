@@ -72,7 +72,7 @@ var rom_run_frames_skipped = 0;
 # Scratch time: frame n is due at rom_run_pace_origin + n / cap, and the loop waits for it. Once
 # the schedule is more than ROM_RUN_LAG_RESET_SECONDS behind, it restarts from now so the console
 # does not burst to catch up on frames it never ran.
-var ROM_RUN_FRAME_RATE_CAP = 30;
+var ROM_RUN_FRAME_RATE_CAP = 60;
 var ROM_RUN_LAG_RESET_SECONDS = 1;
 var rom_run_pace_origin = 0;
 

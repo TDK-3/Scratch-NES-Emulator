@@ -3769,11 +3769,11 @@ test("rom_run_should_skip never skips two completed frames in a row", () => {
     assert.equal(skipped, 5_000, "half of the frames are skipped while skipping is active");
 });
 
-test("rom_run_frame_due spaces frames 1/30 second apart from the origin", () => {
+test("rom_run_frame_due spaces frames 1/60 second apart from the origin", () => {
     assert.equal(ported.rom_run_frame_due(0, 0), 0, "frame 0 is due at the origin");
-    assert.equal(ported.rom_run_frame_due(0, 30), 1, "30 frames are due one second after the origin");
-    assert.equal(ported.rom_run_frame_due(5, 60), 7, "the schedule is offset by the origin");
-    assert.equal(ported.ROM_RUN_FRAME_RATE_CAP, 30, "the cap is 30 frames per second");
+    assert.equal(ported.rom_run_frame_due(0, 60), 1, "60 frames are due one second after the origin");
+    assert.equal(ported.rom_run_frame_due(5, 120), 7, "the schedule is offset by the origin");
+    assert.equal(ported.ROM_RUN_FRAME_RATE_CAP, 60, "the cap is 60 frames per second");
 });
 
 test("rom_run_is_behind is 1 only when the console is past its due time", () => {

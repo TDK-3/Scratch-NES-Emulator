@@ -41,7 +41,7 @@ async function strip_stored_turbowarp_config(project_bytes) {
 
 /**
  * Packages a compiled Scratch .sb3 file into a standalone HTML file using @turbowarp/packager.
- * Uses turbo mode, 30 FPS, and only the green flag, stop, pause, and fullscreen control buttons.
+ * Uses turbo mode, 60 FPS, and only the green flag, stop, pause, and fullscreen control buttons.
  */
 export async function package_scratch_project(input_path = default_input_path, output_path = default_output_path) {
     const resolved_input_path = resolve(input_path);
@@ -55,7 +55,7 @@ export async function package_scratch_project(input_path = default_input_path, o
     packager.project = loaded_project;
     packager.options.target = "html";
     packager.options.turbo = true;
-    packager.options.framerate = 30;
+    packager.options.framerate = 60;
     packager.options.controls.greenFlag.enabled = true;
     packager.options.controls.stopAll.enabled = true;
     packager.options.controls.pause.enabled = true;

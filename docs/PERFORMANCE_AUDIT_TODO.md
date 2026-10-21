@@ -994,11 +994,11 @@ reporters. That is the number to attack.
 - [ ] **F8 (P3, S) Drive the frame-skip decision from wall time.**
   - **Blocked (2026-10-20):** the skip decision already reads the frame counter and the measured FPS; a wall-clock rule needs S2's harness to compare.
   - Where: `rom_run.gs:166-190`.
-  - Now: the loop caps emulation at 30 frames per second on a schedule (`rom_run_pace_frame`): frame n is
-    due at `rom_run_pace_origin + n / 30`, an early frame waits until it is due, and a late frame sets
-    `rom_run_skip_active`. A schedule more than 1 s behind is re-anchored instead of catching up. The FPS
-    estimate no longer drives skipping, so the earlier hysteresis (`rom_run_next_skip_state`) is removed.
-    Never skips two frames in a row (`rom_run_should_skip`).
+  - Now: the loop caps emulation at 60 frames per second on a schedule (`rom_run_pace_frame`): frame n is
+    due at `rom_run_pace_origin + n / ROM_RUN_FRAME_RATE_CAP`, an early frame waits until it is due, and a
+    late frame sets `rom_run_skip_active`. A schedule more than 1 s behind is re-anchored instead of
+    catching up. The FPS estimate no longer drives skipping, so the earlier hysteresis
+    (`rom_run_next_skip_state`) is removed. Never skips two frames in a row (`rom_run_should_skip`).
   - Remaining: the cap is unmeasured on the real Scratch pen path, and the draw cost per frame is unknown.
     Confirm the cap and skip rate in a live run before tuning.
   - Effect: avoids both wasted draws and visible stutter when the console is slower than the display.
@@ -1092,7 +1092,8 @@ reporters. That is the number to attack.
     horizontal sprite-scaled bars, (c) TurboWarp's `pen` with `high_quality_pen = false`. Pick the fastest
     that still meets the visual requirement. This is the only item that may overturn the whole display
     design, so it must be measured before D2 is invested in.
-  - **Lint coupling:** `:1815` pins `high_quality_pen = true`; `:1796` pins `set_pen_size pen_display_scale;`.
+  - **Lint coupling:** `tests/goboscript-source.test.ts:2077` pins `high_quality_pen = false`;
+    `:1796` pins `set_pen_size pen_display_scale;`.
 
 - [ ] **D9 (P3, S) Skip the draw when the emulator is paused or the frame is identical.**
   - **Blocked (2026-10-20):** see F9.
@@ -1108,7 +1109,7 @@ reporters. That is the number to attack.
   - Est. saving: ~12 calls and ~6 divisions per presented frame; negligible, listed for completeness because
     this chain runs on the Stage thread that gates the frame handoff.
   - Risk: `tests/goboscript-source.test.ts:1808-1815` pins `stage_y = pen_display_first_y - (row * pen_display_scale);`
-    and `high_quality_pen = true`; the geometry values themselves must stay bit-identical (same divisions) or
+    and `high_quality_pen = false`; the geometry values themselves must stay bit-identical (same divisions) or
     the drawn frame shifts by fractions of a pixel.
 
 ### 4.6 Cartridge and mappers (`cartridge.gs`, `cartridge_loader.gs`, `mapper_000.gs`, `mapper_004.gs`)
@@ -1310,7 +1311,8 @@ reporters. That is the number to attack.
 - [ ] **X1 (P2, S) Measure `high_quality_pen` on and off.**
   - **Blocked (2026-10-20):** needs a built project and a frame-time measurement (S2/S3).
   - Where: `scratch/goboscript.toml:5`.
-  - Now: pinned to `true` by the lint (`tests/goboscript-source.test.ts:1815`).
+  - Now: pinned to `false` by the lint (`tests/goboscript-source.test.ts:2077`), so the pen layer renders at
+    stage resolution.
   - Change: build both and measure a frame's pen time. `false` renders the pen layer at stage resolution,
     which changes appearance; if it is materially faster, offer it as the default for slower machines and
     document the trade-off. Update the pin with the decision.
@@ -1495,7 +1497,7 @@ optimization.
 | `erase_all;`, `pen_down;`, `pen_up;`, `set_pen_size pen_display_scale;`, `set_pen_color nes_pen_colors[`, `ppu_framebuffer_packed[` | `:1792-1802` | D1, D2, D4, D7 |
 | `goto pen_display_first_x + ($left_x * pen_display_scale), $stage_y;` | `:1803` | D7 |
 | `stage_y = pen_display_first_y - (row * pen_display_scale);` | `:1808` | D3 |
-| `high_quality_pen = true` | `:1815` | X1 |
+| `high_quality_pen = false` | `:2077` | X1 |
 | `ppu_frame_ready = 1;` at vblank start; `if ppu_frame_ready == 1 {` in the run loop | `:1766-1783` | F8, F9 |
 | `bitwise_table_init`, `nes_palette_init` declarations and green-flag calls | `:167`, `:1775` | N7, B5 |
 | `ppu_clear_frame_output`, `cpu_bus_clear_ram` declarations and `cpu_bus_clear_ram;` in boot | `:216`, `:781`, `:1610` | B3 |
