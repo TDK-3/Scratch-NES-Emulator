@@ -81,7 +81,7 @@ proc pen_draw_frame {
     local cached_scale = 0;
     local cached_first_x = 0;
 
-    hide;
+#    hide;
     pen_up;
     erase_all;
 

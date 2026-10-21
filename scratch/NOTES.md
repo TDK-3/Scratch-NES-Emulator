@@ -2,15 +2,4 @@ NES Emulator made with Goboscript / Scratch
 
 Player 1: arrow keys, Z = A, X = B, Shift = Select, Enter = Start.
 Player 2: I / K / J / L (up / down / left / right), U = A, O = B, Y = Select, P = Start.
-The Shift key needs TurboWarp: the Scratch website ignores modifier keys.
-
-Press Q while a game runs to load a different ROM: paste the hexadecimal byte values the ROM
-string converter page produces (web/rom_string.html, or `npm run browser:dev` and open
-/rom_string.html), two digits per byte and without 0x prefixes, press Enter, and the console
-reboots from the pasted image. An empty
-answer cancels and keeps the game that is already running. Only an image with the iNES
-signature and its full declared payload replaces the current one; anything else is reported
-and left alone. A Scratch list holds 200,000 items, so images larger than that are rejected.
-
-Set the pen_fit_to_screen variable to 0 for a 1x picture; it starts at 1, which scales the
-256 by 240 picture up to fill the height of the 480 by 360 stage.
+The Shift key needs TurboWarp
