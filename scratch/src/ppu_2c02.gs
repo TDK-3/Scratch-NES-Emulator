@@ -524,17 +524,22 @@ proc ppu_read_cpu_register register_index {
 # PPUSTATUS: returns the three flags merged with the I/O latch's lower
 # bits, clears vblank, resets the write toggle, and refreshes NMI.
 proc ppu_read_status_register {
+    local status_byte = (ppu_status_register + "") % 256;
+    local flags = status_byte - (status_byte % 32);
+    local latch_low = (ppu_io_latch + "") % 32;
+
     if ppu_scanline == PPU_VBLANK_FIRST_SCANLINE and ppu_dot <= PPU_VBLANK_START_DOT {
         ppu_suppress_vblank_start = 1;
     }
 
-    local flags = bitwise_and(ppu_status_register, PPU_STATUS_FLAGS_MASK);
-    local latch_low = bitwise_and(ppu_io_latch, PPU_STATUS_READ_LATCH_MASK);
     ppu_read_result = flags + latch_low;
-    ppu_status_register = bitwise_and(ppu_status_register, 255 - PPU_VBLANK_FLAG);
     ppu_write_toggle = 0;
     ppu_io_latch = ppu_read_result;
-    ppu_refresh_nmi_output;
+
+    if status_byte >= 128 {
+        ppu_status_register = status_byte - 128;
+        ppu_refresh_nmi_output;
+    }
 }
 
 # PPUDATA: palette reads are immediate with greyscale masking; other

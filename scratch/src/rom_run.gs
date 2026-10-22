@@ -19,10 +19,10 @@
 # no scanline of the next frame can overwrite a row the sprite has not drawn yet. Nothing is
 # reported per frame. Pressing E halts the console and dumps its state once (rom_run_halt_and_dump).
 #
-# The host keyboard is sampled on every 100-cycle chunk (and immediately upon waking at each
-# paced 60 Hz frame boundary right before VBlank NMI runs), not once per emulated frame. A frame
-# is about 29,780 cycles, so a press reaches controller_button_masks within at most 100 CPU
-# cycles (~0.88 scanlines) and before the game's NMI handler strobes $4016 for the upcoming
+# The host keyboard is sampled every two 100-cycle chunks mid-frame (and immediately upon waking at
+# each paced 60 Hz frame boundary right before VBlank NMI runs), not once per emulated frame. A
+# frame is about 29,780 cycles, so a press reaches controller_button_masks within at most 200 CPU
+# cycles (~1.76 scanlines) and before the game's NMI handler strobes $4016 for the upcoming
 # frame. src/keyboard_input.gs turns the held keys into the live button masks controller.gs
 # reports, and the console still decides when to look at them, the way a game strobes $4016 when
 # it wants the pad. Sampling here also keeps the masks from changing while a chunk runs, so a
@@ -234,7 +234,7 @@ nowarp proc rom_run_loop {
             }
 
             # The pads follow the host keyboard between chunks, so a press reaches the
-            # console within one 100-cycle chunk and immediately before VBlank NMI.
+            # console within two 100-cycle chunks and immediately before VBlank NMI.
             keyboard_poll_controllers;
 
             # E halts the console and dumps its state. It is sampled with the pads, and the halt

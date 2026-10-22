@@ -145,18 +145,27 @@ proc cpu_read_cycle address {
                 and ppu_scanline < 240
                 and ppu_dot >= 0
                 and ppu_status_register < 128
-                and (cpu_bus_cartridge_kind != mapper_kind.mmc3 or mmc3_irq_enabled == 0)
-                and (ppu_sprite_zero_in_line == 0 or ((ppu_status_register // 64) % 2) == 1) {
-                pending_dots = (cpu_cycles * 3) - ppu_dots_clocked;
+                and (cpu_bus_cartridge_kind != mapper_kind.mmc3 or mmc3_irq_enabled == 0) {
+                pending_dots = ((cpu_cycles * 3) + 2) - ppu_dots_clocked;
                 end_dot = ppu_dot + pending_dots;
 
                 if pending_dots >= 0 and end_dot <= 340 {
-                    if ((ppu_status_register // 32) % 2) == 1 or end_dot <= 65 {
-                        need_ppu_sync = 0;
-                    } elif ppu_dot >= 66
-                        and (ppu_sprite_overflow_set_dot < ppu_dot
-                            or ppu_sprite_overflow_set_dot > end_dot) {
-                        need_ppu_sync = 0;
+                    if ppu_sprite_zero_in_line == 0
+                        or ((ppu_status_register // 64) % 2) == 1
+                        or ppu_dot >= 257
+                        or (ppu_dot >= 1
+                            and end_dot <= 256
+                            and (ppu_sprite_unit_oam_index[1] + "") == 0
+                            and ((ppu_sprite_unit_x_counter[1] + "") > pending_dots
+                                or ((ppu_sprite_unit_pattern_low[1] + "") == 0
+                                    and (ppu_sprite_unit_pattern_high[1] + "") == 0))) {
+                        if ((ppu_status_register // 32) % 2) == 1 or end_dot <= 65 {
+                            need_ppu_sync = 0;
+                        } elif ppu_dot >= 66
+                            and (ppu_sprite_overflow_set_dot < ppu_dot
+                                or ppu_sprite_overflow_set_dot > end_dot) {
+                            need_ppu_sync = 0;
+                        }
                     }
                 }
             }
@@ -166,7 +175,17 @@ proc cpu_read_cycle address {
             }
         }
 
-        bus_value = cpu_bus_read(numeric_address) + "";
+        if need_ppu_sync == 0 {
+            cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+            bus_value = ((ppu_status_register % 128) - (ppu_status_register % 32)) + (ppu_io_latch % 32);
+            ppu_read_result = bus_value;
+            ppu_register_error = ppu_register_status.ok;
+            ppu_write_toggle = 0;
+            ppu_io_latch = bus_value;
+            cpu_open_bus = bus_value;
+        } else {
+            bus_value = cpu_bus_read(numeric_address) + "";
+        }
     }
 
     cpu_cycle_value = bus_value;

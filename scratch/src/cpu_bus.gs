@@ -365,13 +365,19 @@ proc cpu_bus_run_dma cycle_base {
 
     if cpu_dma_phase == cpu_dma_phase.halt
         and cpu_dma_index == 0
+        and cpu_dma_page >= 0
         and cpu_dma_page < 32
-        and cpu_bus_ppu_attached == 1 {
+        and cpu_bus_ppu_attached == 1
+        and (($cycle_base * 3) + 2) >= ppu_dots_clocked {
         total_cycles = 513 + cpu_dma_alignment_cycle_needed;
-        vblank_end_offset = (((($cycle_base + total_cycles - 1) * 3) - ppu_dots_clocked) + ppu_dot)
+        vblank_end_offset = ((((($cycle_base + total_cycles - 1) * 3) + 2) - ppu_dots_clocked) + ppu_dot)
             + ((ppu_scanline - 241) * 341);
 
-        if ppu_mask_rendering_enable == 0 or (ppu_scanline >= 241 and vblank_end_offset < 6820) {
+        if ppu_mask_rendering_enable == 0
+            or (ppu_scanline >= 241
+                and ppu_scanline < 261
+                and vblank_end_offset >= 0
+                and vblank_end_offset < 6820) {
             ram_idx = ((cpu_dma_page * 256) % 2048) + 1;
             oam_addr = ppu_oam_address % 256;
 
