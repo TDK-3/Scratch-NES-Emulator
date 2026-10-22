@@ -259,8 +259,10 @@ proc ppu_bus_write_ppu address, value {
 # dozen times per scanline, which makes the two saved custom-block calls
 # worth the duplicated arithmetic. CPU reads still take ppu_bus_read_ppu.
 #
-# Nametable addresses ($2000-$2FFF) have A12=0, so they never trigger the MMC3 A12 rising edge;
-# observing them was pure overhead (15k+ calls/frame). Only pattern reads ($0000-$1FFF) are observed.
+# Nametable addresses ($2000-$3EFF) always carry A12=0, so they cannot trigger an MMC3 A12 rising
+# edge directly, but when an MMC3 board is attached and A12 was previously high ($1000-$1FFF), the
+# falling edge clears mmc3_ppu_a12_high and resets mmc3_a12_low_dots so the 10-dot low filter can
+# accumulate across subsequent dots.
 proc ppu_bus_read_nametable address {
     local base_address = $address;
     local logical_table = 0;
@@ -273,6 +275,11 @@ proc ppu_bus_read_nametable address {
 
     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
         mirroring = mmc3_mirroring;
+
+        if mmc3_ppu_a12_high == 1 {
+            mmc3_ppu_a12_high = 0;
+            mmc3_a12_low_dots = 0;
+        }
     } elif ppu_bus_mapper_kind == mapper_kind.nrom {
         mirroring = cartridge_mirroring;
     }

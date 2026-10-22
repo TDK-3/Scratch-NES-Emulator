@@ -230,6 +230,10 @@ proc cpu_write_cycle address, value {
             nrom_write_cpu numeric_address, numeric_value;
         } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
             mmc3_write_cpu numeric_address, numeric_value;
+
+            if numeric_address >= 49152 and cpu_bus_ppu_attached == 1 {
+                ppu_update_next_cpu_event;
+            }
         }
     } else {
         if numeric_address >= 8192 and numeric_address < 16384 and cpu_bus_ppu_attached == 1 {

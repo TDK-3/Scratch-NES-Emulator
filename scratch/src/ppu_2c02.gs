@@ -686,6 +686,10 @@ proc ppu_decode_control_register {
     } else {
         ppu_vram_increment = 1;
     }
+
+    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        ppu_update_next_cpu_event;
+    }
 }
 
 # PPUCTRL: stores the value, updates the nametable bits in the temporary
@@ -771,6 +775,7 @@ proc ppu_write_address_register value {
         # VRAM-address access site uses that divisor, never the mask value.
         if ppu_bus_mapper_kind == mapper_kind.mmc3 {
             ppu_bus_observe_ppu_address ppu_vram_address % 16384;
+            ppu_update_next_cpu_event;
         }
     }
 }
@@ -810,6 +815,7 @@ proc ppu_increment_vram_address {
     # test the board kind. The address is already masked to fourteen bits.
     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
         ppu_bus_observe_ppu_address ppu_vram_address % 16384;
+        ppu_update_next_cpu_event;
     }
 }
 
@@ -927,10 +933,16 @@ proc ppu_fetch_tile_into_shifters shift_eight {
         ppu_bus_read_value = pat_high;
     } else {
         if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-            if mmc3_ppu_a12_high == 0 {
+            # Across an 8-dot tile (8k+1..8k+8), the nametable fetch at 8k+2 drives A12=0 after
+            # two mapper dot ticks, leaving four low-dot ticks (8k+3..8k+6) before pat_low when
+            # A12 entered high, or six cumulative ticks when A12 entered low.
+            if mmc3_ppu_a12_high == 1 {
+                mmc3_ppu_a12_high = 0;
+                mmc3_a12_low_dots = 4;
+            } else {
                 mmc3_a12_low_dots = mmc3_a12_low_dots + 6;
-                if mmc3_a12_low_dots > 10 {
-                    mmc3_a12_low_dots = 10;
+                if mmc3_a12_low_dots > mmc3_limit.a12_filter_dots {
+                    mmc3_a12_low_dots = mmc3_limit.a12_filter_dots;
                 }
             }
         }
@@ -941,8 +953,8 @@ proc ppu_fetch_tile_into_shifters shift_eight {
         if ppu_bus_mapper_kind == mapper_kind.mmc3 {
             if mmc3_ppu_a12_high == 0 {
                 mmc3_a12_low_dots = mmc3_a12_low_dots + 2;
-                if mmc3_a12_low_dots > 10 {
-                    mmc3_a12_low_dots = 10;
+                if mmc3_a12_low_dots > mmc3_limit.a12_filter_dots {
+                    mmc3_a12_low_dots = mmc3_limit.a12_filter_dots;
                 }
             }
         }
@@ -1059,10 +1071,16 @@ proc ppu_run_hblank_batch hblank_dots {
                     ppu_bus_read_value = pattern_high;
                 } else {
                     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-                        if mmc3_ppu_a12_high == 0 {
+                        # Garbage nametable fetch #1 at phase 1 (258+8s) drives A12=0 after two
+                        # mapper dot ticks, leaving four low-dot ticks (phases 2..5) before
+                        # pattern_low when A12 entered high, or six ticks when A12 entered low.
+                        if mmc3_ppu_a12_high == 1 {
+                            mmc3_ppu_a12_high = 0;
+                            mmc3_a12_low_dots = 4;
+                        } else {
                             mmc3_a12_low_dots = mmc3_a12_low_dots + 6;
-                            if mmc3_a12_low_dots > 10 {
-                                mmc3_a12_low_dots = 10;
+                            if mmc3_a12_low_dots > mmc3_limit.a12_filter_dots {
+                                mmc3_a12_low_dots = mmc3_limit.a12_filter_dots;
                             }
                         }
                     }
@@ -1073,8 +1091,8 @@ proc ppu_run_hblank_batch hblank_dots {
                     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
                         if mmc3_ppu_a12_high == 0 {
                             mmc3_a12_low_dots = mmc3_a12_low_dots + 2;
-                            if mmc3_a12_low_dots > 10 {
-                                mmc3_a12_low_dots = 10;
+                            if mmc3_a12_low_dots > mmc3_limit.a12_filter_dots {
+                                mmc3_a12_low_dots = mmc3_limit.a12_filter_dots;
                             }
                         }
                     }
@@ -1121,10 +1139,15 @@ proc ppu_run_hblank_batch hblank_dots {
     ppu_fetch_tile_into_shifters ppu_mask_background_enable;
 
     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-        if mmc3_ppu_a12_high == 0 {
+        # Dummy nametable fetch #1 at dot 338 drives A12=0 after dots 337..338, leaving
+        # (trailing_dots - 2) low-dot ticks across dot 339 (and dot 340 when not skipped).
+        if mmc3_ppu_a12_high == 1 {
+            mmc3_ppu_a12_high = 0;
+            mmc3_a12_low_dots = trailing_dots - 2;
+        } else {
             mmc3_a12_low_dots = mmc3_a12_low_dots + trailing_dots;
-            if mmc3_a12_low_dots > 10 {
-                mmc3_a12_low_dots = 10;
+            if mmc3_a12_low_dots > mmc3_limit.a12_filter_dots {
+                mmc3_a12_low_dots = mmc3_limit.a12_filter_dots;
             }
         }
     }
@@ -1696,6 +1719,7 @@ proc ppu_run_dots count {
 # cycle, and register writes that change PPUMASK or MMC3 IRQ state refresh this bound.
 proc ppu_update_next_cpu_event {
     local delta_dots = 1;
+    local clocks_to_zero = 1;
     local mmc3_bound = 0;
 
     if ppu_scanline < 241 or (ppu_scanline == 241 and ppu_dot <= 1) {
@@ -1708,15 +1732,44 @@ proc ppu_update_next_cpu_event {
 
     if ppu_bus_mapper_kind == mapper_kind.mmc3
         and mmc3_irq_enabled == 1
-        and ppu_mask_rendering_enable == 1
-        and (ppu_scanline < 240 or ppu_scanline == 261) {
-        if mmc3_irq_counter > 1 and mmc3_irq_reload_pending == 0 {
-            mmc3_bound = (mmc3_irq_counter - 1) * 250;
+        and mmc3_irq_line_asserted == 0
+        and ppu_mask_rendering_enable == 1 {
+        if ppu_scanline >= 240 and ppu_scanline < 261 {
+            mmc3_bound = ((261 - ppu_scanline) * 341) + (2 - ppu_dot);
+
+            if mmc3_bound < 1 {
+                mmc3_bound = 1;
+            }
+
             if mmc3_bound < delta_dots {
                 delta_dots = mmc3_bound;
             }
         } else {
-            delta_dots = 1;
+            if mmc3_irq_counter == 0 or mmc3_irq_reload_pending == 1 {
+                clocks_to_zero = mmc3_irq_latch + 1;
+            } else {
+                clocks_to_zero = mmc3_irq_counter;
+            }
+
+            if clocks_to_zero > 1 {
+                if (ppu_control_register // 32) % 2 == 1 {
+                    mmc3_bound = (clocks_to_zero - 1) * 12;
+                } else {
+                    mmc3_bound = (clocks_to_zero - 1) * 250;
+                }
+            } else {
+                mmc3_bound = 1;
+            }
+
+            if ppu_background_pattern_table == 0 and ppu_dot < 262 {
+                if 262 - ppu_dot > mmc3_bound {
+                    mmc3_bound = 262 - ppu_dot;
+                }
+            }
+
+            if mmc3_bound < delta_dots {
+                delta_dots = mmc3_bound;
+            }
         }
     }
 

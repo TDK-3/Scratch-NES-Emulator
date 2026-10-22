@@ -3004,4 +3004,50 @@ test("vblank-aligned pacing and input polling minimize button latency without ji
     assert.ok(!loop_body.includes("wait 0;"), "rom_run_loop must yield via forever without per-chunk redraw timers");
 });
 
+test("MMC3 batched and single-dot PPU paths preserve exact A12 falling edges and IRQ event bounds", () => {
+    const ppu_bus = get_source("src/ppu_bus.gs");
+    const nt_read = ppu_bus.declarations.find((declaration) => declaration.name === "ppu_bus_read_nametable");
+    const nt_read_body = nt_read?.body.join("\n") ?? "";
+    assert.match(
+        nt_read_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = 0;\s*\}/,
+        "ppu_bus_read_nametable must clear mmc3_ppu_a12_high and mmc3_a12_low_dots on A12 1->0 falling edges",
+    );
+
+    const ppu = get_source("src/ppu_2c02.gs");
+    const tile_fetch = ppu.declarations.find((declaration) => declaration.name === "ppu_fetch_tile_into_shifters");
+    const tile_fetch_body = tile_fetch?.body.join("\n") ?? "";
+    assert.match(
+        tile_fetch_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = 4;\s*\}/,
+        "batched background tile fetch must set 4 low dots after the 8k+2 nametable A12 falling edge",
+    );
+
+    const hblank = ppu.declarations.find((declaration) => declaration.name === "ppu_run_hblank_batch");
+    const hblank_body = hblank?.body.join("\n") ?? "";
+    assert.match(
+        hblank_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = 4;\s*\}/,
+        "batched sprite slot fetch must set 4 low dots after the phase-1 garbage nametable A12 falling edge",
+    );
+    assert.match(
+        hblank_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = trailing_dots - 2;\s*\}/,
+        "batched HBlank trailing dots must model the dot-338 dummy nametable A12 falling edge",
+    );
+
+    const cpu_bus = get_source("src/cpu_bus.gs");
+    const cpu_core = get_source("src/cpu_core.gs");
+    assert.match(
+        cpu_bus.text,
+        /mmc3_write_cpu numeric_address, numeric_value;\s*if numeric_address >= 49152 and cpu_bus_ppu_attached == 1 \{\s*ppu_update_next_cpu_event;\s*\}/,
+        "cpu_bus_write must refresh ppu_next_cpu_event_dots after MMC3 IRQ register writes",
+    );
+    assert.match(
+        cpu_core.text,
+        /mmc3_write_cpu numeric_address, numeric_value;\s*if numeric_address >= 49152 and cpu_bus_ppu_attached == 1 \{\s*ppu_update_next_cpu_event;\s*\}/,
+        "cpu_write_cycle fast path must refresh ppu_next_cpu_event_dots after MMC3 IRQ register writes",
+    );
+});
+
 

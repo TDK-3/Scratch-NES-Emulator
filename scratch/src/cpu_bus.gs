@@ -239,6 +239,10 @@ proc cpu_bus_write address, value {
             nrom_write_cpu numeric_address, numeric_value;
         } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
             mmc3_write_cpu numeric_address, numeric_value;
+
+            if numeric_address >= 49152 and cpu_bus_ppu_attached == 1 {
+                ppu_update_next_cpu_event;
+            }
         }
     } elif numeric_address < 8192 {
         # $0000-$1FFF: 2 KiB of RAM, mirrored across the window. The unmirrored half is the
