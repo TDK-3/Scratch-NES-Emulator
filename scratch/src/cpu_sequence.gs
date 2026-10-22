@@ -161,15 +161,18 @@ proc cpu_execute_hardware_interrupt_cycles source {
 # cpu_sequence_error_code.not_relative_operand, where the reference throws a TypeError, and
 # spends no cycles.
 proc cpu_apply_relative_branch_cycles taken {
+    local dummy_address = 0;
     cpu_sequence_error = cpu_sequence_error_code.none;
 
     if cpu_resolved_kind != cpu_operand_kind.relative {
         cpu_sequence_error = cpu_sequence_error_code.not_relative_operand;
-    } elif $taken == 1 {
+    } elif ($taken + "") == 1 {
         cpu_read_cycle cpu_resolved_base_address;
 
         if cpu_resolved_page_crossed == 1 {
-            cpu_read_cycle cpu_indexed_dummy_address(cpu_resolved_base_address, cpu_resolved_address);
+            dummy_address = (((cpu_resolved_base_address % 65536) // 256) * 256)
+                + (cpu_resolved_address % 256);
+            cpu_read_cycle dummy_address;
         }
 
         cpu_program_counter = cpu_resolved_address;

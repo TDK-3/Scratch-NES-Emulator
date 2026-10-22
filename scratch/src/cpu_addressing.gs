@@ -144,6 +144,13 @@ proc cpu_resolve_operand mode, access {
         cpu_resolved_base_address = base_address;
         cpu_resolved_address = base_address;
         cpu_resolved_page_crossed = 0;
+    } elif numeric_mode == cpu_addressing_mode.absolute {
+        cpu_fetch_word;
+        address = cpu_fetched_word;
+        cpu_resolved_kind = cpu_operand_kind.memory;
+        cpu_resolved_base_address = address;
+        cpu_resolved_address = address;
+        cpu_resolved_page_crossed = 0;
     } elif (numeric_mode == cpu_addressing_mode.absolute_x) or (numeric_mode == cpu_addressing_mode.absolute_y) {
         cpu_fetch_word;
         base_address = cpu_fetched_word;
@@ -180,7 +187,12 @@ proc cpu_resolve_operand mode, access {
             cpu_resolved_error = cpu_operand_error_code.unsupported_access;
         } else {
             cpu_fetch_byte;
-            offset = to_signed_byte(cpu_fetched_byte);
+            offset = cpu_fetched_byte % 256;
+
+            if offset >= 128 {
+                offset = offset - 256;
+            }
+
             base_address = cpu_program_counter;
             address = (base_address + offset) % 65536;
             cpu_resolved_kind = cpu_operand_kind.relative;
@@ -194,13 +206,6 @@ proc cpu_resolve_operand mode, access {
                 cpu_resolved_page_crossed = 1;
             }
         }
-    } elif numeric_mode == cpu_addressing_mode.absolute {
-        cpu_fetch_word;
-        address = cpu_fetched_word;
-        cpu_resolved_kind = cpu_operand_kind.memory;
-        cpu_resolved_base_address = address;
-        cpu_resolved_address = address;
-        cpu_resolved_page_crossed = 0;
     } elif numeric_mode == cpu_addressing_mode.indirect_indexed {
         cpu_fetch_byte;
         pointer_address = cpu_fetched_byte;

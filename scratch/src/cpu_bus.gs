@@ -356,7 +356,50 @@ var cpu_dma_cycles_run = 0;
 
 proc cpu_bus_run_dma cycle_base {
     local guard = 0;
+    local total_cycles = 0;
+    local ram_idx = 0;
+    local oam_addr = 0;
+    local latch_val = 0;
+    local vblank_end_offset = 0;
     cpu_dma_cycles_run = 0;
+
+    if cpu_dma_phase == cpu_dma_phase.halt
+        and cpu_dma_index == 0
+        and cpu_dma_page < 32
+        and cpu_bus_ppu_attached == 1 {
+        total_cycles = 513 + cpu_dma_alignment_cycle_needed;
+        vblank_end_offset = (((($cycle_base + total_cycles - 1) * 3) - ppu_dots_clocked) + ppu_dot)
+            + ((ppu_scanline - 241) * 341);
+
+        if ppu_mask_rendering_enable == 0 or (ppu_scanline >= 241 and vblank_end_offset < 6820) {
+            ram_idx = ((cpu_dma_page * 256) % 2048) + 1;
+            oam_addr = ppu_oam_address % 256;
+
+            repeat 256 {
+                latch_val = cpu_ram[ram_idx] + "";
+                ppu_oam[oam_addr + 1] = latch_val;
+                ram_idx = ram_idx + 1;
+                oam_addr = (oam_addr + 1) % 256;
+            }
+
+            ppu_oam_address = oam_addr;
+            cpu_dma_data_latch = latch_val;
+            cpu_open_bus = latch_val;
+            ppu_io_latch = latch_val;
+            ppu_register_error = ppu_register_status.ok;
+            ppu_bus_oam_error = 0;
+            cpu_dma_cycles_run = total_cycles;
+            cpu_dma_sequence_cycle = cpu_dma_sequence_cycle + total_cycles;
+
+            if total_cycles == 513 {
+                cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+            }
+
+            cpu_dma_index = 256;
+            cpu_dma_phase = cpu_dma_phase.idle;
+            ppu_sync_to_cycle $cycle_base + cpu_dma_cycles_run - 1;
+        }
+    }
 
     until cpu_dma_phase == cpu_dma_phase.idle or guard >= 520 {
         guard = guard + 1;

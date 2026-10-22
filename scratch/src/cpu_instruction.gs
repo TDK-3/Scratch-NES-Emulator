@@ -208,46 +208,49 @@ proc cpu_apply_implied_instruction {
 # arithmetic and the flag updates are the ported ALU and status helpers, and the branches are
 # ordered by how often a game executes them.
 proc cpu_apply_read_instruction mnemonic, value {
-    if $mnemonic == cpu_mnemonic.op_lda {
-        cpu_a = $value % 256;
+    local numeric_mnemonic = $mnemonic + "";
+    local numeric_value = ($value + "") % 256;
+
+    if numeric_mnemonic == cpu_mnemonic.op_lda {
+        cpu_a = numeric_value;
         cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_a + 1];
-    } elif $mnemonic == cpu_mnemonic.op_ldx {
-        cpu_x = $value % 256;
+    } elif numeric_mnemonic == cpu_mnemonic.op_ldx {
+        cpu_x = numeric_value;
         cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_x + 1];
-    } elif $mnemonic == cpu_mnemonic.op_ldy {
-        cpu_y = $value % 256;
+    } elif numeric_mnemonic == cpu_mnemonic.op_ldy {
+        cpu_y = numeric_value;
         cpu_status = (cpu_status % 128) - (2 * ((cpu_status // 2) % 2)) + cpu_zero_negative_bits[cpu_y + 1];
-    } elif $mnemonic == cpu_mnemonic.op_adc {
-        alu_add_with_carry_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_adc {
+        alu_add_with_carry_byte cpu_a, numeric_value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_and {
-        alu_and_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_and {
+        alu_and_byte cpu_a, numeric_value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_cmp {
-        alu_compare_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_cmp {
+        alu_compare_byte cpu_a, numeric_value, cpu_status;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_ora {
-        alu_ora_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_ora {
+        alu_ora_byte cpu_a, numeric_value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_eor {
-        alu_eor_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_eor {
+        alu_eor_byte cpu_a, numeric_value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_cpx {
-        alu_compare_byte cpu_x, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_cpx {
+        alu_compare_byte cpu_x, numeric_value, cpu_status;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_cpy {
-        alu_compare_byte cpu_y, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_cpy {
+        alu_compare_byte cpu_y, numeric_value, cpu_status;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_sbc {
-        alu_subtract_with_carry_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_sbc {
+        alu_subtract_with_carry_byte cpu_a, numeric_value, cpu_status;
         cpu_a = alu_value;
         cpu_status = alu_status;
-    } elif $mnemonic == cpu_mnemonic.op_bit {
-        alu_bit_test_byte cpu_a, $value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_bit {
+        alu_bit_test_byte cpu_a, numeric_value, cpu_status;
         cpu_status = alu_status;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
@@ -298,18 +301,21 @@ proc cpu_compute_store_value {
 # The read-modify-write effects, mirroring modify_value for the six official mnemonics. The
 # result and its status are left in alu_value and alu_status for the caller to store.
 proc cpu_modify_value mnemonic, value {
-    if $mnemonic == cpu_mnemonic.op_inc {
-        alu_increment_byte $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_dec {
-        alu_decrement_byte $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_asl {
-        alu_shift_left_byte $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_lsr {
-        alu_shift_right_byte $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_rol {
-        alu_rotate_left_byte $value, cpu_status;
-    } elif $mnemonic == cpu_mnemonic.op_ror {
-        alu_rotate_right_byte $value, cpu_status;
+    local numeric_mnemonic = $mnemonic + "";
+    local numeric_value = $value + "";
+
+    if numeric_mnemonic == cpu_mnemonic.op_inc {
+        alu_increment_byte numeric_value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_dec {
+        alu_decrement_byte numeric_value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_asl {
+        alu_shift_left_byte numeric_value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_lsr {
+        alu_shift_right_byte numeric_value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_rol {
+        alu_rotate_left_byte numeric_value, cpu_status;
+    } elif numeric_mnemonic == cpu_mnemonic.op_ror {
+        alu_rotate_right_byte numeric_value, cpu_status;
     } else {
         cpu_instruction_error = cpu_instruction_error_code.unsupported_mnemonic;
     }

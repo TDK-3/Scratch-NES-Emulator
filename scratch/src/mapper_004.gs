@@ -507,9 +507,9 @@ proc mmc3_read_cpu address {
 
         if mmc3_prg_mode == 0 {
             if slot == 0 {
-                prg_bank = mmc3_bank_registers[7];
+                prg_bank = mmc3_bank_registers[7] + "";
             } elif slot == 1 {
-                prg_bank = mmc3_bank_registers[8];
+                prg_bank = mmc3_bank_registers[8] + "";
             } elif slot == 2 {
                 prg_bank = second_last_bank;
             } else {
@@ -519,9 +519,9 @@ proc mmc3_read_cpu address {
             if slot == 0 {
                 prg_bank = second_last_bank;
             } elif slot == 1 {
-                prg_bank = mmc3_bank_registers[8];
+                prg_bank = mmc3_bank_registers[8] + "";
             } elif slot == 2 {
-                prg_bank = mmc3_bank_registers[7];
+                prg_bank = mmc3_bank_registers[7] + "";
             } else {
                 prg_bank = last_bank;
             }
@@ -533,13 +533,13 @@ proc mmc3_read_cpu address {
         offset = ((prg_bank % mmc3_prg_bank_count) * mmc3_limit.prg_bank_bytes)
             + (numeric_address - mmc3_limit.prg_rom_start - (slot * mmc3_limit.prg_bank_bytes));
         mmc3_cpu_mapped = 1;
-        mmc3_cpu_value = mmc3_prg_rom[offset + 1];
+        mmc3_cpu_value = mmc3_prg_rom[offset + 1] + "";
         mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
     } elif numeric_address >= mmc3_limit.prg_ram_start and mmc3_prg_ram_enabled == 1 {
         if mmc3_prg_ram_bytes > 0 {
             offset = (numeric_address - mmc3_limit.prg_ram_start) % mmc3_prg_ram_bytes;
             mmc3_cpu_mapped = 1;
-            mmc3_cpu_value = mmc3_prg_ram[offset + 1];
+            mmc3_cpu_value = mmc3_prg_ram[offset + 1] + "";
             mmc3_cpu_driven_mask = mmc3_limit.full_byte_mask;
         }
     }
@@ -571,15 +571,15 @@ proc mmc3_read_pattern address {
     # is the address minus the slot's own span rather than a second modulo.
     local numeric_address = $address % mmc3_limit.pattern_space_bytes;
     local slot = numeric_address // mmc3_limit.chr_bank_bytes;
-    local chr_bank = mmc3_chr_bank_cache[slot + 1];
+    local chr_bank = mmc3_chr_bank_cache[slot + 1] + "";
     local offset = (chr_bank * mmc3_limit.chr_bank_bytes)
         + (numeric_address - (slot * mmc3_limit.chr_bank_bytes));
     mmc3_pattern_value = 0;
 
     if mmc3_chr_rom_bytes > 0 {
-        mmc3_pattern_value = mmc3_chr_rom[offset + 1];
+        mmc3_pattern_value = mmc3_chr_rom[offset + 1] + "";
     } elif mmc3_chr_ram_bytes > 0 {
-        mmc3_pattern_value = mmc3_chr_ram[offset + 1];
+        mmc3_pattern_value = mmc3_chr_ram[offset + 1] + "";
     }
 }
 
