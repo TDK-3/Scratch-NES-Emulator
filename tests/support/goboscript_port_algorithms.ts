@@ -4378,6 +4378,9 @@ export function rom_run_should_skip(skip_active: number, last_frame_skipped: num
 /** Mirrors ROM_RUN_FRAME_RATE_CAP in scratch/src/rom_run.gs. */
 export const ROM_RUN_FRAME_RATE_CAP = 60;
 
+/** Mirrors ROM_RUN_NEXT_TICK_EPSILON_SECONDS in scratch/src/rom_run.gs. */
+export const ROM_RUN_NEXT_TICK_EPSILON_SECONDS = 0.0005;
+
 /** Mirrors rom_run_frame_due in scratch/src/rom_run.gs: the Scratch time frame_count is due. */
 export function rom_run_frame_due(origin: number, frame_count: number): number {
     return origin + frame_count / ROM_RUN_FRAME_RATE_CAP;
@@ -4390,4 +4393,13 @@ export function rom_run_is_behind(now: number, due: number): number {
     }
 
     return 0;
+}
+
+/** Mirrors rom_run_effective_due in scratch/src/rom_run.gs: advances past last_paced_timer. */
+export function rom_run_effective_due(due: number, last_paced_timer: number): number {
+    if (last_paced_timer >= 0 && due <= last_paced_timer) {
+        return last_paced_timer + ROM_RUN_NEXT_TICK_EPSILON_SECONDS;
+    }
+
+    return due;
 }

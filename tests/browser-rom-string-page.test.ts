@@ -191,7 +191,7 @@ test("the converter page encodes a dropped ROM file into the byte text the port 
 
     assert.equal(output.value, encode_rom_text(supplied, "spaced").text);
     assert.equal(element("rom-name").textContent, "test_rom.nes");
-    assert.equal(element("header-mapper").textContent, "4");
+    assert.equal(element("header-mapper").textContent, "0");
     assert.match(element("header-note").textContent, /routes this mapper/);
 
     // The clipboard is unavailable here, so the page selects the text and says so.

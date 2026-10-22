@@ -3785,3 +3785,26 @@ test("rom_run_is_behind is 1 only when the console is past its due time", () => 
     assert.equal(ported.rom_run_is_behind(1.1, 1.1), 0, "exactly on time is not behind");
     assert.equal(ported.rom_run_is_behind(1.2, 1.1), 1, "late is behind");
 });
+
+test("rom_run_effective_due prevents two frames from completing on the same frozen Scratch timer tick", () => {
+    assert.equal(
+        ported.rom_run_effective_due(0.0146, -1),
+        0.0146,
+        "before any frame has paced, the target due time is unchanged",
+    );
+    assert.equal(
+        ported.rom_run_effective_due(0.0313, 0.017),
+        0.0313,
+        "when due is already ahead of the last paced timer tick, it stays unchanged",
+    );
+    assert.equal(
+        ported.rom_run_effective_due(0.0313, 0.032),
+        0.032 + ported.ROM_RUN_NEXT_TICK_EPSILON_SECONDS,
+        "when a slightly late tick satisfies the next frame's early-slop due, effective_due advances to the next tick",
+    );
+    assert.equal(
+        ported.rom_run_effective_due(0.032, 0.032),
+        0.032 + ported.ROM_RUN_NEXT_TICK_EPSILON_SECONDS,
+        "equal timestamps also require the next runtime tick before completing",
+    );
+});

@@ -86,9 +86,9 @@ test("a decoded image is the image the header parser accepts", () => {
     assert.equal(parsed?.ok, true);
 
     if (parsed?.ok) {
-        assert.equal(parsed.value.mapper_id, 4);
-        assert.equal(parsed.value.prg_rom.byteLength, 65_536);
-        assert.equal(parsed.value.chr_rom.byteLength, 16_384);
+        assert.equal(parsed.value.mapper_id, 0);
+        assert.equal(parsed.value.prg_rom.byteLength, 32_768);
+        assert.equal(parsed.value.chr_rom.byteLength, 8_192);
     }
 });
 

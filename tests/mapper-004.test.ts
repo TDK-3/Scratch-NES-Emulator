@@ -13,11 +13,26 @@ const CHR_BANK_BYTES = 0x0400;
 const PRG_RAM_BYTES = 0x2000;
 const TEST_ROM = readFileSync(new URL("../test_rom.nes", import.meta.url));
 
-test("creates MMC3 for the supplied mapper 4 ROM", () => {
-    const parsed = parse_ines_rom(TEST_ROM);
+test("creates MMC3 for a parsed mapper 4 iNES image and rejects the supplied mapper 0 ROM", () => {
+    const supplied = parse_ines_rom(TEST_ROM);
+
+    if (!supplied.ok) {
+        assert.fail(`Expected a valid test ROM, received ${supplied.error.code}.`);
+    }
+
+    const rejected = Mmc3Mapper.create(supplied.value);
+    assert.equal(rejected.ok, false);
+    if (!rejected.ok) {
+        assert.equal(rejected.error.code, "wrong-mapper-family");
+        assert.equal(rejected.error.mapper_id, 0);
+    }
+
+    const mmc3_image = new Uint8Array(16 + 4 * 16_384 + 2 * 8_192);
+    mmc3_image.set([0x4e, 0x45, 0x53, 0x1a, 4, 2, 0x43, 0x00], 0);
+    const parsed = parse_ines_rom(mmc3_image);
 
     if (!parsed.ok) {
-        assert.fail(`Expected a valid test ROM, received ${parsed.error.code}.`);
+        assert.fail(`Expected a valid MMC3 iNES image, received ${parsed.error.code}.`);
     }
 
     const mapper = create_mapper(parsed.value);

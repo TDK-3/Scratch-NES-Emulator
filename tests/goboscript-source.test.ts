@@ -539,6 +539,11 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/rom_run.gs",
+        declaration: "rom_run_effective_due",
+        mirror: "rom_run_effective_due",
+    },
+    {
+        source: "src/rom_run.gs",
         declaration: "rom_run_pace_frame",
         mirror: null,
         reason: "frame-rate cap; it waits on the Scratch timer, which the port cannot model",
@@ -2956,16 +2961,35 @@ test("vblank-aligned pacing and input polling minimize button latency without ji
 
     const slop_match = /var ROM_RUN_PACE_EARLY_SLOP_SECONDS = ([0-9.]+);/.exec(rom_run.text);
     const deadband_match = /var ROM_RUN_SKIP_DEADBAND_SECONDS = ([0-9.]+);/.exec(rom_run.text);
-    assert.ok(slop_match && deadband_match, "pacing slop and skip deadband constants must be declared");
+    const lag_reset_match = /var ROM_RUN_LAG_RESET_SECONDS = ([0-9.]+);/.exec(rom_run.text);
+    assert.ok(
+        slop_match && deadband_match && lag_reset_match,
+        "pacing slop, skip deadband, and lag reset constants must be declared",
+    );
     const early_slop = Number(slop_match[1]);
     const skip_deadband = Number(deadband_match[1]);
+    const lag_reset = Number(lag_reset_match[1]);
     assert.ok(
         early_slop > 0.001 && skip_deadband > 0.005 && early_slop + skip_deadband < 1 / 60,
         "early_slop + skip_deadband must stay strictly below 1/60s so two on-time frames never share one tick",
     );
+    assert.ok(
+        lag_reset > skip_deadband && lag_reset <= 0.06,
+        "lag_reset must re-anchor within ~3 frames so JIT or browser stalls never trigger multi-frame catch-up bursts",
+    );
 
     const pace = rom_run.declarations.find((declaration) => declaration.name === "rom_run_pace_frame");
     const pace_body = pace?.body.join("\n") ?? "";
+    assert.match(
+        pace_body,
+        /rom_run_effective_due\(/,
+        "on-schedule pacing must advance past rom_run_last_paced_timer so two frames never complete in one _step()",
+    );
+    assert.match(
+        pace_body,
+        /rom_run_last_paced_timer = timer\(\);/,
+        "each completed frame must record the Scratch timer tick on which it finished pacing",
+    );
     assert.match(
         pace_body,
         /rom_run_poll_countdown = 0;/,
@@ -2978,6 +3002,52 @@ test("vblank-aligned pacing and input polling minimize button latency without ji
     const pace_at = loop_body.indexOf("if frame_loop_frame_complete == 1 {");
     assert.ok(draw_at >= 0 && pace_at > draw_at, "the finished frame must be drawn before pacing yields the tick");
     assert.ok(!loop_body.includes("wait 0;"), "rom_run_loop must yield via forever without per-chunk redraw timers");
+});
+
+test("MMC3 batched and single-dot PPU paths preserve exact A12 falling edges and IRQ event bounds", () => {
+    const ppu_bus = get_source("src/ppu_bus.gs");
+    const nt_read = ppu_bus.declarations.find((declaration) => declaration.name === "ppu_bus_read_nametable");
+    const nt_read_body = nt_read?.body.join("\n") ?? "";
+    assert.match(
+        nt_read_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = 0;\s*\}/,
+        "ppu_bus_read_nametable must clear mmc3_ppu_a12_high and mmc3_a12_low_dots on A12 1->0 falling edges",
+    );
+
+    const ppu = get_source("src/ppu_2c02.gs");
+    const tile_fetch = ppu.declarations.find((declaration) => declaration.name === "ppu_fetch_tile_into_shifters");
+    const tile_fetch_body = tile_fetch?.body.join("\n") ?? "";
+    assert.match(
+        tile_fetch_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = 4;\s*\}/,
+        "batched background tile fetch must set 4 low dots after the 8k+2 nametable A12 falling edge",
+    );
+
+    const hblank = ppu.declarations.find((declaration) => declaration.name === "ppu_run_hblank_batch");
+    const hblank_body = hblank?.body.join("\n") ?? "";
+    assert.match(
+        hblank_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = 4;\s*\}/,
+        "batched sprite slot fetch must set 4 low dots after the phase-1 garbage nametable A12 falling edge",
+    );
+    assert.match(
+        hblank_body,
+        /if mmc3_ppu_a12_high == 1 \{\s*mmc3_ppu_a12_high = 0;\s*mmc3_a12_low_dots = trailing_dots - 2;\s*\}/,
+        "batched HBlank trailing dots must model the dot-338 dummy nametable A12 falling edge",
+    );
+
+    const cpu_bus = get_source("src/cpu_bus.gs");
+    const cpu_core = get_source("src/cpu_core.gs");
+    assert.match(
+        cpu_bus.text,
+        /mmc3_write_cpu numeric_address, numeric_value;\s*if numeric_address >= 49152 and cpu_bus_ppu_attached == 1 \{\s*ppu_update_next_cpu_event;\s*\}/,
+        "cpu_bus_write must refresh ppu_next_cpu_event_dots after MMC3 IRQ register writes",
+    );
+    assert.match(
+        cpu_core.text,
+        /mmc3_write_cpu numeric_address, numeric_value;\s*if numeric_address >= 49152 and cpu_bus_ppu_attached == 1 \{\s*ppu_update_next_cpu_event;\s*\}/,
+        "cpu_write_cycle fast path must refresh ppu_next_cpu_event_dots after MMC3 IRQ register writes",
+    );
 });
 
 
