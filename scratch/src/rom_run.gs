@@ -19,13 +19,14 @@
 # no scanline of the next frame can overwrite a row the sprite has not drawn yet. Nothing is
 # reported per frame. Pressing E halts the console and dumps its state once (rom_run_halt_and_dump).
 #
-# The host keyboard is sampled once every four chunks, not once per emulated frame. A frame is
-# about 29,780 cycles, so this loop spends roughly 300 bounded chunks finishing one. Polling every
-# four chunks keeps input responsive without repeating sixteen key-device lookups each time.
-# src/keyboard_input.gs turns the held keys into the live button masks controller.gs reports,
-# and the console still decides when to look at them, the
-# way a game strobes $4016 when it wants the pad. Sampling here also keeps the masks from
-# changing while a chunk runs, so a chunk never sees half of one sample.
+# The host keyboard is sampled every two 100-cycle chunks mid-frame (and immediately upon waking at
+# each paced 60 Hz frame boundary right before VBlank NMI runs), not once per emulated frame. A
+# frame is about 29,780 cycles, so a press reaches controller_button_masks within at most 200 CPU
+# cycles (~1.76 scanlines) and before the game's NMI handler strobes $4016 for the upcoming
+# frame. src/keyboard_input.gs turns the held keys into the live button masks controller.gs
+# reports, and the console still decides when to look at them, the way a game strobes $4016 when
+# it wants the pad. Sampling here also keeps the masks from changing while a chunk runs, so a
+# chunk never sees half of one sample.
 #
 # The same sample point watches the ROM load key, and a press is serviced at the top of the
 # next iteration instead of from a key-press hat: src/rom_input.gs asks the host for a string
@@ -69,11 +70,18 @@ var rom_run_start_timer = 0;
 var rom_run_frames_skipped = 0;
 
 # Frame-rate cap. The console runs at most ROM_RUN_FRAME_RATE_CAP emulated frames per second of
-# Scratch time: frame n is due at rom_run_pace_origin + n / cap, and the loop waits for it. Once
-# the schedule is more than ROM_RUN_LAG_RESET_SECONDS behind, it restarts from now so the console
-# does not burst to catch up on frames it never ran.
+# Scratch time: frame n is due at rom_run_pace_origin + n / cap, and the loop waits for it.
+# Scratch's timer() updates once per runtime _step() tick and browser 60 Hz intervals quantize to
+# 16 ms or 17 ms, so ROM_RUN_PACE_EARLY_SLOP_SECONDS (2 ms) lets a tick that lands slightly before
+# the nominal 1/60 s mark wake on time instead of burning an extra tick, while
+# ROM_RUN_SKIP_DEADBAND_SECONDS (12 ms) ignores sub-frame timer jitter. Because 2 ms + 12 ms <
+# 16.67 ms, any on-schedule tick strictly precedes the next frame's due threshold and never runs
+# two on-time frames in one tick. Once the schedule is more than ROM_RUN_LAG_RESET_SECONDS behind,
+# it restarts from now so the console does not burst to catch up on frames it never ran.
 var ROM_RUN_FRAME_RATE_CAP = 60;
-var ROM_RUN_LAG_RESET_SECONDS = 1;
+var ROM_RUN_LAG_RESET_SECONDS = 0.25;
+var ROM_RUN_PACE_EARLY_SLOP_SECONDS = 0.002;
+var ROM_RUN_SKIP_DEADBAND_SECONDS = 0.012;
 var rom_run_pace_origin = 0;
 
 # rom_run_skip_active is 1 while the console is behind its schedule, so a completed frame may be
@@ -82,9 +90,10 @@ var rom_run_pace_origin = 0;
 var rom_run_skip_active = 0;
 var rom_run_last_frame_skipped = 0;
 
-# Chunks between host-input samples. Four 100-cycle chunks are 400 emulated CPU cycles; actual
-# wall-time input latency depends on how quickly the runtime completes and schedules each chunk.
-var rom_run_poll_interval_chunks = 4;
+# Chunks between mid-frame host-input samples. Two 100-cycle chunks are 200 emulated CPU cycles
+# (~1.76 scanlines, ~0.11 ms of NES time), and rom_run_pace_frame resets rom_run_poll_countdown to
+# 0 at every 60 Hz frame wake-up so VBlank NMI always sees fresh input immediately.
+var rom_run_poll_interval_chunks = 2;
 var rom_run_poll_countdown = 0;
 
 # One summary line for the display sprite: the boot and ROM-load messages.
@@ -121,29 +130,35 @@ func rom_run_is_behind(now, due) {
     return 0;
 }
 
-# Holds the console to the frame-rate cap. Called once per completed frame. A frame that finished
-# late marks the console behind, so the next completed frame may be skipped and the draw cost can
-# be recovered; a frame that finished early waits until it is due. Declared nowarp because the
-# wait must yield to the project.
+# Holds the console to the frame-rate cap. Called once per completed frame, right after the
+# finished picture has been drawn at vblank start (scanline 241, dot 1) and before the upcoming
+# frame's NMI handler reads controller input. A frame that finished genuinely behind schedule
+# marks the console behind so the next completed frame may skip its pen draw to recover; an on-time
+# or early frame waits for the next 60 Hz runtime tick and resets the input poll countdown so fresh
+# host key state is sampled immediately on wake-up. Declared nowarp because the wait must yield.
 nowarp proc rom_run_pace_frame {
+    local target_due = 0;
     local due = 0;
     local now = 0;
 
-    due = rom_run_frame_due(rom_run_pace_origin, rom_run_frame_count);
+    target_due = rom_run_frame_due(rom_run_pace_origin, rom_run_frame_count);
     now = timer();
 
-    if now - due > ROM_RUN_LAG_RESET_SECONDS {
-        rom_run_pace_origin = now - rom_run_frame_count / ROM_RUN_FRAME_RATE_CAP;
+    if now - target_due > ROM_RUN_LAG_RESET_SECONDS {
+        rom_run_pace_origin = now - (rom_run_frame_count + "") / ROM_RUN_FRAME_RATE_CAP;
         rom_run_skip_active = 1;
-    } elif rom_run_is_behind(now, due) == 1 {
+    } elif rom_run_is_behind(now, target_due + ROM_RUN_SKIP_DEADBAND_SECONDS) == 1 {
         rom_run_skip_active = 1;
     } else {
         rom_run_skip_active = 0;
+        due = target_due - ROM_RUN_PACE_EARLY_SLOP_SECONDS;
 
         until timer() >= due {
             wait 0;
         }
     }
+
+    rom_run_poll_countdown = 0;
 }
 
 # Boots the console with the embedded image. A board that does not validate leaves the console
@@ -196,20 +211,18 @@ proc rom_run_start {
     }
 }
 
-# Runs the console until the project stops. Every iteration runs one bounded chunk of CPU
-# cycles, samples the host keyboard, counts the frame the chunk finished, presents a frame the
-# PPU completed, and yields. The block is declared nowarp so the loop
-# hands the project back after every chunk instead of holding the screen refresh for a whole
-# warp window, and so the presentation broadcast can wait for the display sprite to finish
-# drawing.
+# Runs the console until the project stops. Every iteration samples the host keyboard, runs one
+# bounded chunk of CPU cycles, presents any frame the PPU just completed at vblank start, and paces
+# the completed frame before VBlank NMI executes. The block is declared nowarp so the forever loop
+# yields cleanly between chunks without a mid-frame redraw request, and so the presentation
+# broadcast can wait for the display sprite to finish drawing.
 nowarp proc rom_run_loop {
     local elapsed = 0;
     local should_skip = 0;
     forever {
-        # The host keyboard and the ROM load key are sampled once every few chunks instead of
-        # once per chunk. A pending ROM load is still serviced before the console runs any more
-        # cycles in the iteration that sampled it, so the image cannot be replaced under a frame
-        # that is already half run.
+        # The host keyboard and the ROM load key are sampled on the poll countdown before each
+        # chunk. A pending ROM load is serviced before the console runs any more cycles in the
+        # iteration that sampled it, so the image cannot be replaced mid-chunk.
         rom_run_poll_countdown = rom_run_poll_countdown - 1;
 
         if rom_run_poll_countdown <= 0 {
@@ -221,7 +234,7 @@ nowarp proc rom_run_loop {
             }
 
             # The pads follow the host keyboard between chunks, so a press reaches the
-            # console within one poll interval instead of one emulated frame later.
+            # console within two 100-cycle chunks and immediately before VBlank NMI.
             keyboard_poll_controllers;
 
             # E halts the console and dumps its state. It is sampled with the pads, and the halt
@@ -232,25 +245,7 @@ nowarp proc rom_run_loop {
         }
 
         frame_loop_run_chunk;
-        rom_run_cycles = rom_run_cycles + frame_loop_chunk_cycles_run;
-
-        if frame_loop_frame_complete == 1 {
-            frame_loop_reset;
-            rom_run_frame_count = rom_run_frame_count + 1;
-            rom_run_pace_frame;
-
-            # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
-            if rom_run_frame_count - rom_run_last_fps_update_frame >= 60 {
-                elapsed = timer() - rom_run_last_fps_update_timer;
-
-                if elapsed > 0 {
-                    rom_run_fps = 60 / elapsed;
-                }
-
-                rom_run_last_fps_update_frame = rom_run_frame_count;
-                rom_run_last_fps_update_timer = timer();
-            }
-        }
+        rom_run_cycles = (rom_run_cycles + "") + (frame_loop_chunk_cycles_run + "");
 
         if ppu_frame_ready == 1 {
             # Skipped frames still advance the PPU and CPU, but they skip the pen draw and the
@@ -260,16 +255,34 @@ nowarp proc rom_run_loop {
 
             if should_skip == 1 {
                 rom_run_last_frame_skipped = 1;
-                rom_run_frames_skipped = rom_run_frames_skipped + 1;
+                rom_run_frames_skipped = (rom_run_frames_skipped + "") + 1;
             } else {
                 rom_run_last_frame_skipped = 0;
-                rom_run_frames_drawn = rom_run_frames_drawn + 1;
+                rom_run_frames_drawn = (rom_run_frames_drawn + "") + 1;
                 pen_display_update_geometry;
                 broadcast_and_wait "draw frame";
             }
         }
 
-        wait 0;
+        if frame_loop_frame_complete == 1 {
+            frame_loop_reset;
+            rom_run_frame_count = rom_run_frame_count + 1;
+            rom_run_pace_frame;
+
+            # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
+            if (rom_run_frame_count + "") - (rom_run_last_fps_update_frame + "") >= 60 {
+                elapsed = timer() - (rom_run_last_fps_update_timer + "");
+
+                if elapsed > 0 {
+                    rom_run_fps =
+                        ((rom_run_frame_count + "") - (rom_run_last_fps_update_frame + ""))
+                        / elapsed;
+                }
+
+                rom_run_last_fps_update_frame = rom_run_frame_count;
+                rom_run_last_fps_update_timer = timer();
+            }
+        }
     }
 }
 
@@ -315,8 +328,10 @@ proc rom_run_load_input_image {
 # registers, the MMC3 registers and IRQ state, the pad masks, and the board. Pure reporting; it
 # reads the state and changes nothing the console uses.
 proc rom_run_build_dump {
+    ppu_sync_to_cycle cpu_cycles;
+
     rom_run_dump_text = "frame " & rom_run_frame_count & " drawn " & rom_run_frames_drawn
-        & " skipped " & rom_run_frames_skipped & " fps " & (rom_run_fps // 1)
+        & " skipped " & rom_run_frames_skipped & " fps " & (((rom_run_fps + "") + 0.5) // 1)
         & " cycles " & rom_run_cycles & " image " & rom_run_image_name;
 
     rom_run_dump_text = rom_run_dump_text & " | CPU pc " & cpu_program_counter

@@ -287,7 +287,7 @@ proc ppu_bus_read_nametable address {
         physical_table = logical_table // 2;
     }
 
-    ppu_bus_read_value = ppu_nametable_ram[(physical_table * 1024) + (base_address % 1024) + 1];
+    ppu_bus_read_value = ppu_nametable_ram[(physical_table * 1024) + (base_address % 1024) + 1] + "";
 }
 
 # Reads one pattern-table byte for the rendering pipeline: the address is
@@ -306,11 +306,11 @@ proc ppu_bus_read_pattern_window address {
         # zero in one place.
         if cartridge_chr_rom_bytes > 0 {
             ppu_bus_pattern_mapped = 1;
-            ppu_bus_read_value = nrom_chr_rom[$address + 1];
+            ppu_bus_read_value = nrom_chr_rom[$address + 1] + "";
         } else {
             ppu_bus_pattern_mapped = 1;
             nrom_read_pattern $address;
-            ppu_bus_read_value = nrom_pattern_value;
+            ppu_bus_read_value = nrom_pattern_value + "";
         }
     } else {
         ppu_bus_observe_access ppu_bus_access.read, $address;

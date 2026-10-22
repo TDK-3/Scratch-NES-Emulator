@@ -10,13 +10,13 @@
 # (the browser window losing focus mid-press, for example) cannot leave a button stuck down,
 # and stopping the project leaves nothing to undo.
 #
-# The run loop samples the keyboard once per chunk of emulated cycles, so a press reaches the
-# console one chunk later, and the masks stay live until the next sample. The console still
-# decides when to look at them, the way a game strobes $4016 when it wants the pad. Scratch
-# key names are the ones the runtime's keyboard device reports: single characters, "up arrow",
-# "down arrow", "left arrow", "right arrow", "enter", and "space", plus "shift". Shift is a
-# TurboWarp extension: the Scratch website's keyboard device drops modifier keys, so Select
-# simply stays up there while every other binding works on plain Scratch too.
+# The run loop samples the keyboard before every 100-cycle chunk and immediately upon waking at
+# each paced 60 Hz frame boundary before VBlank NMI runs, so a press reaches the console within at
+# most 100 CPU cycles (~0.88 scanlines) and on the very same display frame when the game strobes
+# $4016 in NMI. Scratch key names are the ones the runtime's keyboard device reports: single
+# characters, "up arrow", "down arrow", "left arrow", "right arrow", "enter", and "space", plus
+# "shift". Shift is a TurboWarp extension: the Scratch website's keyboard device drops modifier
+# keys, so Select simply stays up there while every other binding works on plain Scratch too.
 #
 # Each binding contributes one distinct button bit and the mask starts at zero, so a held
 # button is added to its pad's mask rather than combined with a bitwise_or() call: the bit is

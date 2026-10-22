@@ -39,9 +39,9 @@ proc alu_add_with_carry accumulator, operand, status {
 
 # ADC on byte operands and a normalized status: the CPU dispatch entry point.
 proc alu_add_with_carry_byte accumulator, operand, status {
-    local left = $accumulator;
-    local right = $operand;
-    local normalized = $status;
+    local left = $accumulator + "";
+    local right = $operand + "";
+    local normalized = $status + "";
     local carry_in = normalized % 2;
     local total = (left + right) + carry_in;
     local value = total % 256;
@@ -69,9 +69,9 @@ proc alu_subtract_with_carry accumulator, operand, status {
 # `left - right - borrow + 256`, so the addition form above answers the borrow flag, the
 # overflow flag, and the result byte at once.
 proc alu_subtract_with_carry_byte accumulator, operand, status {
-    local left = $accumulator;
+    local left = $accumulator + "";
     local complement = 255 - $operand;
-    local normalized = $status;
+    local normalized = $status + "";
     local carry_in = normalized % 2;
     local total = (left + complement) + carry_in;
     local value = total % 256;
@@ -93,7 +93,7 @@ proc alu_and accumulator, operand, status {
 
 proc alu_and_byte accumulator, operand, status {
     local value = bitwise_and_byte($accumulator, $operand);
-    local normalized = $status;
+    local normalized = $status + "";
     local updated = (normalized % 128) - (2 * ((normalized // 2) % 2));
 
     alu_value = value;
@@ -109,7 +109,7 @@ proc alu_ora accumulator, operand, status {
 
 proc alu_ora_byte accumulator, operand, status {
     local value = bitwise_or_byte($accumulator, $operand);
-    local normalized = $status;
+    local normalized = $status + "";
     local updated = (normalized % 128) - (2 * ((normalized // 2) % 2));
 
     alu_value = value;
@@ -125,7 +125,7 @@ proc alu_eor accumulator, operand, status {
 
 proc alu_eor_byte accumulator, operand, status {
     local value = bitwise_xor_byte($accumulator, $operand);
-    local normalized = $status;
+    local normalized = $status + "";
     local updated = (normalized % 128) - (2 * ((normalized // 2) % 2));
 
     alu_value = value;
@@ -140,10 +140,10 @@ proc alu_shift_left value, status {
 }
 
 proc alu_shift_left_byte value, status {
-    local byte = $value;
+    local byte = $value + "";
     local shifted = byte * 2;
     local result = shifted % 256;
-    local normalized = $status;
+    local normalized = $status + "";
 
     # The bit shifted out of the top is the carry: 0 or 1 from the divide.
     local updated = normalized - (normalized % 2) + (shifted // 256);
@@ -160,9 +160,9 @@ proc alu_shift_right value, status {
 }
 
 proc alu_shift_right_byte value, status {
-    local byte = $value;
+    local byte = $value + "";
     local result = byte // 2;
-    local normalized = $status;
+    local normalized = $status + "";
     local updated = normalized - (normalized % 2) + (byte % 2);
 
     alu_value = result;
@@ -177,8 +177,8 @@ proc alu_rotate_left value, status {
 }
 
 proc alu_rotate_left_byte value, status {
-    local byte = $value;
-    local normalized = $status;
+    local byte = $value + "";
+    local normalized = $status + "";
     local shifted = (byte * 2) + (normalized % 2);
     local result = shifted % 256;
     local updated = normalized - (normalized % 2) + (shifted // 256);
@@ -195,8 +195,8 @@ proc alu_rotate_right value, status {
 }
 
 proc alu_rotate_right_byte value, status {
-    local byte = $value;
-    local normalized = $status;
+    local byte = $value + "";
+    local normalized = $status + "";
     local shifted = byte + ((normalized % 2) * 256);
     local result = shifted // 2;
     local updated = normalized - (normalized % 2) + (shifted % 2);
@@ -218,9 +218,9 @@ proc alu_compare register_value, operand, status {
 }
 
 proc alu_compare_byte register_value, operand, status {
-    local left = $register_value;
+    local left = $register_value + "";
     local difference = left - $operand;
-    local normalized = $status;
+    local normalized = $status + "";
 
     # Carry is set when no borrow was needed: a floored divide of a negative difference gives
     # -1, whose modulo 2 is 1, so `1 - that` is the flag without a branch.
@@ -240,10 +240,10 @@ proc alu_bit_test accumulator, operand, status {
 }
 
 proc alu_bit_test_byte accumulator, operand, status {
-    local left = $accumulator;
-    local memory = $operand;
-    local tested = bitwise_and_byte(left, memory);
-    local normalized = $status;
+    local left = $accumulator + "";
+    local memory = $operand + "";
+    local tested = bitwise_and_byte(left, memory) + "";
+    local normalized = $status + "";
 
     # Zero from A AND M, then negative and overflow copied from the operand's top two bits.
     # Each flag is cleared by subtracting its current weight and set by adding the new one, so
@@ -272,7 +272,7 @@ proc alu_increment value, status {
 
 proc alu_increment_byte value, status {
     local result = ($value + 1) % 256;
-    local normalized = $status;
+    local normalized = $status + "";
     local updated = (normalized % 128) - (2 * ((normalized // 2) % 2));
 
     alu_value = result;
@@ -288,7 +288,7 @@ proc alu_decrement value, status {
 
 proc alu_decrement_byte value, status {
     local result = ($value - 1) % 256;
-    local normalized = $status;
+    local normalized = $status + "";
     local updated = (normalized % 128) - (2 * ((normalized // 2) % 2));
 
     alu_value = result;

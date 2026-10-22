@@ -41,11 +41,23 @@ jobs:
                   fi
                   echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+            - name: Build TypeScript modules
+              run: npm run build:ts
+
             - name: Build Scratch project with GoboScript
               run: npm run build:scratch
 
-            - name: Package Scratch project with TurboWarp Packager
+            - name: Package Scratch project and stage ROM converter page
               run: npm run package:scratch
+
+            - name: Verify staged GitHub Pages bundle
+              run: |
+                  test -f dist/pages/index.html
+                  test -f dist/pages/rom_string.html
+                  test -f dist/pages/styles.css
+                  test -f dist/pages/build/nes/browser/rom_string_page.js
+                  test -f dist/pages/build/nes/cartridge/ines.js
+                  test -f dist/pages/build/nes/cartridge/rom_text.js
 
             - name: Upload Scratch .sb3 artifact
               uses: actions/upload-artifact@v4
@@ -53,11 +65,12 @@ jobs:
                   name: scratch-sb3
                   path: scratch/scratch.sb3
 
-            - name: Upload packaged HTML artifact
+            - name: Upload packaged Pages site artifact
               uses: actions/upload-artifact@v4
               with:
                   name: packaged-html
-                  path: dist/pages/index.html
+                  path: dist/pages
+                  if-no-files-found: error
 
             - name: Publish .sb3 to GitHub Releases
               if: github.event_name != 'pull_request'

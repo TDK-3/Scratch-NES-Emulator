@@ -831,9 +831,33 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_clock_cpu_cycle", mirror: null, reason: "ppu pending mirror" },
     {
         source: "src/ppu_2c02.gs",
+        declaration: "ppu_step_sprite_pixel",
+        mirror: null,
+        reason: "batched rendering fast path combining ppu_read_sprite_pixel and ppu_clock_sprite_output_units",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_fetch_tile_into_shifters",
+        mirror: null,
+        reason: "batched rendering fast path fetching one eight-dot background tile and advancing coarse X",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_run_hblank_batch",
+        mirror: null,
+        reason: "batched rendering fast path advancing dots 257 through end-of-scanline in one call",
+    },
+    {
+        source: "src/ppu_2c02.gs",
         declaration: "ppu_run_dots",
         mirror: null,
         reason: "batched dot loop the frame loop drives once per instruction",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_update_next_cpu_event",
+        mirror: null,
+        reason: "tracks the next PPU dot at which an unsolicited PPU or MMC3 event can reach the CPU",
     },
     {
         source: "src/ppu_2c02.gs",
@@ -957,11 +981,18 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/nes_palette.gs", declaration: "nes_palette_dim_channel", mirror: "nes_palette_dim_channel" },
     { source: "src/nes_palette.gs", declaration: "nes_palette_hex_byte", mirror: "nes_palette_hex_byte" },
     { source: "src/nes_palette.gs", declaration: "nes_pen_color", mirror: "nes_pen_color" },
+    { source: "src/nes_palette.gs", declaration: "nes_pen_rgb_value", mirror: "nes_pen_rgb_value" },
     { source: "src/pen_display.gs", declaration: "pen_display_fit_scale", mirror: "pen_display_fit_scale" },
     { source: "src/pen_display.gs", declaration: "pen_display_scale_for", mirror: "pen_display_scale_for" },
     { source: "src/pen_display.gs", declaration: "pen_display_renderer_offset", mirror: "pen_display_renderer_offset" },
     { source: "src/pen_display.gs", declaration: "pen_display_first_x_for", mirror: "pen_display_first_x_for" },
     { source: "src/pen_display.gs", declaration: "pen_display_first_y_for", mirror: "pen_display_first_y_for" },
+    {
+        source: "src/pen_display.gs",
+        declaration: "pen_display_init_buffers",
+        mirror: null,
+        reason: "preallocates the Stage-owned Scratch lists used by pen_draw_frame for color-bucketed runs",
+    },
     {
         source: "src/pen_display.gs",
         declaration: "pen_display_update_geometry",
@@ -2900,4 +2931,53 @@ test("the frame-rate cap holds emulation to 60 frames per second on the Scratch 
     assert.match(loop_body, /rom_run_frame_count = rom_run_frame_count \+ 1;\s*rom_run_pace_frame;/);
     assert.ok(!/rom_run_fps \/\/ 30|rom_run_fps < 30/.test(rom_run.text), "the FPS estimate must not drive skipping");
 });
+
+test("vblank-aligned pacing and input polling minimize button latency without jitter skips", () => {
+    const ppu = get_source("src/ppu_2c02.gs");
+    assert.match(
+        ppu.text,
+        /ppu_frame_ready = 1;\s*ppu_frames_ready_count = \(ppu_frames_ready_count \+ ""\) \+ 1;/,
+        "ppu_frames_ready_count must advance at the exact vblank-start dot alongside ppu_frame_ready",
+    );
+
+    const frame_loop = get_source("src/frame_loop.gs");
+    assert.match(
+        frame_loop.text,
+        /frame_loop_start_ppu_frame = ppu_frames_ready_count \+ "";/,
+        "frame_loop_reset must anchor each frame to ppu_frames_ready_count",
+    );
+
+    const rom_run = get_source("src/rom_run.gs");
+    assert.match(
+        rom_run.text,
+        /var rom_run_poll_interval_chunks = 2;/,
+        "mid-frame keyboard polling must stay within 200 CPU cycles",
+    );
+
+    const slop_match = /var ROM_RUN_PACE_EARLY_SLOP_SECONDS = ([0-9.]+);/.exec(rom_run.text);
+    const deadband_match = /var ROM_RUN_SKIP_DEADBAND_SECONDS = ([0-9.]+);/.exec(rom_run.text);
+    assert.ok(slop_match && deadband_match, "pacing slop and skip deadband constants must be declared");
+    const early_slop = Number(slop_match[1]);
+    const skip_deadband = Number(deadband_match[1]);
+    assert.ok(
+        early_slop > 0.001 && skip_deadband > 0.005 && early_slop + skip_deadband < 1 / 60,
+        "early_slop + skip_deadband must stay strictly below 1/60s so two on-time frames never share one tick",
+    );
+
+    const pace = rom_run.declarations.find((declaration) => declaration.name === "rom_run_pace_frame");
+    const pace_body = pace?.body.join("\n") ?? "";
+    assert.match(
+        pace_body,
+        /rom_run_poll_countdown = 0;/,
+        "waking at the 60 Hz boundary must force an immediate keyboard poll before VBlank NMI",
+    );
+
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    const loop_body = loop?.body.join("\n") ?? "";
+    const draw_at = loop_body.indexOf("if ppu_frame_ready == 1 {");
+    const pace_at = loop_body.indexOf("if frame_loop_frame_complete == 1 {");
+    assert.ok(draw_at >= 0 && pace_at > draw_at, "the finished frame must be drawn before pacing yields the tick");
+    assert.ok(!loop_body.includes("wait 0;"), "rom_run_loop must yield via forever without per-chunk redraw timers");
+});
+
 

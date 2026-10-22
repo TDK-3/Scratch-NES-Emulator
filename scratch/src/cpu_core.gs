@@ -87,6 +87,9 @@ proc cpu_reset_registers {
 proc cpu_read_cycle address {
     local numeric_address = $address % 65536;
     local bus_value = 0;
+    local pending_dots = 0;
+    local end_dot = 0;
+    local need_ppu_sync = 1;
 
     # Fast windows. Two windows carry almost every access a game makes: 2 KiB of RAM and the
     # cartidge window's PRG ROM. Both are decoded here instead of in a cpu_bus_read call,
@@ -98,9 +101,9 @@ proc cpu_read_cycle address {
         cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
 
         if numeric_address < 2048 {
-            bus_value = cpu_ram[numeric_address + 1];
+            bus_value = cpu_ram[numeric_address + 1] + "";
         } else {
-            bus_value = cpu_ram[(numeric_address % 2048) + 1];
+            bus_value = cpu_ram[(numeric_address % 2048) + 1] + "";
         }
 
         cpu_open_bus = bus_value;
@@ -109,10 +112,19 @@ proc cpu_read_cycle address {
         bus_value = cpu_open_bus;
 
         if cpu_bus_cartridge_kind == mapper_kind.nrom {
-            nrom_read_cpu numeric_address;
+            if cartridge_prg_rom_bytes == 32768 {
+                bus_value = nrom_prg_rom[numeric_address - 32767] + "";
+                cpu_open_bus = bus_value;
+            } elif cartridge_prg_rom_bytes == 16384 {
+                if numeric_address >= 49152 {
+                    bus_value = nrom_prg_rom[numeric_address - 49151] + "";
+                } else {
+                    bus_value = nrom_prg_rom[numeric_address - 32767] + "";
+                }
 
-            if nrom_cpu_mapped == 1 {
-                bus_value = nrom_cpu_value % 256;
+                cpu_open_bus = bus_value;
+            } elif cartridge_prg_rom_bytes > 0 {
+                bus_value = nrom_prg_rom[((numeric_address - 32768) % cartridge_prg_rom_bytes) + 1] + "";
                 cpu_open_bus = bus_value;
             }
         } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 {
@@ -125,11 +137,55 @@ proc cpu_read_cycle address {
         }
     } else {
         # $2000-$3FFF is the PPU's register window: the read must see the PPU at this cycle.
+        # When polling $2002 (PPUSTATUS) within a single visible scanline where VBlank is
+        # already clear and neither Sprite-0 Hit nor Sprite Overflow can transition before
+        # cpu_cycles, PPUSTATUS is provably invariant, avoiding unaligned mid-tile/HBlank syncs.
         if numeric_address >= 8192 and numeric_address < 16384 and cpu_bus_ppu_attached == 1 {
-            ppu_sync_to_cycle cpu_cycles;
+            if (numeric_address % 8) == 2
+                and ppu_scanline < 240
+                and ppu_dot >= 0
+                and ppu_status_register < 128
+                and (cpu_bus_cartridge_kind != mapper_kind.mmc3 or mmc3_irq_enabled == 0) {
+                pending_dots = ((cpu_cycles * 3) + 2) - ppu_dots_clocked;
+                end_dot = ppu_dot + pending_dots;
+
+                if pending_dots >= 0 and end_dot <= 340 {
+                    if ppu_sprite_zero_in_line == 0
+                        or ((ppu_status_register // 64) % 2) == 1
+                        or ppu_dot >= 257
+                        or (ppu_dot >= 1
+                            and end_dot <= 256
+                            and (ppu_sprite_unit_oam_index[1] + "") == 0
+                            and ((ppu_sprite_unit_x_counter[1] + "") > pending_dots
+                                or ((ppu_sprite_unit_pattern_low[1] + "") == 0
+                                    and (ppu_sprite_unit_pattern_high[1] + "") == 0))) {
+                        if ((ppu_status_register // 32) % 2) == 1 or end_dot <= 65 {
+                            need_ppu_sync = 0;
+                        } elif ppu_dot >= 66
+                            and (ppu_sprite_overflow_set_dot < ppu_dot
+                                or ppu_sprite_overflow_set_dot > end_dot) {
+                            need_ppu_sync = 0;
+                        }
+                    }
+                }
+            }
+
+            if need_ppu_sync == 1 {
+                ppu_sync_to_cycle cpu_cycles;
+            }
         }
 
-        bus_value = cpu_bus_read(numeric_address);
+        if need_ppu_sync == 0 {
+            cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+            bus_value = ((ppu_status_register % 128) - (ppu_status_register % 32)) + (ppu_io_latch % 32);
+            ppu_read_result = bus_value;
+            ppu_register_error = ppu_register_status.ok;
+            ppu_write_toggle = 0;
+            ppu_io_latch = bus_value;
+            cpu_open_bus = bus_value;
+        } else {
+            bus_value = cpu_bus_read(numeric_address) + "";
+        }
     }
 
     cpu_cycle_value = bus_value;
@@ -204,15 +260,34 @@ proc cpu_dummy_read_cycle address {
 # and the read cycle normalizes the address it logs.
 proc cpu_fetch_byte {
     local address = cpu_program_counter;
-    cpu_read_cycle address;
-    cpu_fetched_byte = cpu_cycle_value;
 
-    # The counter is always an address, so its increment wraps by comparison instead of by a
-    # modulo: $FFFF is the only input that wraps.
-    if address == 65535 {
-        cpu_program_counter = 0;
-    } else {
+    if cpu_access_log_enabled == 0
+        and cpu_bus_cartridge_kind == mapper_kind.nrom
+        and address >= 32768
+        and address < 65535
+        and (cartridge_prg_rom_bytes == 32768 or cartridge_prg_rom_bytes == 16384) {
+        if cartridge_prg_rom_bytes == 32768 or address < 49152 {
+            cpu_fetched_byte = nrom_prg_rom[address - 32767] + "";
+        } else {
+            cpu_fetched_byte = nrom_prg_rom[address - 49151] + "";
+        }
+
+        cpu_cycle_value = cpu_fetched_byte;
+        cpu_open_bus = cpu_fetched_byte;
         cpu_program_counter = address + 1;
+        cpu_cycles = cpu_cycles + 1;
+        cpu_bus_cycle_parity = 1 - cpu_bus_cycle_parity;
+    } else {
+        cpu_read_cycle address;
+        cpu_fetched_byte = cpu_cycle_value;
+
+        # The counter is always an address, so its increment wraps by comparison instead of by a
+        # modulo: $FFFF is the only input that wraps.
+        if address == 65535 {
+            cpu_program_counter = 0;
+        } else {
+            cpu_program_counter = address + 1;
+        }
     }
 }
 
@@ -222,25 +297,47 @@ proc cpu_fetch_byte {
 proc cpu_fetch_word {
     local low_byte = 0;
     local address = cpu_program_counter;
-    cpu_read_cycle address;
-    low_byte = cpu_cycle_value % 256;
 
-    # Both counter increments wrap by comparison rather than by modulo, exactly as
-    # cpu_fetch_byte does; only $FFFF can wrap.
-    if address == 65535 {
-        address = 0;
+    if cpu_access_log_enabled == 0
+        and cpu_bus_cartridge_kind == mapper_kind.nrom
+        and address >= 32768
+        and address < 65534
+        and (cartridge_prg_rom_bytes == 32768
+            or (cartridge_prg_rom_bytes == 16384 and address != 49151)) {
+        if cartridge_prg_rom_bytes == 32768 or address < 49151 {
+            low_byte = nrom_prg_rom[address - 32767] + "";
+            cpu_fetched_byte = nrom_prg_rom[address - 32766] + "";
+        } else {
+            low_byte = nrom_prg_rom[address - 49151] + "";
+            cpu_fetched_byte = nrom_prg_rom[address - 49150] + "";
+        }
+
+        cpu_cycle_value = cpu_fetched_byte;
+        cpu_open_bus = cpu_fetched_byte;
+        cpu_fetched_word = (cpu_fetched_byte * 256) + low_byte;
+        cpu_program_counter = address + 2;
+        cpu_cycles = cpu_cycles + 2;
     } else {
-        address = address + 1;
-    }
+        cpu_read_cycle address;
+        low_byte = cpu_cycle_value % 256;
 
-    cpu_read_cycle address;
-    cpu_fetched_byte = cpu_cycle_value;
-    cpu_fetched_word = ((cpu_cycle_value % 256) * 256) + low_byte;
+        # Both counter increments wrap by comparison rather than by modulo, exactly as
+        # cpu_fetch_byte does; only $FFFF can wrap.
+        if address == 65535 {
+            address = 0;
+        } else {
+            address = address + 1;
+        }
 
-    if address == 65535 {
-        cpu_program_counter = 0;
-    } else {
-        cpu_program_counter = address + 1;
+        cpu_read_cycle address;
+        cpu_fetched_byte = cpu_cycle_value;
+        cpu_fetched_word = ((cpu_cycle_value % 256) * 256) + low_byte;
+
+        if address == 65535 {
+            cpu_program_counter = 0;
+        } else {
+            cpu_program_counter = address + 1;
+        }
     }
 }
 

@@ -80,6 +80,17 @@ proc pen_draw_frame {
     local framebuffer_index = 0;
     local cached_scale = 0;
     local cached_first_x = 0;
+    local bg_key = 0;
+    local bg_min_x = -1;
+    local bg_max_x = -1;
+    local run_count = 0;
+    local active_color_count = 0;
+    local slot = 0;
+    local head = 0;
+    local color_idx = 0;
+    local r_idx = 0;
+    local x0 = 0;
+    local x1 = 0;
 
     hide;
     pen_up;
@@ -97,51 +108,120 @@ proc pen_draw_frame {
         set_pen_transparency 0;
     }
 
-    pen_current_color_key = 512;
-    cached_scale = pen_display_scale;
-    cached_first_x = pen_display_first_x;
+    cached_scale = pen_display_scale + "";
+    cached_first_x = pen_display_first_x + "";
+    bg_key = ppu_backdrop_packed + "";
+    pen_current_color_key = bg_key;
+    set_pen_color nes_pen_rgb[bg_key + 1] + "";
 
     repeat 240 {
         stage_y = pen_display_first_y - (row * pen_display_scale);
         row_base = row * 256;
         pixel_x = 0;
         run_start = 0;
+        bg_min_x = -1;
+        bg_max_x = -1;
         framebuffer_index = row_base + 1;
-        run_key = ppu_framebuffer_packed[framebuffer_index];
+        run_key = ppu_framebuffer_packed[framebuffer_index] + "";
 
-        # The remaining 255 pixels of the row, with the framebuffer index carried forward
-        # instead of being recomputed from the pixel number: a repeat loop and one addition
-        # per pixel, over 61,440 pixels a frame.
+        # Scan the 256 pixels of the row using native numeric comparisons, coalescing all
+        # backdrop pixels on this row into a single base span [bg_min_x .. bg_max_x] while
+        # bucketing non-backdrop runs by palette/emphasis key so set_pen_color runs once per
+        # distinct color in the frame instead of once per run.
         repeat 255 {
             pixel_x = pixel_x + 1;
             framebuffer_index = framebuffer_index + 1;
-            current_key = ppu_framebuffer_packed[framebuffer_index];
+            current_key = ppu_framebuffer_packed[framebuffer_index] + "";
 
             if current_key != run_key {
-                if run_key != pen_current_color_key {
-                    pen_current_color_key = run_key;
-                    set_pen_color nes_pen_colors[run_key + 1];
+                if run_key == bg_key {
+                    if bg_min_x < 0 {
+                        bg_min_x = run_start;
+                    }
+                    bg_max_x = pixel_x - 1;
+                } else {
+                    run_count = run_count + 1;
+                    slot = run_key + 1;
+                    head = pen_color_bucket_head[slot] + "";
+
+                    if head == 0 {
+                        active_color_count = active_color_count + 1;
+                        pen_active_colors[active_color_count] = run_key;
+                    }
+
+                    pen_run_next[run_count] = head;
+                    pen_color_bucket_head[slot] = run_count;
+                    pen_run_y[run_count] = stage_y;
+                    pen_run_x0[run_count] = cached_first_x + (run_start * cached_scale);
+                    pen_run_x1[run_count] = cached_first_x + ((pixel_x - 1) * cached_scale);
                 }
 
-                goto cached_first_x + (run_start * cached_scale), stage_y;
-                pen_down;
-                set_x cached_first_x + ((pixel_x - 1) * cached_scale);
-                pen_up;
                 run_start = pixel_x;
                 run_key = current_key;
             }
         }
 
-        if run_key != pen_current_color_key {
-            pen_current_color_key = run_key;
-            set_pen_color nes_pen_colors[run_key + 1];
+        if run_key == bg_key {
+            if bg_min_x < 0 {
+                bg_min_x = run_start;
+            }
+            bg_max_x = 255;
+        } else {
+            run_count = run_count + 1;
+            slot = run_key + 1;
+            head = pen_color_bucket_head[slot] + "";
+
+            if head == 0 {
+                active_color_count = active_color_count + 1;
+                pen_active_colors[active_color_count] = run_key;
+            }
+
+            pen_run_next[run_count] = head;
+            pen_color_bucket_head[slot] = run_count;
+            pen_run_y[run_count] = stage_y;
+            pen_run_x0[run_count] = cached_first_x + (run_start * cached_scale);
+            pen_run_x1[run_count] = cached_first_x + (255 * cached_scale);
         }
 
-        goto cached_first_x + (run_start * cached_scale), stage_y;
-        pen_down;
-        set_x cached_first_x + (255 * cached_scale);
-        pen_up;
+        if bg_min_x >= 0 {
+            goto cached_first_x + (bg_min_x * cached_scale), stage_y;
+            pen_down;
+
+            if bg_max_x > bg_min_x {
+                set_x cached_first_x + (bg_max_x * cached_scale);
+            }
+
+            pen_up;
+        }
+
         row = row + 1;
+    }
+
+    color_idx = 1;
+
+    repeat active_color_count {
+        run_key = pen_active_colors[color_idx] + "";
+        slot = run_key + 1;
+        pen_current_color_key = run_key;
+        set_pen_color nes_pen_rgb[slot] + "";
+        r_idx = pen_color_bucket_head[slot] + "";
+        pen_color_bucket_head[slot] = 0;
+
+        until r_idx == 0 {
+            x0 = pen_run_x0[r_idx] + "";
+            x1 = pen_run_x1[r_idx] + "";
+            goto x0, pen_run_y[r_idx] + "";
+            pen_down;
+
+            if x1 != x0 {
+                set_x x1;
+            }
+
+            pen_up;
+            r_idx = pen_run_next[r_idx] + "";
+        }
+
+        color_idx = color_idx + 1;
     }
 
     pen_up;

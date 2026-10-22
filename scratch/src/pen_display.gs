@@ -114,6 +114,38 @@ func pen_display_first_y_for(scale_value) {
 # the values it guards.
 var pen_display_applied_fit = -1;
 
+# Scratch lists backing color-bucketed foreground run coalescing in pen_draw_frame.
+# Allocated once at green flag so no per-frame list growth occurs.
+list pen_color_bucket_head = [0; 512];
+list pen_active_colors = [0; 512];
+list pen_run_next = [];
+list pen_run_y = [];
+list pen_run_x0 = [];
+list pen_run_x1 = [];
+
+proc pen_display_init_buffers {
+    local idx = 1;
+
+    if length pen_run_next < 61440 {
+        delete pen_run_next;
+        delete pen_run_y;
+        delete pen_run_x0;
+        delete pen_run_x1;
+
+        repeat 61440 {
+            add 0 to pen_run_next;
+            add 0 to pen_run_y;
+            add 0 to pen_run_x0;
+            add 0 to pen_run_x1;
+        }
+    }
+
+    repeat 512 {
+        pen_color_bucket_head[idx] = 0;
+        idx = idx + 1;
+    }
+}
+
 # Recomputes the derived geometry from the current setting. Called by the run loop right
 # before it hands a finished frame to the display sprite; the chain only runs when the setting
 # changed since the last frame, because it is the setting and nothing else that the geometry
