@@ -539,6 +539,11 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/rom_run.gs",
+        declaration: "rom_run_effective_due",
+        mirror: "rom_run_effective_due",
+    },
+    {
+        source: "src/rom_run.gs",
         declaration: "rom_run_pace_frame",
         mirror: null,
         reason: "frame-rate cap; it waits on the Scratch timer, which the port cannot model",
@@ -2956,16 +2961,35 @@ test("vblank-aligned pacing and input polling minimize button latency without ji
 
     const slop_match = /var ROM_RUN_PACE_EARLY_SLOP_SECONDS = ([0-9.]+);/.exec(rom_run.text);
     const deadband_match = /var ROM_RUN_SKIP_DEADBAND_SECONDS = ([0-9.]+);/.exec(rom_run.text);
-    assert.ok(slop_match && deadband_match, "pacing slop and skip deadband constants must be declared");
+    const lag_reset_match = /var ROM_RUN_LAG_RESET_SECONDS = ([0-9.]+);/.exec(rom_run.text);
+    assert.ok(
+        slop_match && deadband_match && lag_reset_match,
+        "pacing slop, skip deadband, and lag reset constants must be declared",
+    );
     const early_slop = Number(slop_match[1]);
     const skip_deadband = Number(deadband_match[1]);
+    const lag_reset = Number(lag_reset_match[1]);
     assert.ok(
         early_slop > 0.001 && skip_deadband > 0.005 && early_slop + skip_deadband < 1 / 60,
         "early_slop + skip_deadband must stay strictly below 1/60s so two on-time frames never share one tick",
     );
+    assert.ok(
+        lag_reset > skip_deadband && lag_reset <= 0.06,
+        "lag_reset must re-anchor within ~3 frames so JIT or browser stalls never trigger multi-frame catch-up bursts",
+    );
 
     const pace = rom_run.declarations.find((declaration) => declaration.name === "rom_run_pace_frame");
     const pace_body = pace?.body.join("\n") ?? "";
+    assert.match(
+        pace_body,
+        /rom_run_effective_due\(/,
+        "on-schedule pacing must advance past rom_run_last_paced_timer so two frames never complete in one _step()",
+    );
+    assert.match(
+        pace_body,
+        /rom_run_last_paced_timer = timer\(\);/,
+        "each completed frame must record the Scratch timer tick on which it finished pacing",
+    );
     assert.match(
         pace_body,
         /rom_run_poll_countdown = 0;/,

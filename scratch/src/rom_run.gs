@@ -70,19 +70,27 @@ var rom_run_start_timer = 0;
 var rom_run_frames_skipped = 0;
 
 # Frame-rate cap. The console runs at most ROM_RUN_FRAME_RATE_CAP emulated frames per second of
-# Scratch time: frame n is due at rom_run_pace_origin + n / cap, and the loop waits for it.
+# Scratch time: frame n is due at rom_run_pace_origin + n / cap, and the loop waits for it. Note
+# that NTSC NES games drive in-game timers from 60 Hz VBlank frames rather than wall-clock seconds
+# (for example, Super Mario Bros. decrements its HUD TIME counter every 24 frames, or 2.5 ticks per
+# real second at 60 FPS).
+#
 # Scratch's timer() updates once per runtime _step() tick and browser 60 Hz intervals quantize to
 # 16 ms or 17 ms, so ROM_RUN_PACE_EARLY_SLOP_SECONDS (2 ms) lets a tick that lands slightly before
 # the nominal 1/60 s mark wake on time instead of burning an extra tick, while
 # ROM_RUN_SKIP_DEADBAND_SECONDS (12 ms) ignores sub-frame timer jitter. Because 2 ms + 12 ms <
-# 16.67 ms, any on-schedule tick strictly precedes the next frame's due threshold and never runs
-# two on-time frames in one tick. Once the schedule is more than ROM_RUN_LAG_RESET_SECONDS behind,
-# it restarts from now so the console does not burst to catch up on frames it never ran.
+# 16.67 ms, any on-schedule tick strictly precedes the next frame's due threshold, and
+# rom_run_last_paced_timer ensures two frames never complete on the same frozen-timer _step() tick.
+# Once the schedule is more than ROM_RUN_LAG_RESET_SECONDS (50 ms, ~3 frames) behind, it re-anchors
+# immediately from now so initial JIT compilation or browser stalls never trigger multi-frame 2-4x
+# catch-up bursts.
 var ROM_RUN_FRAME_RATE_CAP = 60;
-var ROM_RUN_LAG_RESET_SECONDS = 0.25;
+var ROM_RUN_LAG_RESET_SECONDS = 0.05;
 var ROM_RUN_PACE_EARLY_SLOP_SECONDS = 0.002;
 var ROM_RUN_SKIP_DEADBAND_SECONDS = 0.012;
+var ROM_RUN_NEXT_TICK_EPSILON_SECONDS = 0.0005;
 var rom_run_pace_origin = 0;
+var rom_run_last_paced_timer = -1;
 
 # rom_run_skip_active is 1 while the console is behind its schedule, so a completed frame may be
 # skipped. rom_run_last_frame_skipped records whether the previous completed frame was skipped,
@@ -130,6 +138,16 @@ func rom_run_is_behind(now, due) {
     return 0;
 }
 
+# Ensures a due timestamp strictly advances past the Scratch timer() reading at which the previous
+# frame completed, preventing two frames from completing inside one frozen-timer _step() tick.
+func rom_run_effective_due(due, last_paced_timer) {
+    if $last_paced_timer >= 0 and $due <= $last_paced_timer {
+        return $last_paced_timer + ROM_RUN_NEXT_TICK_EPSILON_SECONDS;
+    }
+
+    return $due;
+}
+
 # Holds the console to the frame-rate cap. Called once per completed frame, right after the
 # finished picture has been drawn at vblank start (scanline 241, dot 1) and before the upcoming
 # frame's NMI handler reads controller input. A frame that finished genuinely behind schedule
@@ -147,17 +165,37 @@ nowarp proc rom_run_pace_frame {
     if now - target_due > ROM_RUN_LAG_RESET_SECONDS {
         rom_run_pace_origin = now - (rom_run_frame_count + "") / ROM_RUN_FRAME_RATE_CAP;
         rom_run_skip_active = 1;
+
+        if rom_run_last_frame_skipped == 0 and rom_run_last_paced_timer >= 0 and now <= rom_run_last_paced_timer {
+            due = rom_run_last_paced_timer + ROM_RUN_NEXT_TICK_EPSILON_SECONDS;
+
+            until timer() >= due {
+                wait 0;
+            }
+        }
     } elif rom_run_is_behind(now, target_due + ROM_RUN_SKIP_DEADBAND_SECONDS) == 1 {
         rom_run_skip_active = 1;
+
+        if rom_run_last_frame_skipped == 0 and rom_run_last_paced_timer >= 0 and now <= rom_run_last_paced_timer {
+            due = rom_run_last_paced_timer + ROM_RUN_NEXT_TICK_EPSILON_SECONDS;
+
+            until timer() >= due {
+                wait 0;
+            }
+        }
     } else {
         rom_run_skip_active = 0;
-        due = target_due - ROM_RUN_PACE_EARLY_SLOP_SECONDS;
+        due = rom_run_effective_due(
+            target_due - ROM_RUN_PACE_EARLY_SLOP_SECONDS,
+            rom_run_last_paced_timer
+        );
 
         until timer() >= due {
             wait 0;
         }
     }
 
+    rom_run_last_paced_timer = timer();
     rom_run_poll_countdown = 0;
 }
 
@@ -172,6 +210,7 @@ proc rom_run_start {
     rom_run_skip_active = 0;
     rom_run_last_frame_skipped = 0;
     rom_run_pace_origin = 0;
+    rom_run_last_paced_timer = -1;
     rom_run_state_text = "not started";
 
     # The self test detached every device and emptied the cartridge window
@@ -219,6 +258,11 @@ proc rom_run_start {
 nowarp proc rom_run_loop {
     local elapsed = 0;
     local should_skip = 0;
+
+    rom_run_last_fps_update_timer = timer();
+    rom_run_pace_origin = timer();
+    rom_run_last_paced_timer = -1;
+
     forever {
         # The host keyboard and the ROM load key are sampled on the poll countdown before each
         # chunk. A pending ROM load is serviced before the console runs any more cycles in the
@@ -301,6 +345,8 @@ proc rom_run_load_input_image {
 
     if length rom_input_text == 0 {
         rom_run_state_text = "load cancelled, still running " & rom_run_image_name;
+        rom_run_pace_origin = timer() - (rom_run_frame_count + "") / ROM_RUN_FRAME_RATE_CAP;
+        rom_run_last_paced_timer = -1;
         broadcast "rom image changed";
     } else {
         rom_input_parse_text;
@@ -316,9 +362,14 @@ proc rom_run_load_input_image {
             rom_run_image_name = "pasted image";
             rom_run_start;
             broadcast "rom image changed";
+            rom_run_last_fps_update_timer = timer();
+            rom_run_pace_origin = timer();
+            rom_run_last_paced_timer = -1;
         } else {
             rom_run_state_text = "load failed, " & rom_input_error_text()
                 & " after " & rom_input_byte_count & " bytes";
+            rom_run_pace_origin = timer() - (rom_run_frame_count + "") / ROM_RUN_FRAME_RATE_CAP;
+            rom_run_last_paced_timer = -1;
             broadcast "rom image changed";
         }
     }
