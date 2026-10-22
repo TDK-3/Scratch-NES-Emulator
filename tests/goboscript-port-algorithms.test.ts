@@ -3365,6 +3365,10 @@ test("nes_pen_color matches the canvas renderer for every palette index and emph
                 .map((channel) => (channel ?? 0).toString(16).padStart(2, "0"))
                 .join("");
         assert.equal(ported.nes_pen_color(pair % 64, Math.floor(pair / 64)), expected);
+        assert.equal(
+            ported.nes_pen_rgb_value(pair % 64, Math.floor(pair / 64)),
+            Number.parseInt(expected.slice(1), 16),
+        );
     }
 });
 

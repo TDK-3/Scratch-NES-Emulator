@@ -981,11 +981,18 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/nes_palette.gs", declaration: "nes_palette_dim_channel", mirror: "nes_palette_dim_channel" },
     { source: "src/nes_palette.gs", declaration: "nes_palette_hex_byte", mirror: "nes_palette_hex_byte" },
     { source: "src/nes_palette.gs", declaration: "nes_pen_color", mirror: "nes_pen_color" },
+    { source: "src/nes_palette.gs", declaration: "nes_pen_rgb_value", mirror: "nes_pen_rgb_value" },
     { source: "src/pen_display.gs", declaration: "pen_display_fit_scale", mirror: "pen_display_fit_scale" },
     { source: "src/pen_display.gs", declaration: "pen_display_scale_for", mirror: "pen_display_scale_for" },
     { source: "src/pen_display.gs", declaration: "pen_display_renderer_offset", mirror: "pen_display_renderer_offset" },
     { source: "src/pen_display.gs", declaration: "pen_display_first_x_for", mirror: "pen_display_first_x_for" },
     { source: "src/pen_display.gs", declaration: "pen_display_first_y_for", mirror: "pen_display_first_y_for" },
+    {
+        source: "src/pen_display.gs",
+        declaration: "pen_display_init_buffers",
+        mirror: null,
+        reason: "preallocates the Stage-owned Scratch lists used by pen_draw_frame for color-bucketed runs",
+    },
     {
         source: "src/pen_display.gs",
         declaration: "pen_display_update_geometry",

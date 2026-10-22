@@ -22,8 +22,11 @@ list nes_palette_blue = [0; 64];
 list nes_hex_digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
 
 # The 512 pen colors, at emphasis * 64 + color index + 1. Filled once by
-# nes_palette_init from the channel planes and the dimming rule.
+# nes_palette_init from the channel planes and the dimming rule, both as "#rrggbb" strings
+# (nes_pen_colors) and as 24-bit R*65536 + G*256 + B integers (nes_pen_rgb) so the pen
+# extension can take Scratch's fast integer RGB path without regex hex parsing.
 list nes_pen_colors = [0; 512];
+list nes_pen_rgb = [0; 512];
 
 # Fills the channel planes from the literal master palette and builds the
 # pen color cache. Safe to call more than once: the values are constants,
@@ -232,6 +235,7 @@ proc nes_palette_init {
 
         repeat 64 {
             nes_pen_colors[(emphasis * 64) + color_index + 1] = nes_pen_color(color_index, emphasis);
+            nes_pen_rgb[(emphasis * 64) + color_index + 1] = nes_pen_rgb_value(color_index, emphasis);
             color_index = color_index + 1;
         }
 
@@ -279,4 +283,31 @@ func nes_pen_color(color_index, emphasis) {
     }
 
     return "#" & nes_palette_hex_byte(red) & nes_palette_hex_byte(green) & nes_palette_hex_byte(blue);
+}
+
+# The 24-bit integer RGB pen color (R * 65536 + G * 256 + B) for one palette index under one
+# emphasis value, matching nes_pen_color byte for byte.
+func nes_pen_rgb_value(color_index, emphasis) {
+    local palette_index = ($color_index % 64) + 1;
+    local emphasis_bits = $emphasis % 8;
+    local red = to_number(nes_palette_red[palette_index]);
+    local green = to_number(nes_palette_green[palette_index]);
+    local blue = to_number(nes_palette_blue[palette_index]);
+
+    if emphasis_bits % 2 == 1 {
+        green = nes_palette_dim_channel(green);
+        blue = nes_palette_dim_channel(blue);
+    }
+
+    if (emphasis_bits // 2) % 2 == 1 {
+        red = nes_palette_dim_channel(red);
+        blue = nes_palette_dim_channel(blue);
+    }
+
+    if (emphasis_bits // 4) % 2 == 1 {
+        red = nes_palette_dim_channel(red);
+        green = nes_palette_dim_channel(green);
+    }
+
+    return (red * 65536) + (green * 256) + blue;
 }

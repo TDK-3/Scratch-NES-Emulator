@@ -4106,6 +4106,36 @@ export function nes_pen_color(color_index: number, emphasis: number): string {
     return "#" + nes_palette_hex_byte(red) + nes_palette_hex_byte(green) + nes_palette_hex_byte(blue);
 }
 
+/** Mirror of `nes_pen_rgb_value(color_index, emphasis)`: 24-bit integer RGB pen color. */
+export function nes_pen_rgb_value(color_index: number, emphasis: number): number {
+    const palette_offset = scratch_mod(color_index, 64);
+    const emphasis_bits = scratch_mod(emphasis, 8);
+    let red = NES_PALETTE_RED[palette_offset];
+    let green = NES_PALETTE_GREEN[palette_offset];
+    let blue = NES_PALETTE_BLUE[palette_offset];
+
+    if (red === undefined || green === undefined || blue === undefined) {
+        throw new RangeError(`NES palette offset ${palette_offset} is outside its storage.`);
+    }
+
+    if (scratch_mod(emphasis_bits, 2) === 1) {
+        green = nes_palette_dim_channel(green);
+        blue = nes_palette_dim_channel(blue);
+    }
+
+    if (scratch_mod(scratch_floor_divide(emphasis_bits, 2), 2) === 1) {
+        red = nes_palette_dim_channel(red);
+        blue = nes_palette_dim_channel(blue);
+    }
+
+    if (scratch_mod(scratch_floor_divide(emphasis_bits, 4), 2) === 1) {
+        red = nes_palette_dim_channel(red);
+        green = nes_palette_dim_channel(green);
+    }
+
+    return (red * 65536) + (green * 256) + blue;
+}
+
 /** Mirror of `ppu_shift_pixel(shift_low, shift_high, fine_x)` in ppu_2c02.gs. */
 export function ppu_shift_pixel(shift_low: number, shift_high: number, fine_x: number): number {
     let bit_weight = 32768;

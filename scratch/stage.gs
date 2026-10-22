@@ -40,6 +40,7 @@ onflag {
     bitwise_table_init;
     cpu_status_table_init;
     nes_palette_init;
+    pen_display_init_buffers;
     cpu_opcode_table_normalize;
 
     # The shared-vector replay is a boot-time diagnostic: it replays every vector through the
