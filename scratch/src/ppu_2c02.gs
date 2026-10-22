@@ -138,8 +138,10 @@ var ppu_scanline = 261;
 var ppu_dot = 0;
 # Dots clocked since ppu_reset, counted by ppu_run_dots. ppu_sync_to_cycle compares it with the
 # CPU cycle count, so the PPU runs exactly as far ahead of the CPU as the reference's per-cycle
-# scheduler does.
+# scheduler does. ppu_next_cpu_event_dots bounds how far the CPU can run without an unsolicited
+# PPU event (vblank/frame-ready or MMC3 IRQ) when no PPU/mapper/OAM bus access occurs.
 var ppu_dots_clocked = 0;
+var ppu_next_cpu_event_dots = 0;
 var ppu_frame_number = 0;
 var ppu_odd_frame = 0;
 var ppu_nmi_output = 0;
@@ -317,6 +319,7 @@ proc ppu_reset {
     ppu_framebuffer_row_base = PPU_PRE_RENDER_SCANLINE * PPU_FRAME_WIDTH;
     ppu_dot = 0;
     ppu_dots_clocked = 0;
+    ppu_next_cpu_event_dots = 0;
     ppu_frame_number = 0;
     ppu_odd_frame = 0;
     ppu_nmi_output = 0;
@@ -659,6 +662,7 @@ proc ppu_decode_mask_register {
     }
 
     ppu_refresh_output_terms;
+    ppu_update_next_cpu_event;
 }
 
 # Decodes the two PPUCTRL fields the PPU reads outside a register write: the NMI enable the
@@ -1634,6 +1638,41 @@ proc ppu_run_dots count {
     }
 
     ppu_dots_clocked = ppu_dots_clocked + $count;
+    ppu_update_next_cpu_event;
+}
+
+# Updates ppu_next_cpu_event_dots to the earliest PPU dot count at which an unsolicited PPU or
+# mapper event could become visible to the CPU (scanline 241 dot 1 for frame-ready/vblank NMI,
+# scanline 261 dot 339 for pre-render wrap, or an imminent MMC3 scanline IRQ). Direct CPU
+# accesses to $2000-$3FFF, $4014, and $8000-$FFFF still call ppu_sync_to_cycle on their exact
+# cycle, and register writes that change PPUMASK or MMC3 IRQ state refresh this bound.
+proc ppu_update_next_cpu_event {
+    local delta_dots = 1;
+    local mmc3_bound = 0;
+
+    if ppu_scanline < 241 or (ppu_scanline == 241 and ppu_dot <= 1) {
+        delta_dots = ((241 - ppu_scanline) * 341) + (2 - ppu_dot);
+    } elif ppu_scanline < 261 or (ppu_scanline == 261 and ppu_dot < 339) {
+        delta_dots = ((261 - ppu_scanline) * 341) + (339 - ppu_dot);
+    } else {
+        delta_dots = 1;
+    }
+
+    if ppu_bus_mapper_kind == mapper_kind.mmc3
+        and mmc3_irq_enabled == 1
+        and ppu_mask_rendering_enable == 1
+        and (ppu_scanline < 240 or ppu_scanline == 261) {
+        if mmc3_irq_counter > 1 and mmc3_irq_reload_pending == 0 {
+            mmc3_bound = (mmc3_irq_counter - 1) * 250;
+            if mmc3_bound < delta_dots {
+                delta_dots = mmc3_bound;
+            }
+        } else {
+            delta_dots = 1;
+        }
+    }
+
+    ppu_next_cpu_event_dots = ppu_dots_clocked + delta_dots;
 }
 
 # Advances three NTSC PPU dots for one CPU cycle.

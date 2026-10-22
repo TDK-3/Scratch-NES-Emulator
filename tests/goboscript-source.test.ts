@@ -855,6 +855,12 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/ppu_2c02.gs",
+        declaration: "ppu_update_next_cpu_event",
+        mirror: null,
+        reason: "tracks the next PPU dot at which an unsolicited PPU or MMC3 event can reach the CPU",
+    },
+    {
+        source: "src/ppu_2c02.gs",
         declaration: "ppu_sync_to_cycle",
         mirror: null,
         reason: "PPU scheduler glue; the mirrored NES console already advances the PPU per CPU cycle",

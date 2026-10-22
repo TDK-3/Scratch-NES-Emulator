@@ -72,19 +72,12 @@ proc frame_loop_reset {
 proc frame_loop_run_chunk {
     frame_loop_chunk_cycles_run = 0;
 
-    # The PPU must sit at the CPU's schedule before the chunk's first bus action; a reset
-    # leaves it behind the reset cycles, and a chunk starts where the last one stopped.
-    ppu_sync_to_cycle cpu_cycles;
-
-    until frame_loop_chunk_cycles_run >= FRAME_LOOP_CYCLES_PER_CHUNK or frame_loop_frame_complete == 1 {
-        if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
+    until frame_loop_chunk_cycles_run >= 100 or frame_loop_frame_complete == 1 {
+        if frame_loop_cycles_run >= 29780 {
             frame_loop_frame_complete = 1;
         } elif cpu_dma_phase != 0 {
             # An OAM DMA transfer stalls the CPU: the bus runs the whole transfer in one call
-            # and reports the cycles it spent, and the PPU advances by three dots per cycle in
-            # another one. This used to be one call per DMA cycle plus three dot clocks each.
-            # The transfer's cycles are CPU cycles: the bus syncs the PPU to each one as it runs,
-            # and the cycle total catches up once the transfer ends.
+            # and reports the cycles it spent, syncing the PPU to each OAM write cycle.
             cpu_bus_run_dma cpu_cycles;
             frame_loop_dma_cycles = cpu_dma_cycles_run;
             cpu_cycles = cpu_cycles + frame_loop_dma_cycles;
@@ -101,10 +94,19 @@ proc frame_loop_run_chunk {
             frame_loop_cycles_run = frame_loop_cycles_run + frame_loop_sequence_cycles;
             frame_loop_chunk_cycles_run = frame_loop_chunk_cycles_run + frame_loop_sequence_cycles;
 
-            # Advance the PPU to the CPU's schedule in one call. The instruction's own PPU
-            # register accesses already synced the PPU to their cycle (see cpu_read_cycle and
-            # cpu_write_cycle), so this batch only covers the dots after the last access.
-            ppu_sync_to_cycle cpu_cycles;
+            # Advance the PPU when reaching the next unsolicited PPU/mapper event boundary
+            # (vblank/frame-ready, pre-render wrap, or MMC3 IRQ window). Direct PPU, OAM DMA,
+            # and mapper register accesses already call ppu_sync_to_cycle on their exact cycle,
+            # so deferring pure background dots lets ppu_run_dots batch whole tiles and lines.
+            if (cpu_cycles * 3) + 2 >= ppu_next_cpu_event_dots {
+                ppu_sync_to_cycle cpu_cycles;
+            } elif cpu_bus_cartridge_kind == mapper_kind.mmc3 and mmc3_irq_enabled == 1 {
+                if mmc3_irq_counter <= 1
+                    or mmc3_irq_reload_pending == 1
+                    or (cpu_cycles * 3) + 2 >= ppu_dots_clocked + 250 {
+                    ppu_sync_to_cycle cpu_cycles;
+                }
+            }
 
             # Check for PPU NMI and forward to CPU
             if ppu_nmi_edge_pending == 1 {
@@ -123,7 +125,20 @@ proc frame_loop_run_chunk {
         }
     }
 
-    if frame_loop_cycles_run >= FRAME_LOOP_CYCLES_PER_FRAME {
+    if frame_loop_cycles_run >= 29780 {
+        ppu_sync_to_cycle cpu_cycles;
+
+        if ppu_nmi_edge_pending == 1 {
+            ppu_nmi_edge_pending = 0;
+            cpu_request_nmi;
+        }
+
+        if cpu_bus_cartridge_kind == mapper_kind.mmc3 and mmc3_irq_line_asserted == 1 {
+            cpu_irq_line_asserted = 1;
+        } else {
+            cpu_irq_line_asserted = 0;
+        }
+
         frame_loop_frame_complete = 1;
     }
 }

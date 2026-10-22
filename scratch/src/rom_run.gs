@@ -315,6 +315,8 @@ proc rom_run_load_input_image {
 # registers, the MMC3 registers and IRQ state, the pad masks, and the board. Pure reporting; it
 # reads the state and changes nothing the console uses.
 proc rom_run_build_dump {
+    ppu_sync_to_cycle cpu_cycles;
+
     rom_run_dump_text = "frame " & rom_run_frame_count & " drawn " & rom_run_frames_drawn
         & " skipped " & rom_run_frames_skipped & " fps " & (rom_run_fps // 1)
         & " cycles " & rom_run_cycles & " image " & rom_run_image_name;
