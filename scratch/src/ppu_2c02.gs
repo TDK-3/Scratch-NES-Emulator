@@ -186,9 +186,10 @@ var ppu_sprite_overflow_set_dot = 341;
 list ppu_attribute_shift_divisors = [1, 2, 4, 8, 16, 32, 64];
 
 # The bit weight the sixteen-bit background shifters present to the current pixel, that is
-# 32768 >> fine_x. PPUSCROLL and the reset write it, so the per-pixel fine-X bit test is two
-# divisions instead of a loop that halves a weight once per fine-X step.
+# 32768 >> fine_x, plus its inverse multiplier 2 ^ fine_x so an eight-dot tile batch can
+# pre-shift once and test >= 32768 across all eight pixels without per-pixel division.
 var ppu_fine_x_weight = 32768;
+var ppu_fine_x_mul = 1;
 
 # How many of the eight sprite output units hold a sprite for the line being drawn. It is
 # captured when the unit slots are loaded on dots 257-320, so the per-pixel sprite scan and
@@ -280,7 +281,7 @@ enum ppu_register_status {
 # compute per pixel: the emphasis packing of the current PPUMASK, and the universal backdrop
 # color after the greyscale mask.
 proc ppu_refresh_output_terms {
-    local backdrop = ppu_palette_color[1];
+    local backdrop = 0 + ppu_palette_color[1];
 
     ppu_emphasis_packed = ppu_mask_emphasis * 64;
 
@@ -330,6 +331,7 @@ proc ppu_reset {
     ppu_next_background_pattern_low = 0;
     ppu_next_background_pattern_high = 0;
     ppu_fine_x_weight = 32768;
+    ppu_fine_x_mul = 1;
     ppu_sprite_unit_active_count = 0;
     ppu_secondary_sprite_count = 0;
     ppu_line_zero_sprite_count = 0;
@@ -695,6 +697,7 @@ proc ppu_write_control_register value {
 proc ppu_write_scroll_register value {
     local fine_x = 0;
     local weight = 0;
+    local mul = 0;
     local coarse_x = 0;
     local preserved = 0;
     local fine_y = 0;
@@ -706,15 +709,18 @@ proc ppu_write_scroll_register value {
         fine_x = $value % 8;
         ppu_fine_x_scroll = fine_x;
 
-        # The shift register weight the renderer reads for this fine X, built once here so
-        # the pixel loop never has to halve a weight per step.
+        # The shift register weight and multiplier the renderer reads for this fine X, built
+        # once here so the pixel loop never has to halve or double a weight per pixel.
         weight = 32768;
+        mul = 1;
 
         repeat fine_x {
             weight = weight // 2;
+            mul = mul * 2;
         }
 
         ppu_fine_x_weight = weight;
+        ppu_fine_x_mul = mul;
         coarse_x = ($value // 8) % 32;
         temporary = ppu_temporary_vram_address % 32768;
         preserved = temporary - (temporary % 32);
@@ -804,141 +810,827 @@ proc ppu_clock_ppu_dot {
     ppu_run_dots 1;
 }
 
+# Reads the winning sprite pixel for the current column and advances all active sprite output
+# units one column in a single pass over 1..ppu_sprite_unit_active_count. Kept in lockstep
+# with ppu_read_sprite_pixel followed by ppu_clock_sprite_output_units.
+proc ppu_step_sprite_pixel {
+    local unit_index = 1;
+    local x_counter = 0;
+    local pattern_low = 0;
+    local pattern_high = 0;
+    local unit_pixel = 0;
+
+    ppu_sprite_pixel_found = 0;
+    ppu_sprite_pixel_value = 0;
+    ppu_sprite_pixel_attributes = 0;
+    ppu_sprite_pixel_oam_index = -1;
+
+    repeat ppu_sprite_unit_active_count {
+        x_counter = 0 + ppu_sprite_unit_x_counter[unit_index];
+
+        if x_counter > 0 {
+            ppu_sprite_unit_x_counter[unit_index] = x_counter - 1;
+        } else {
+            pattern_low = 0 + ppu_sprite_unit_pattern_low[unit_index];
+            pattern_high = 0 + ppu_sprite_unit_pattern_high[unit_index];
+
+            if ppu_sprite_pixel_found == 0 {
+                unit_pixel = 0;
+
+                if pattern_low >= 128 {
+                    unit_pixel = 1;
+                }
+
+                if pattern_high >= 128 {
+                    unit_pixel = unit_pixel + 2;
+                }
+
+                if unit_pixel != 0 {
+                    ppu_sprite_pixel_found = 1;
+                    ppu_sprite_pixel_value = unit_pixel;
+                    ppu_sprite_pixel_attributes = 0 + ppu_sprite_unit_attributes[unit_index];
+                    ppu_sprite_pixel_oam_index = 0 + ppu_sprite_unit_oam_index[unit_index];
+                }
+            }
+
+            ppu_sprite_unit_pattern_low[unit_index] = (pattern_low % 128) * 2;
+            ppu_sprite_unit_pattern_high[unit_index] = (pattern_high % 128) * 2;
+        }
+
+        unit_index = unit_index + 1;
+    }
+}
+
+# Fetches one eight-dot background tile (nametable byte, attribute bits, and low/high pattern
+# planes with exact MMC3 A12 low-dot spacing), loads the four background shift registers, and
+# advances coarse X. Used by the visible eight-dot tile batch and the two HBlank prefetch tiles.
+proc ppu_fetch_tile_into_shifters shift_eight {
+    local vram_low12 = ppu_vram_address % 4096;
+    local logical_table = vram_low12 // 1024;
+    local offset_1024 = vram_low12 - (logical_table * 1024);
+    local mirroring = 1;
+    local nt_base = 0;
+    local coarse_x = offset_1024 % 32;
+    local coarse_y = offset_1024 // 32;
+    local tile = 0;
+    local attr_byte = 0;
+    local attr_shift = 0;
+    local attr = 0;
+    local fine_y = (ppu_vram_address // 4096) % 8;
+    local pat_addr = 0;
+    local pat_low = 0;
+    local pat_high = 0;
+    local attr_low_fill = 0;
+    local attr_high_fill = 0;
+    local v_base = 0;
+
+    if ppu_bus_mapper_kind == mapper_kind.nrom {
+        mirroring = cartridge_mirroring;
+    } elif ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        mirroring = mmc3_mirroring;
+    }
+
+    if mirroring == 2 {
+        nt_base = (logical_table % 2) * 1024;
+    } elif mirroring == 3 {
+        nt_base = logical_table * 1024;
+    } else {
+        nt_base = (logical_table // 2) * 1024;
+    }
+
+    tile = 0 + ppu_nametable_ram[nt_base + offset_1024 + 1];
+    ppu_next_background_tile = tile;
+
+    attr_byte = 0 + ppu_nametable_ram[nt_base + 960 + ((coarse_y // 4) * 8) + (coarse_x // 4) + 1];
+    attr_shift = (((coarse_y // 2) % 2) * 4) + (((coarse_x // 2) % 2) * 2);
+    attr = (attr_byte // (0 + ppu_attribute_shift_divisors[attr_shift + 1])) % 4;
+    ppu_next_background_attribute = attr;
+
+    pat_addr = ppu_background_pattern_table + (tile * 16) + fine_y;
+
+    if ppu_bus_mapper_kind == mapper_kind.nrom and cartridge_chr_rom_bytes > 0 {
+        ppu_bus_pattern_mapped = 1;
+        pat_low = 0 + nrom_chr_rom[pat_addr + 1];
+        pat_high = 0 + nrom_chr_rom[pat_addr + 9];
+        ppu_bus_read_value = pat_high;
+    } else {
+        if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+            if mmc3_ppu_a12_high == 0 {
+                mmc3_a12_low_dots = mmc3_a12_low_dots + 6;
+                if mmc3_a12_low_dots > 10 {
+                    mmc3_a12_low_dots = 10;
+                }
+            }
+        }
+
+        ppu_bus_read_pattern_window pat_addr;
+        pat_low = 0 + ppu_bus_read_value;
+
+        if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+            if mmc3_ppu_a12_high == 0 {
+                mmc3_a12_low_dots = mmc3_a12_low_dots + 2;
+                if mmc3_a12_low_dots > 10 {
+                    mmc3_a12_low_dots = 10;
+                }
+            }
+        }
+
+        ppu_bus_read_pattern_window pat_addr + 8;
+        pat_high = 0 + ppu_bus_read_value;
+    }
+
+    ppu_next_background_pattern_low = pat_low;
+    ppu_next_background_pattern_high = pat_high;
+
+    attr_low_fill = (attr % 2) * 255;
+    attr_high_fill = ((attr // 2) % 2) * 255;
+
+    if 0 + $shift_eight == 1 {
+        ppu_background_pattern_low_shift = ((ppu_background_pattern_low_shift % 256) * 256) + pat_low;
+        ppu_background_pattern_high_shift = ((ppu_background_pattern_high_shift % 256) * 256) + pat_high;
+        ppu_background_attribute_low_shift = ((ppu_background_attribute_low_shift % 256) * 256) + attr_low_fill;
+        ppu_background_attribute_high_shift = ((ppu_background_attribute_high_shift % 256) * 256) + attr_high_fill;
+    } else {
+        ppu_background_pattern_low_shift = (ppu_background_pattern_low_shift
+            - (ppu_background_pattern_low_shift % 256)) + pat_low;
+        ppu_background_pattern_high_shift = (ppu_background_pattern_high_shift
+            - (ppu_background_pattern_high_shift % 256)) + pat_high;
+        ppu_background_attribute_low_shift = (ppu_background_attribute_low_shift
+            - (ppu_background_attribute_low_shift % 256)) + attr_low_fill;
+        ppu_background_attribute_high_shift = (ppu_background_attribute_high_shift
+            - (ppu_background_attribute_high_shift % 256)) + attr_high_fill;
+    }
+
+    v_base = ppu_vram_address % 32768;
+
+    if coarse_x == 31 {
+        if ((v_base // 1024) % 2) == 0 {
+            ppu_vram_address = (v_base - 31) + 1024;
+        } else {
+            ppu_vram_address = (v_base - 31) - 1024;
+        }
+    } else {
+        ppu_vram_address = v_base + 1;
+    }
+}
+
+# Batches the entire rendered HBlank interval starting at dot 257 through the end of the
+# scanline (84 dots normally, or 83 dots when the odd-frame pre-render dot 340 is skipped):
+# transfers horizontal/vertical scroll bits, loads the eight sprite output units with exact
+# MMC3 A12 observation, prefetches the first two background tiles of the next scanline, and
+# wraps to dot 0 of the following scanline.
+proc ppu_run_hblank_batch hblank_dots {
+    local candidate_count = ppu_secondary_sprite_count;
+    local slot_index = 1;
+    local candidate_found = 0;
+    local candidate_tile = 255;
+    local candidate_attributes = 255;
+    local candidate_x = 255;
+    local candidate_oam_index = -1;
+    local candidate_row = 0;
+    local pattern_address = 0;
+    local pattern_low = 0;
+    local pattern_high = 0;
+    local trailing_dots = (0 + $hblank_dots) - 80;
+
+    ppu_oam_address = 0;
+    ppu_vram_address = ppu_transfer_horizontal_for(ppu_vram_address, ppu_temporary_vram_address);
+
+    if ppu_scanline == 261 {
+        ppu_vram_address = ppu_transfer_vertical_for(ppu_vram_address, ppu_temporary_vram_address);
+        candidate_count = ppu_line_zero_sprite_count;
+    }
+
+    ppu_sprite_unit_active_count = candidate_count;
+    ppu_sprite_zero_in_line = 0;
+
+    if candidate_count > 0 or ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        repeat 8 {
+            if slot_index <= candidate_count {
+                candidate_found = 1;
+
+                if ppu_scanline == 261 {
+                    candidate_tile = 0 + ppu_line_zero_sprite_tile[slot_index];
+                    candidate_attributes = 0 + ppu_line_zero_sprite_attributes[slot_index];
+                    candidate_x = 0 + ppu_line_zero_sprite_x[slot_index];
+                    candidate_oam_index = 0 + ppu_line_zero_sprite_oam_index[slot_index];
+                    candidate_row = 0 + ppu_line_zero_sprite_row[slot_index];
+                } else {
+                    candidate_tile = 0 + ppu_secondary_sprite_tile[slot_index];
+                    candidate_attributes = 0 + ppu_secondary_sprite_attributes[slot_index];
+                    candidate_x = 0 + ppu_secondary_sprite_x[slot_index];
+                    candidate_oam_index = 0 + ppu_secondary_sprite_oam_index[slot_index];
+                    candidate_row = 0 + ppu_secondary_sprite_row[slot_index];
+                }
+            } else {
+                candidate_found = 0;
+                candidate_tile = 255;
+                candidate_attributes = 255;
+                candidate_x = 255;
+                candidate_oam_index = -1;
+                candidate_row = 0;
+            }
+
+            if candidate_found == 1 or ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                pattern_address = ppu_sprite_pattern_address(
+                    ppu_control_register,
+                    candidate_tile,
+                    candidate_attributes,
+                    candidate_row
+                );
+                ppu_sprite_fetch_pattern_address = pattern_address;
+
+                if ppu_bus_mapper_kind == mapper_kind.nrom and cartridge_chr_rom_bytes > 0 {
+                    ppu_bus_pattern_mapped = 1;
+                    pattern_low = 0 + nrom_chr_rom[pattern_address + 1];
+                    pattern_high = 0 + nrom_chr_rom[pattern_address + 9];
+                    ppu_bus_read_value = pattern_high;
+                } else {
+                    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                        if mmc3_ppu_a12_high == 0 {
+                            mmc3_a12_low_dots = mmc3_a12_low_dots + 6;
+                            if mmc3_a12_low_dots > 10 {
+                                mmc3_a12_low_dots = 10;
+                            }
+                        }
+                    }
+
+                    ppu_bus_read_pattern_window pattern_address;
+                    pattern_low = 0 + ppu_bus_read_value;
+
+                    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                        if mmc3_ppu_a12_high == 0 {
+                            mmc3_a12_low_dots = mmc3_a12_low_dots + 2;
+                            if mmc3_a12_low_dots > 10 {
+                                mmc3_a12_low_dots = 10;
+                            }
+                        }
+                    }
+
+                    ppu_bus_read_pattern_window pattern_address + 8;
+                    pattern_high = 0 + ppu_bus_read_value;
+                }
+
+                if candidate_found == 1 {
+                    if (candidate_attributes // 64) % 2 == 1 {
+                        pattern_low = 0 + ppu_reverse_byte_table[pattern_low + 1];
+                        pattern_high = 0 + ppu_reverse_byte_table[pattern_high + 1];
+                    }
+
+                    ppu_sprite_unit_pattern_low[slot_index] = pattern_low;
+                    ppu_sprite_unit_pattern_high[slot_index] = pattern_high;
+                    ppu_sprite_unit_attributes[slot_index] = candidate_attributes;
+                    ppu_sprite_unit_x_counter[slot_index] = candidate_x;
+                    ppu_sprite_unit_oam_index[slot_index] = candidate_oam_index;
+
+                    if candidate_oam_index == 0 {
+                        ppu_sprite_zero_in_line = 1;
+                    }
+                } else {
+                    ppu_sprite_unit_pattern_low[slot_index] = 0;
+                    ppu_sprite_unit_pattern_high[slot_index] = 0;
+                    ppu_sprite_unit_attributes[slot_index] = 0;
+                    ppu_sprite_unit_x_counter[slot_index] = 255;
+                    ppu_sprite_unit_oam_index[slot_index] = -1;
+                }
+            } else {
+                ppu_sprite_unit_pattern_low[slot_index] = 0;
+                ppu_sprite_unit_pattern_high[slot_index] = 0;
+                ppu_sprite_unit_attributes[slot_index] = 0;
+                ppu_sprite_unit_x_counter[slot_index] = 255;
+                ppu_sprite_unit_oam_index[slot_index] = -1;
+            }
+
+            slot_index = slot_index + 1;
+        }
+    }
+
+    ppu_fetch_tile_into_shifters ppu_mask_background_enable;
+    ppu_fetch_tile_into_shifters ppu_mask_background_enable;
+
+    if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+        if mmc3_ppu_a12_high == 0 {
+            mmc3_a12_low_dots = mmc3_a12_low_dots + trailing_dots;
+            if mmc3_a12_low_dots > 10 {
+                mmc3_a12_low_dots = 10;
+            }
+        }
+    }
+
+    ppu_dot = 0;
+
+    if ppu_scanline == 261 {
+        ppu_scanline = 0;
+        ppu_framebuffer_row_base = 0;
+    } else {
+        ppu_scanline = ppu_scanline + 1;
+        ppu_framebuffer_row_base = ppu_framebuffer_row_base + 256;
+    }
+}
+
 # Clocks `count` consecutive PPU dots in one call: applies vblank timing, renders each dot's
 # pixel, runs the fetch pipeline, then advances dot/scanline, in the reference order.
 #
-# This loop is the innermost loop of the whole project: a CPU frame is 89,342 dots, and the
-# frame loop reaches it once per emulated instruction instead of once per dot. The guards are
-# the same ones ppu_clock_ppu_dot used, with the ordering and the call sites unchanged.
+# When `dots_remaining` covers a full idle/blanking span, an eight-dot aligned visible tile, or
+# the 83/84-dot HBlank window, dedicated fast paths advance those spans in bulk while keeping
+# MMC3 A12 timing, sprite evaluation, sprite-zero hit, and shifter state identical to the
+# one-dot body below, which handles all unaligned and single-dot boundaries.
 proc ppu_run_dots count {
-    local dots_remaining = $count;
+    local dots_remaining = 0 + $count;
 
-    # The temporaries of the inlined pixel body below, declared once per call instead of once
-    # per pixel. They are aliases for the same values ppu_render_pixel's locals hold.
+    # The temporaries of the batched and one-dot pixel bodies, declared once per call.
     local pixel_x = 0;
     local background_pixel = 0;
     local background_palette = 0;
     local fine_weight = 0;
     local palette_offset = 0;
     local color_index = 0;
+    local line_rem = 0;
+    local hblank_len = 0;
+    local fb_idx = 0;
+    local lo_shift = 0;
+    local hi_shift = 0;
+    local alo_shift = 0;
+    local ahi_shift = 0;
+    local bg_px = 0;
+    local bg_pal = 0;
+    local tile_start_dot = 0;
+    local bg_left_ok = 0;
+    local sp_left_ok = 0;
 
     until dots_remaining <= 0 {
-        # ppu_bus_clock_ppu_dot() and the MMC3 low-dot counter it forwards to, written out here:
-        # this runs 89,460 times a frame, and two custom-block calls per dot for one comparison
-        # and one increment is a cost the frame budget cannot carry. NROM has no observer, so the
-        # whole block collapses to one comparison on that board.
-        if ppu_bus_mapper_kind == mapper_kind.mmc3 {
-            if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
-                mmc3_a12_low_dots = mmc3_a12_low_dots + 1;
-            }
-        }
+        if ppu_scanline >= 240 and ppu_scanline < 261 and (ppu_scanline != 241 or ppu_dot >= 2) {
+            line_rem = 341 - ppu_dot;
 
-        # Both status events are scheduled at dot 1 (PPU_VBLANK_START_DOT and
-        # PPU_PRE_RENDER_STATUS_CLEAR_DOT are both 1), so the shared dot test leads and the two
-        # scanline tests run 262 times a frame instead of 89,460.
-        if ppu_dot == 1 {
-            if ppu_scanline == PPU_VBLANK_FIRST_SCANLINE {
-                # Rows 0-239 are complete at this dot even when an early PPUSTATUS
-                # read suppresses the vblank flag itself, so the finished frame is
-                # offered to the display either way.
-                ppu_frame_ready = 1;
-
-                if ppu_suppress_vblank_start == 1 {
-                    ppu_suppress_vblank_start = 0;
-                } else {
-                    ppu_set_vblank_flag 1;
-                }
-            } elif ppu_scanline == PPU_PRE_RENDER_SCANLINE {
-                ppu_set_vblank_flag 0;
-                ppu_set_sprite_zero_hit 0;
-                ppu_set_sprite_overflow 0;
-            }
-        }
-
-        # Both per-dot procs and the dot advance are called only when they have work to do: a
-        # blanking dot produces no pixel, a vblank or blanked dot runs no fetch, and every dot but
-        # the last two of a line only steps the counter. This call site is the only caller, so the
-        # guards live here and each proc body starts at its first real step.
-        if ppu_scanline < PPU_FRAME_HEIGHT and ppu_dot >= 1 and ppu_dot <= PPU_FRAME_WIDTH {
-            # With rendering disabled every dot of the picture is the universal backdrop: the
-            # background and sprite paths cannot produce a pixel, and the palette read and the
-            # greyscale test are already folded into ppu_backdrop_packed. That case is one list
-            # write per pixel instead of the whole pixel proc.
-            if ppu_mask_rendering_enable == 1 {
-                # ppu_render_pixel inlined: this call site is the only one on the running path,
-                # and 61,440 custom-block calls per frame are the largest remaining per-frame
-                # cost in the port. The body is the same statements, in the same order; keep it
-                # and ppu_render_pixel in lockstep, because that proc stays as the documented,
-                # self-testable entry point.
-                pixel_x = ppu_dot - 1;
-
-                if ppu_mask_background_enable == 1 and (pixel_x >= 8 or ppu_mask_background_left_column_enable == 1) {
-                    fine_weight = ppu_fine_x_weight;
-                    background_pixel = ((ppu_background_pattern_low_shift // fine_weight) % 2)
-                        + (((ppu_background_pattern_high_shift // fine_weight) % 2) * 2);
-                    background_palette = ((ppu_background_attribute_low_shift // fine_weight) % 2)
-                        + (((ppu_background_attribute_high_shift // fine_weight) % 2) * 2);
-                } else {
-                    background_pixel = 0;
-                    background_palette = 0;
-                }
-
-                if ppu_mask_sprite_enable == 1
-                    and (pixel_x >= 8 or ppu_mask_sprite_left_column_enable == 1)
-                    and ppu_sprite_unit_active_count > 0 {
-                    ppu_read_sprite_pixel;
-                } else {
-                    ppu_sprite_pixel_found = 0;
-                }
-
-                if ppu_sprite_zero_in_line == 1 and ppu_sprite_pixel_found == 1 and ppu_sprite_pixel_oam_index == 0 {
-                    if background_pixel != 0 and pixel_x < PPU_FRAME_WIDTH - 1 {
-                        if ppu_status_register // PPU_SPRITE_ZERO_HIT_FLAG % 2 == 0 {
-                            ppu_status_register = ppu_status_register + PPU_SPRITE_ZERO_HIT_FLAG;
+            if dots_remaining >= line_rem {
+                if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                    if mmc3_ppu_a12_high == 0 {
+                        mmc3_a12_low_dots = mmc3_a12_low_dots + line_rem;
+                        if mmc3_a12_low_dots > 10 {
+                            mmc3_a12_low_dots = 10;
                         }
                     }
                 }
 
-                if ppu_sprite_pixel_found == 1
-                    and (background_pixel == 0
-                        or (ppu_sprite_pixel_attributes // PPU_SPRITE_PRIORITY_MASK) % 2 == 0) {
-                    palette_offset = 16 + ((ppu_sprite_pixel_attributes % 4) * 4) + ppu_sprite_pixel_value;
-                } elif background_pixel != 0 {
-                    palette_offset = (background_palette * 4) + background_pixel;
+                ppu_dot = 0;
+                ppu_scanline = ppu_scanline + 1;
+                ppu_framebuffer_row_base = ppu_framebuffer_row_base + 256;
+
+                if ppu_scanline == 261 {
+                    ppu_frame_number = ppu_frame_number + 1;
+                    ppu_odd_frame = ppu_frame_number % 2;
+                }
+
+                dots_remaining = dots_remaining - line_rem;
+            } else {
+                if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                    if mmc3_ppu_a12_high == 0 {
+                        mmc3_a12_low_dots = mmc3_a12_low_dots + dots_remaining;
+                        if mmc3_a12_low_dots > 10 {
+                            mmc3_a12_low_dots = 10;
+                        }
+                    }
+                }
+
+                ppu_dot = ppu_dot + dots_remaining;
+                dots_remaining = 0;
+            }
+        } elif ppu_mask_rendering_enable == 0 and ppu_scanline == 261 and ppu_dot >= 2 {
+            line_rem = 341 - ppu_dot;
+
+            if dots_remaining >= line_rem {
+                if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                    if mmc3_ppu_a12_high == 0 {
+                        mmc3_a12_low_dots = mmc3_a12_low_dots + line_rem;
+                        if mmc3_a12_low_dots > 10 {
+                            mmc3_a12_low_dots = 10;
+                        }
+                    }
+                }
+
+                ppu_dot = 0;
+                ppu_scanline = 0;
+                ppu_framebuffer_row_base = 0;
+                dots_remaining = dots_remaining - line_rem;
+            } else {
+                if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                    if mmc3_ppu_a12_high == 0 {
+                        mmc3_a12_low_dots = mmc3_a12_low_dots + dots_remaining;
+                        if mmc3_a12_low_dots > 10 {
+                            mmc3_a12_low_dots = 10;
+                        }
+                    }
+                }
+
+                ppu_dot = ppu_dot + dots_remaining;
+                dots_remaining = 0;
+            }
+        } elif ppu_mask_rendering_enable == 0 and ppu_scanline < 240 and ppu_dot >= 257 {
+            line_rem = 341 - ppu_dot;
+
+            if dots_remaining >= line_rem {
+                if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                    if mmc3_ppu_a12_high == 0 {
+                        mmc3_a12_low_dots = mmc3_a12_low_dots + line_rem;
+                        if mmc3_a12_low_dots > 10 {
+                            mmc3_a12_low_dots = 10;
+                        }
+                    }
+                }
+
+                ppu_dot = 0;
+                ppu_scanline = ppu_scanline + 1;
+                ppu_framebuffer_row_base = ppu_framebuffer_row_base + 256;
+                dots_remaining = dots_remaining - line_rem;
+            } else {
+                if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                    if mmc3_ppu_a12_high == 0 {
+                        mmc3_a12_low_dots = mmc3_a12_low_dots + dots_remaining;
+                        if mmc3_a12_low_dots > 10 {
+                            mmc3_a12_low_dots = 10;
+                        }
+                    }
+                }
+
+                ppu_dot = ppu_dot + dots_remaining;
+                dots_remaining = 0;
+            }
+        } elif ppu_mask_rendering_enable == 0
+            and ppu_scanline < 240
+            and ppu_dot >= 1
+            and ppu_dot <= 249
+            and dots_remaining >= 8 {
+            fb_idx = ppu_framebuffer_row_base + ppu_dot;
+            ppu_framebuffer_packed[fb_idx] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 1] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 2] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 3] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 4] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 5] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 6] = ppu_backdrop_packed;
+            ppu_framebuffer_packed[fb_idx + 7] = ppu_backdrop_packed;
+
+            if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                if mmc3_ppu_a12_high == 0 {
+                    mmc3_a12_low_dots = mmc3_a12_low_dots + 8;
+                    if mmc3_a12_low_dots > 10 {
+                        mmc3_a12_low_dots = 10;
+                    }
+                }
+            }
+
+            ppu_dot = ppu_dot + 8;
+            dots_remaining = dots_remaining - 8;
+        } elif ppu_mask_rendering_enable == 1
+            and ppu_scanline < 240
+            and ppu_dot <= 249
+            and (ppu_dot % 8) == 1
+            and dots_remaining >= 8 {
+            tile_start_dot = ppu_dot;
+            fb_idx = ppu_framebuffer_row_base + tile_start_dot;
+
+            if ppu_sprite_unit_active_count == 0
+                and ppu_mask_greyscale == 0
+                and (tile_start_dot >= 9 or ppu_mask_background_left_column_enable == 1) {
+                if ppu_mask_background_enable == 1 {
+                    if ppu_fine_x_mul == 1
+                        and (ppu_background_attribute_low_shift < 256 or ppu_background_attribute_low_shift >= 65280)
+                        and (ppu_background_attribute_high_shift < 256
+                            or ppu_background_attribute_high_shift >= 65280) {
+                        lo_shift = ppu_background_pattern_low_shift;
+                        hi_shift = ppu_background_pattern_high_shift;
+                        bg_pal = 0;
+
+                        if ppu_background_attribute_low_shift >= 32768 {
+                            bg_pal = 4;
+                        }
+
+                        if ppu_background_attribute_high_shift >= 32768 {
+                            bg_pal = bg_pal + 8;
+                        }
+
+                        repeat 8 {
+                            bg_px = 0;
+
+                            if lo_shift >= 32768 {
+                                bg_px = 1;
+                                lo_shift = (lo_shift - 32768) * 2;
+                            } else {
+                                lo_shift = lo_shift * 2;
+                            }
+
+                            if hi_shift >= 32768 {
+                                bg_px = bg_px + 2;
+                                hi_shift = (hi_shift - 32768) * 2;
+                            } else {
+                                hi_shift = hi_shift * 2;
+                            }
+
+                            if bg_px == 0 {
+                                ppu_framebuffer_packed[fb_idx] = ppu_backdrop_packed;
+                            } else {
+                                ppu_framebuffer_packed[fb_idx] = ppu_emphasis_packed
+                                    + (0 + ppu_palette_color[bg_pal + bg_px + 1]);
+                            }
+
+                            fb_idx = fb_idx + 1;
+                        }
+                    } else {
+                        lo_shift = (ppu_background_pattern_low_shift * ppu_fine_x_mul) % 65536;
+                        hi_shift = (ppu_background_pattern_high_shift * ppu_fine_x_mul) % 65536;
+                        alo_shift = (ppu_background_attribute_low_shift * ppu_fine_x_mul) % 65536;
+                        ahi_shift = (ppu_background_attribute_high_shift * ppu_fine_x_mul) % 65536;
+
+                        repeat 8 {
+                            bg_px = 0;
+
+                            if lo_shift >= 32768 {
+                                bg_px = 1;
+                                lo_shift = (lo_shift - 32768) * 2;
+                            } else {
+                                lo_shift = lo_shift * 2;
+                            }
+
+                            if hi_shift >= 32768 {
+                                bg_px = bg_px + 2;
+                                hi_shift = (hi_shift - 32768) * 2;
+                            } else {
+                                hi_shift = hi_shift * 2;
+                            }
+
+                            if bg_px == 0 {
+                                if alo_shift >= 32768 {
+                                    alo_shift = (alo_shift - 32768) * 2;
+                                } else {
+                                    alo_shift = alo_shift * 2;
+                                }
+
+                                if ahi_shift >= 32768 {
+                                    ahi_shift = (ahi_shift - 32768) * 2;
+                                } else {
+                                    ahi_shift = ahi_shift * 2;
+                                }
+
+                                ppu_framebuffer_packed[fb_idx] = ppu_backdrop_packed;
+                            } else {
+                                palette_offset = bg_px;
+
+                                if alo_shift >= 32768 {
+                                    palette_offset = palette_offset + 4;
+                                    alo_shift = (alo_shift - 32768) * 2;
+                                } else {
+                                    alo_shift = alo_shift * 2;
+                                }
+
+                                if ahi_shift >= 32768 {
+                                    palette_offset = palette_offset + 8;
+                                    ahi_shift = (ahi_shift - 32768) * 2;
+                                } else {
+                                    ahi_shift = ahi_shift * 2;
+                                }
+
+                                ppu_framebuffer_packed[fb_idx] = ppu_emphasis_packed
+                                    + (0 + ppu_palette_color[palette_offset + 1]);
+                            }
+
+                            fb_idx = fb_idx + 1;
+                        }
+                    }
                 } else {
-                    palette_offset = 0;
-                }
-
-                color_index = ppu_palette_color[palette_offset + 1];
-
-                if ppu_mask_greyscale == 1 {
-                    color_index = ppu_greyscale_colors[color_index + 1];
-                }
-
-                ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_emphasis_packed + color_index;
-
-                if ppu_sprite_unit_active_count > 0 {
-                    ppu_clock_sprite_output_units;
+                    ppu_framebuffer_packed[fb_idx] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 1] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 2] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 3] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 4] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 5] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 6] = ppu_backdrop_packed;
+                    ppu_framebuffer_packed[fb_idx + 7] = ppu_backdrop_packed;
                 }
             } else {
-                ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_backdrop_packed;
+                lo_shift = (ppu_background_pattern_low_shift * ppu_fine_x_mul) % 65536;
+                hi_shift = (ppu_background_pattern_high_shift * ppu_fine_x_mul) % 65536;
+                alo_shift = (ppu_background_attribute_low_shift * ppu_fine_x_mul) % 65536;
+                ahi_shift = (ppu_background_attribute_high_shift * ppu_fine_x_mul) % 65536;
+                pixel_x = tile_start_dot - 1;
+                bg_left_ok = 1;
+                sp_left_ok = 1;
+
+                if tile_start_dot == 1 {
+                    bg_left_ok = ppu_mask_background_left_column_enable;
+                    sp_left_ok = ppu_mask_sprite_left_column_enable;
+                }
+
+                repeat 8 {
+                    if ppu_mask_background_enable == 1 {
+                        bg_px = 0;
+                        bg_pal = 0;
+
+                        if lo_shift >= 32768 {
+                            bg_px = 1;
+                            lo_shift = (lo_shift - 32768) * 2;
+                        } else {
+                            lo_shift = lo_shift * 2;
+                        }
+
+                        if hi_shift >= 32768 {
+                            bg_px = bg_px + 2;
+                            hi_shift = (hi_shift - 32768) * 2;
+                        } else {
+                            hi_shift = hi_shift * 2;
+                        }
+
+                        if alo_shift >= 32768 {
+                            bg_pal = 1;
+                            alo_shift = (alo_shift - 32768) * 2;
+                        } else {
+                            alo_shift = alo_shift * 2;
+                        }
+
+                        if ahi_shift >= 32768 {
+                            bg_pal = bg_pal + 2;
+                            ahi_shift = (ahi_shift - 32768) * 2;
+                        } else {
+                            ahi_shift = ahi_shift * 2;
+                        }
+
+                        if bg_left_ok == 0 {
+                            bg_px = 0;
+                            bg_pal = 0;
+                        }
+                    } else {
+                        bg_px = 0;
+                        bg_pal = 0;
+                    }
+
+                    if ppu_sprite_unit_active_count > 0 {
+                        ppu_step_sprite_pixel;
+
+                        if ppu_mask_sprite_enable == 0 or sp_left_ok == 0 {
+                            ppu_sprite_pixel_found = 0;
+                        }
+                    } else {
+                        ppu_sprite_pixel_found = 0;
+                    }
+
+                    if ppu_sprite_zero_in_line == 1
+                        and ppu_sprite_pixel_found == 1
+                        and ppu_sprite_pixel_oam_index == 0 {
+                        if bg_px != 0 and pixel_x < 255 {
+                            if (ppu_status_register // 64) % 2 == 0 {
+                                ppu_status_register = ppu_status_register + 64;
+                            }
+                        }
+                    }
+
+                    if ppu_sprite_pixel_found == 1
+                        and (bg_px == 0 or (ppu_sprite_pixel_attributes // 32) % 2 == 0) {
+                        palette_offset = 16 + ((ppu_sprite_pixel_attributes % 4) * 4) + ppu_sprite_pixel_value;
+                    } elif bg_px != 0 {
+                        palette_offset = (bg_pal * 4) + bg_px;
+                    } else {
+                        palette_offset = 0;
+                    }
+
+                    color_index = 0 + ppu_palette_color[palette_offset + 1];
+
+                    if ppu_mask_greyscale == 1 {
+                        color_index = 0 + ppu_greyscale_colors[color_index + 1];
+                    }
+
+                    ppu_framebuffer_packed[fb_idx] = ppu_emphasis_packed + color_index;
+                    fb_idx = fb_idx + 1;
+                    pixel_x = pixel_x + 1;
+                }
             }
-        }
 
-        if (ppu_scanline < PPU_FRAME_HEIGHT or ppu_scanline == PPU_PRE_RENDER_SCANLINE)
-            and ppu_mask_rendering_enable == 1 {
-            ppu_clock_rendering_pipeline;
-        }
+            if tile_start_dot == 65 {
+                ppu_evaluate_sprites_for_next_scanline;
+            }
 
-        # Dots 0 through 338 only step the counter; the two dots at the end of a line go through
-        # ppu_advance_dot, which owns the wrap and the odd-frame dot-339 skip.
-        if ppu_dot < PPU_ODD_FRAME_LAST_DOT {
-            ppu_dot = ppu_dot + 1;
+            if ppu_sprite_overflow_set_dot >= tile_start_dot
+                and ppu_sprite_overflow_set_dot <= tile_start_dot + 7 {
+                if (ppu_status_register // 32) % 2 == 0 {
+                    ppu_status_register = ppu_status_register + 32;
+                }
+            }
+
+            ppu_fetch_tile_into_shifters ppu_mask_background_enable;
+
+            if tile_start_dot == 249 {
+                ppu_vram_address = ppu_increment_scroll_y_for(ppu_vram_address);
+            }
+
+            ppu_dot = tile_start_dot + 8;
+            dots_remaining = dots_remaining - 8;
+        } elif ppu_mask_rendering_enable == 1
+            and (ppu_scanline < 240 or ppu_scanline == 261)
+            and ppu_dot == 257
+            and dots_remaining >= 84 {
+            hblank_len = 84;
+
+            if ppu_scanline == 261 and ppu_odd_frame == 1 {
+                hblank_len = 83;
+            }
+
+            ppu_run_hblank_batch hblank_len;
+            dots_remaining = dots_remaining - hblank_len;
         } else {
-            ppu_advance_dot;
-        }
+            # One-dot exact fallback for unaligned dots, dot 0, vblank/pre-render status edges,
+            # and sub-tile CPU register accesses.
+            if ppu_bus_mapper_kind == mapper_kind.mmc3 {
+                if mmc3_ppu_a12_high == 0 and mmc3_a12_low_dots < mmc3_limit.a12_filter_dots {
+                    mmc3_a12_low_dots = mmc3_a12_low_dots + 1;
+                }
+            }
 
-        dots_remaining = dots_remaining - 1;
+            if ppu_dot == 1 {
+                if ppu_scanline == 241 {
+                    ppu_frame_ready = 1;
+
+                    if ppu_suppress_vblank_start == 1 {
+                        ppu_suppress_vblank_start = 0;
+                    } else {
+                        ppu_set_vblank_flag 1;
+                    }
+                } elif ppu_scanline == 261 {
+                    ppu_set_vblank_flag 0;
+                    ppu_set_sprite_zero_hit 0;
+                    ppu_set_sprite_overflow 0;
+                }
+            }
+
+            if ppu_scanline < 240 and ppu_dot >= 1 and ppu_dot <= 256 {
+                if ppu_mask_rendering_enable == 1 {
+                    pixel_x = ppu_dot - 1;
+
+                    if ppu_mask_background_enable == 1
+                        and (pixel_x >= 8 or ppu_mask_background_left_column_enable == 1) {
+                        fine_weight = ppu_fine_x_weight;
+                        background_pixel = ((ppu_background_pattern_low_shift // fine_weight) % 2)
+                            + (((ppu_background_pattern_high_shift // fine_weight) % 2) * 2);
+                        background_palette = ((ppu_background_attribute_low_shift // fine_weight) % 2)
+                            + (((ppu_background_attribute_high_shift // fine_weight) % 2) * 2);
+                    } else {
+                        background_pixel = 0;
+                        background_palette = 0;
+                    }
+
+                    if ppu_mask_sprite_enable == 1
+                        and (pixel_x >= 8 or ppu_mask_sprite_left_column_enable == 1)
+                        and ppu_sprite_unit_active_count > 0 {
+                        ppu_read_sprite_pixel;
+                    } else {
+                        ppu_sprite_pixel_found = 0;
+                    }
+
+                    if ppu_sprite_zero_in_line == 1
+                        and ppu_sprite_pixel_found == 1
+                        and ppu_sprite_pixel_oam_index == 0 {
+                        if background_pixel != 0 and pixel_x < 255 {
+                            if ppu_status_register // 64 % 2 == 0 {
+                                ppu_status_register = ppu_status_register + 64;
+                            }
+                        }
+                    }
+
+                    if ppu_sprite_pixel_found == 1
+                        and (background_pixel == 0 or (ppu_sprite_pixel_attributes // 32) % 2 == 0) {
+                        palette_offset = 16 + ((ppu_sprite_pixel_attributes % 4) * 4) + ppu_sprite_pixel_value;
+                    } elif background_pixel != 0 {
+                        palette_offset = (background_palette * 4) + background_pixel;
+                    } else {
+                        palette_offset = 0;
+                    }
+
+                    color_index = 0 + ppu_palette_color[palette_offset + 1];
+
+                    if ppu_mask_greyscale == 1 {
+                        color_index = 0 + ppu_greyscale_colors[color_index + 1];
+                    }
+
+                    ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_emphasis_packed + color_index;
+
+                    if ppu_sprite_unit_active_count > 0 {
+                        ppu_clock_sprite_output_units;
+                    }
+                } else {
+                    ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_backdrop_packed;
+                }
+            }
+
+            if (ppu_scanline < 240 or ppu_scanline == 261)
+                and ppu_mask_rendering_enable == 1 {
+                ppu_clock_rendering_pipeline;
+            }
+
+            if ppu_dot < 339 {
+                ppu_dot = ppu_dot + 1;
+            } else {
+                ppu_advance_dot;
+            }
+
+            dots_remaining = dots_remaining - 1;
+        }
     }
 
     ppu_dots_clocked = ppu_dots_clocked + $count;
@@ -1338,16 +2030,16 @@ proc ppu_read_sprite_pixel {
     # The first opaque unit is the visible one; later units could not win, so the scan stops
     # there, and it never visits a slot the line did not load a sprite into.
     until unit_index > ppu_sprite_unit_active_count or ppu_sprite_pixel_found == 1 {
-        if ppu_sprite_unit_x_counter[unit_index] == 0 {
-            unit_pixel = (ppu_sprite_unit_pattern_low[unit_index] // PPU_SPRITE_PIXEL_WEIGHT) % 2;
+        if 0 + ppu_sprite_unit_x_counter[unit_index] == 0 {
+            unit_pixel = ((0 + ppu_sprite_unit_pattern_low[unit_index]) // 128) % 2;
             unit_pixel = unit_pixel
-                + (((ppu_sprite_unit_pattern_high[unit_index] // PPU_SPRITE_PIXEL_WEIGHT) % 2) * 2);
+                + ((((0 + ppu_sprite_unit_pattern_high[unit_index]) // 128) % 2) * 2);
 
             if unit_pixel != 0 {
                 ppu_sprite_pixel_found = 1;
                 ppu_sprite_pixel_value = unit_pixel;
-                ppu_sprite_pixel_attributes = ppu_sprite_unit_attributes[unit_index];
-                ppu_sprite_pixel_oam_index = ppu_sprite_unit_oam_index[unit_index];
+                ppu_sprite_pixel_attributes = 0 + ppu_sprite_unit_attributes[unit_index];
+                ppu_sprite_pixel_oam_index = 0 + ppu_sprite_unit_oam_index[unit_index];
             }
         }
 
@@ -1365,13 +2057,13 @@ proc ppu_clock_sprite_output_units {
     local pattern_high = 0;
 
     repeat ppu_sprite_unit_active_count {
-        x_counter = ppu_sprite_unit_x_counter[unit_index];
+        x_counter = 0 + ppu_sprite_unit_x_counter[unit_index];
 
         if x_counter > 0 {
             ppu_sprite_unit_x_counter[unit_index] = x_counter - 1;
         } else {
-            pattern_low = ppu_sprite_unit_pattern_low[unit_index];
-            pattern_high = ppu_sprite_unit_pattern_high[unit_index];
+            pattern_low = 0 + ppu_sprite_unit_pattern_low[unit_index];
+            pattern_high = 0 + ppu_sprite_unit_pattern_high[unit_index];
             ppu_sprite_unit_pattern_low[unit_index] = (pattern_low * 2) % 256;
             ppu_sprite_unit_pattern_high[unit_index] = (pattern_high * 2) % 256;
         }
@@ -1389,29 +2081,25 @@ proc ppu_clock_rendering_pipeline {
     # The caller has already checked the visible-or-pre-render window and the PPUMASK
     # rendering bit, so the body starts at its first real step and runs up to 89,460 times
     # a frame without retesting them.
-    if ppu_dot >= PPU_SPRITE_FETCH_START_DOT and ppu_dot <= PPU_SPRITE_FETCH_END_DOT {
+    if ppu_dot >= 257 and ppu_dot <= 320 {
         # OAMADDR is forced to $00 on each dot of the sprite tile
         # loading interval.
         ppu_oam_address = 0;
     }
 
-    if ppu_scanline < PPU_FRAME_HEIGHT and ppu_dot == 65 {
+    if ppu_scanline < 240 and ppu_dot == 65 {
         ppu_evaluate_sprites_for_next_scanline;
     }
 
     if ppu_dot == ppu_sprite_overflow_set_dot {
         # Same latch as the sprite-zero hit: only the first overflow of a frame needs the
         # setter, and the plain add is the change it would make.
-        if ppu_status_register // PPU_SPRITE_OVERFLOW_FLAG % 2 == 0 {
-            ppu_status_register = ppu_status_register + PPU_SPRITE_OVERFLOW_FLAG;
+        if ppu_status_register // 32 % 2 == 0 {
+            ppu_status_register = ppu_status_register + 32;
         }
     }
 
     if (ppu_dot >= 1 and ppu_dot <= 256) or (ppu_dot >= 321 and ppu_dot <= 336) {
-        # ppu_shift_background_registers() inlined: four shifts per fetch dot, and the
-        # call was a larger share of the dot than the shifts themselves. With the background
-        # disabled the pixel path never reads the shifters, so the four multiplies and
-        # modulos are skipped entirely on the frames and scanlines that show sprites only.
         if ppu_mask_background_enable == 1 {
             ppu_background_pattern_low_shift = (ppu_background_pattern_low_shift * 2) % 65536;
             ppu_background_pattern_high_shift = (ppu_background_pattern_high_shift * 2) % 65536;
@@ -1426,8 +2114,8 @@ proc ppu_clock_rendering_pipeline {
             ppu_load_background_registers;
             ppu_vram_address = ppu_increment_scroll_x_for(ppu_vram_address);
         } elif fetch_phase == 2 {
-            ppu_bus_read_nametable PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
-            ppu_next_background_tile = ppu_bus_read_value;
+            ppu_bus_read_nametable 8192 + (ppu_vram_address % 4096);
+            ppu_next_background_tile = 0 + ppu_bus_read_value;
         } elif fetch_phase == 4 {
             ppu_fetch_background_attribute;
         } elif fetch_phase == 6 {
@@ -1443,15 +2131,15 @@ proc ppu_clock_rendering_pipeline {
         ppu_vram_address = ppu_transfer_horizontal_for(ppu_vram_address, ppu_temporary_vram_address);
     }
 
-    if ppu_scanline == PPU_PRE_RENDER_SCANLINE and ppu_dot >= 280 and ppu_dot <= 304 {
+    if ppu_scanline == 261 and ppu_dot >= 280 and ppu_dot <= 304 {
         ppu_vram_address = ppu_transfer_vertical_for(ppu_vram_address, ppu_temporary_vram_address);
     }
 
-    if ppu_dot == PPU_BACKGROUND_DUMMY_FETCH_DOT_ONE or ppu_dot == PPU_BACKGROUND_DUMMY_FETCH_DOT_TWO {
-        ppu_bus_read_nametable PPU_BACKGROUND_NAMETABLE_START + (ppu_vram_address % 4096);
+    if ppu_dot == 338 or ppu_dot == 340 {
+        ppu_bus_read_nametable 8192 + (ppu_vram_address % 4096);
     }
 
-    if ppu_dot >= PPU_SPRITE_FETCH_START_DOT and ppu_dot <= PPU_SPRITE_FETCH_END_DOT {
+    if ppu_dot >= 257 and ppu_dot <= 320 {
         ppu_clock_sprite_fetch;
     }
 }
@@ -1560,22 +2248,22 @@ proc ppu_evaluate_sprites_for_next_scanline {
         local slot_index = 0;
         local copy_index = 1;
 
-        if ppu_scanline == PPU_FRAME_HEIGHT - 1 {
+        if ppu_scanline == 239 {
             target_scanline = 0;
         } else {
             target_scanline = ppu_scanline + 1;
         }
 
-        if (ppu_control_register // PPU_SPRITE_SIZE_SELECT) % 2 == 1 {
+        if (ppu_control_register // 32) % 2 == 1 {
             sprite_height = 16;
         }
 
-        ppu_sprite_overflow_set_dot = PPU_NO_OVERFLOW_DOT;
+        ppu_sprite_overflow_set_dot = 341;
 
-        until oam_index >= PPU_SPRITE_COUNT or evaluation_done == 1 {
+        until oam_index >= 64 or evaluation_done == 1 {
             checking_overflow = 0;
 
-            if found_count == PPU_SECONDARY_SPRITE_LIMIT {
+            if found_count == 8 {
                 checking_overflow = 1;
             }
 
@@ -1589,8 +2277,8 @@ proc ppu_evaluate_sprites_for_next_scanline {
 
             # The OAM read and ppu_sprite_row() inlined: the address is always inside 0-255 for
             # this loop, and the row is one floored modulo. Sprite evaluation walks up to 64 OAM
-            # entries per line, so the two saved calls per entry matter.
-            candidate_row = (target_scanline - (ppu_oam[candidate_address + 1] + 1)) % 256;
+            # entries per line, so numeric coercion eliminates polymorphic compare calls.
+            candidate_row = (target_scanline - ((0 + ppu_oam[candidate_address + 1]) + 1)) % 256;
 
             if checking_overflow == 1 {
                 if candidate_row < sprite_height {
@@ -1602,24 +2290,24 @@ proc ppu_evaluate_sprites_for_next_scanline {
 
                     evaluation_done = 1;
                 } else {
-                    overflow_offset = (overflow_offset + 1) % PPU_BYTES_PER_SPRITE;
+                    overflow_offset = (overflow_offset + 1) % 4;
                     elapsed_dots = elapsed_dots + 2;
                 }
             } elif candidate_row >= sprite_height {
                 elapsed_dots = elapsed_dots + 2;
             } else {
                 slot_index = found_count + 1;
-                ppu_secondary_sprite_y[slot_index] = ppu_oam[candidate_address + 1];
+                ppu_secondary_sprite_y[slot_index] = 0 + ppu_oam[candidate_address + 1];
                 ppu_secondary_sprite_row[slot_index] = candidate_row;
                 ppu_secondary_sprite_oam_index[slot_index] = oam_index;
-                ppu_secondary_sprite_tile[slot_index] = ppu_oam[candidate_address + 2];
-                ppu_secondary_sprite_attributes[slot_index] = ppu_oam[candidate_address + 3];
-                ppu_secondary_sprite_x[slot_index] = ppu_oam[candidate_address + 4];
+                ppu_secondary_sprite_tile[slot_index] = 0 + ppu_oam[candidate_address + 2];
+                ppu_secondary_sprite_attributes[slot_index] = 0 + ppu_oam[candidate_address + 3];
+                ppu_secondary_sprite_x[slot_index] = 0 + ppu_oam[candidate_address + 4];
                 found_count = found_count + 1;
                 elapsed_dots = elapsed_dots + 8;
             }
 
-            candidate_base = candidate_base + PPU_BYTES_PER_SPRITE;
+            candidate_base = candidate_base + 4;
             oam_index = oam_index + 1;
         }
 

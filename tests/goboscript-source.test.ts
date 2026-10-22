@@ -831,6 +831,24 @@ const MIRROR_CONTRACT: readonly {
     { source: "src/ppu_2c02.gs", declaration: "ppu_clock_cpu_cycle", mirror: null, reason: "ppu pending mirror" },
     {
         source: "src/ppu_2c02.gs",
+        declaration: "ppu_step_sprite_pixel",
+        mirror: null,
+        reason: "batched rendering fast path combining ppu_read_sprite_pixel and ppu_clock_sprite_output_units",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_fetch_tile_into_shifters",
+        mirror: null,
+        reason: "batched rendering fast path fetching one eight-dot background tile and advancing coarse X",
+    },
+    {
+        source: "src/ppu_2c02.gs",
+        declaration: "ppu_run_hblank_batch",
+        mirror: null,
+        reason: "batched rendering fast path advancing dots 257 through end-of-scanline in one call",
+    },
+    {
+        source: "src/ppu_2c02.gs",
         declaration: "ppu_run_dots",
         mirror: null,
         reason: "batched dot loop the frame loop drives once per instruction",
