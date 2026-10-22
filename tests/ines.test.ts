@@ -11,19 +11,19 @@ const CHR_BANK_BYTES = 8_192;
 const LEGACY_PRG_RAM_BANK_BYTES = 8_192;
 const TEST_ROM = readFileSync(new URL("../test_rom.nes", import.meta.url));
 
-test("parses the supplied mapper 4 iNES test ROM", () => {
+test("parses the supplied mapper 0 iNES test ROM", () => {
     const rom = require_rom(TEST_ROM);
 
     assert.equal(rom.format, "ines-1.0");
-    assert.equal(rom.mapper_id, 4);
+    assert.equal(rom.mapper_id, 0);
     assert.equal(rom.submapper, 0);
     assert.equal(rom.mirroring, "vertical");
-    assert.equal(rom.battery_backed, true);
+    assert.equal(rom.battery_backed, false);
     assert.equal(rom.trainer, null);
-    assert.equal(rom.prg_rom.byteLength, 4 * PRG_BANK_BYTES);
-    assert.equal(rom.chr_rom.byteLength, 2 * CHR_BANK_BYTES);
-    assert.equal(rom.prg_ram_bytes, 0);
-    assert.equal(rom.prg_nvram_bytes, CHR_BANK_BYTES);
+    assert.equal(rom.prg_rom.byteLength, 2 * PRG_BANK_BYTES);
+    assert.equal(rom.chr_rom.byteLength, CHR_BANK_BYTES);
+    assert.equal(rom.prg_ram_bytes, LEGACY_PRG_RAM_BANK_BYTES);
+    assert.equal(rom.prg_nvram_bytes, 0);
 });
 
 test("decodes iNES mapper nibbles, horizontal mirroring, and battery-backed PRG RAM", () => {

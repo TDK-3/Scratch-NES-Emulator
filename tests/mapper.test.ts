@@ -31,13 +31,19 @@ test("rejects unlisted NES 2.0 submappers for mapper 0 and mapper 4", () => {
     }
 });
 
-test("selects the supplied mapper 4 ROM for the MMC3 route", () => {
+test("selects the supplied mapper 0 ROM for the NROM route and mapper 4 for MMC3", () => {
     const rom = parse_rom(TEST_ROM);
 
-    assert.equal(rom.mapper_id, 4);
+    assert.equal(rom.mapper_id, 0);
     assert.equal(rom.submapper, 0);
 
     assert.deepEqual(resolve_mapper(rom), {
+        ok: true,
+        value: { mapper_id: 0, submapper: 0, kind: "nrom" },
+    });
+
+    const mmc3_rom = make_nes2_rom(4, 0);
+    assert.deepEqual(resolve_mapper(mmc3_rom), {
         ok: true,
         value: { mapper_id: 4, submapper: 0, kind: "mmc3" },
     });
