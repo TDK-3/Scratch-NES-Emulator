@@ -28,7 +28,7 @@ jobs:
             name: github-pages
             url: ${{ steps.deployment.outputs.page_url }}
         steps:
-            - name: Download packaged HTML artifact
+            - name: Download packaged Pages site artifact
               if: github.event_name == 'workflow_run'
               uses: actions/download-artifact@v4
               with:
@@ -67,11 +67,21 @@ jobs:
                   fi
                   echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-            - name: Build and package Scratch project
+            - name: Build and package Scratch project with ROM converter page
               if: github.event_name == 'workflow_dispatch'
               run: |
+                  npm run build:ts
                   npm run build:scratch
                   npm run package:scratch
+
+            - name: Verify Pages bundle includes packaged build and rom_string.html
+              run: |
+                  test -f dist/pages/index.html
+                  test -f dist/pages/rom_string.html
+                  test -f dist/pages/styles.css
+                  test -f dist/pages/build/nes/browser/rom_string_page.js
+                  test -f dist/pages/build/nes/cartridge/ines.js
+                  test -f dist/pages/build/nes/cartridge/rom_text.js
 
             - name: Configure Pages
               uses: actions/configure-pages@v5
