@@ -266,8 +266,10 @@ var ppu_framebuffer_row_base = 0;
 
 # Raised at the vblank-start dot, when rows 0-239 are complete and the next
 # frame has not started overwriting them. The frame loop clears it and asks
-# the display sprite to present the framebuffer.
+# the display sprite to present the framebuffer. ppu_frames_ready_count counts
+# completed visible frames at that exact dot for vblank-aligned frame pacing.
 var ppu_frame_ready = 0;
+var ppu_frames_ready_count = 0;
 
 # ---- register error codes ----
 
@@ -321,6 +323,7 @@ proc ppu_reset {
     ppu_dots_clocked = 0;
     ppu_next_cpu_event_dots = 0;
     ppu_frame_number = 0;
+    ppu_frames_ready_count = 0;
     ppu_odd_frame = 0;
     ppu_nmi_output = 0;
     ppu_nmi_edge_pending = 0;
@@ -1161,6 +1164,9 @@ proc ppu_run_dots count {
     local tile_start_dot = 0;
     local bg_left_ok = 0;
     local sp_left_ok = 0;
+    local sp_tile_overlap = 0;
+    local sp_unit = 0;
+    local sp_x = 0;
 
     until dots_remaining <= 0 {
         if ppu_scanline >= 240 and ppu_scanline < 261 and (ppu_scanline != 241 or ppu_dot >= 2) {
@@ -1290,12 +1296,48 @@ proc ppu_run_dots count {
             and ppu_dot <= 249
             and (ppu_dot % 8) == 1
             and dots_remaining >= 8 {
-            tile_start_dot = ppu_dot;
-            fb_idx = ppu_framebuffer_row_base + tile_start_dot;
+            tile_start_dot = ppu_dot + "";
+            fb_idx = (ppu_framebuffer_row_base + "") + tile_start_dot;
+            sp_tile_overlap = 0;
 
-            if ppu_sprite_unit_active_count == 0
-                and ppu_mask_greyscale == 0
-                and (tile_start_dot >= 9 or ppu_mask_background_left_column_enable == 1) {
+            if (ppu_sprite_unit_active_count + "") > 0 {
+                sp_unit = 1;
+
+                repeat ppu_sprite_unit_active_count + "" {
+                    if (ppu_sprite_unit_x_counter[sp_unit] + "") < 8 {
+                        if (ppu_sprite_unit_pattern_low[sp_unit] + "") != 0
+                            or (ppu_sprite_unit_pattern_high[sp_unit] + "") != 0 {
+                            sp_tile_overlap = 1;
+                        }
+                    }
+
+                    sp_unit = sp_unit + 1;
+                }
+            }
+
+            if sp_tile_overlap == 0
+                and (ppu_mask_greyscale + "") == 0
+                and (tile_start_dot >= 9 or (ppu_mask_background_left_column_enable + "") == 1) {
+                if (ppu_sprite_unit_active_count + "") > 0 {
+                    sp_unit = 1;
+
+                    repeat ppu_sprite_unit_active_count + "" {
+                        sp_x = ppu_sprite_unit_x_counter[sp_unit] + "";
+
+                        if sp_x >= 8 {
+                            ppu_sprite_unit_x_counter[sp_unit] = sp_x - 8;
+                        } else {
+                            ppu_sprite_unit_x_counter[sp_unit] = 0;
+                        }
+
+                        sp_unit = sp_unit + 1;
+                    }
+
+                    ppu_sprite_pixel_found = 0;
+                    ppu_sprite_pixel_value = 0;
+                    ppu_sprite_pixel_attributes = 0;
+                    ppu_sprite_pixel_oam_index = -1;
+                }
                 if ppu_mask_background_enable == 1 {
                     if ppu_fine_x_mul == 1
                         and (ppu_background_attribute_low_shift < 256 or ppu_background_attribute_low_shift >= 65280)
@@ -1550,6 +1592,7 @@ proc ppu_run_dots count {
             if ppu_dot == 1 {
                 if ppu_scanline == 241 {
                     ppu_frame_ready = 1;
+                    ppu_frames_ready_count = (ppu_frames_ready_count + "") + 1;
 
                     if ppu_suppress_vblank_start == 1 {
                         ppu_suppress_vblank_start = 0;
