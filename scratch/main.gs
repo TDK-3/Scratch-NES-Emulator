@@ -108,11 +108,11 @@ proc pen_draw_frame {
         set_pen_transparency 0;
     }
 
-    cached_scale = 0 + pen_display_scale;
-    cached_first_x = 0 + pen_display_first_x;
-    bg_key = 0 + ppu_backdrop_packed;
+    cached_scale = pen_display_scale + "";
+    cached_first_x = pen_display_first_x + "";
+    bg_key = ppu_backdrop_packed + "";
     pen_current_color_key = bg_key;
-    set_pen_color 0 + nes_pen_rgb[bg_key + 1];
+    set_pen_color nes_pen_rgb[bg_key + 1] + "";
 
     repeat 240 {
         stage_y = pen_display_first_y - (row * pen_display_scale);
@@ -122,7 +122,7 @@ proc pen_draw_frame {
         bg_min_x = -1;
         bg_max_x = -1;
         framebuffer_index = row_base + 1;
-        run_key = 0 + ppu_framebuffer_packed[framebuffer_index];
+        run_key = ppu_framebuffer_packed[framebuffer_index] + "";
 
         # Scan the 256 pixels of the row using native numeric comparisons, coalescing all
         # backdrop pixels on this row into a single base span [bg_min_x .. bg_max_x] while
@@ -131,7 +131,7 @@ proc pen_draw_frame {
         repeat 255 {
             pixel_x = pixel_x + 1;
             framebuffer_index = framebuffer_index + 1;
-            current_key = 0 + ppu_framebuffer_packed[framebuffer_index];
+            current_key = ppu_framebuffer_packed[framebuffer_index] + "";
 
             if current_key != run_key {
                 if run_key == bg_key {
@@ -142,7 +142,7 @@ proc pen_draw_frame {
                 } else {
                     run_count = run_count + 1;
                     slot = run_key + 1;
-                    head = 0 + pen_color_bucket_head[slot];
+                    head = pen_color_bucket_head[slot] + "";
 
                     if head == 0 {
                         active_color_count = active_color_count + 1;
@@ -169,7 +169,7 @@ proc pen_draw_frame {
         } else {
             run_count = run_count + 1;
             slot = run_key + 1;
-            head = 0 + pen_color_bucket_head[slot];
+            head = pen_color_bucket_head[slot] + "";
 
             if head == 0 {
                 active_color_count = active_color_count + 1;
@@ -200,17 +200,17 @@ proc pen_draw_frame {
     color_idx = 1;
 
     repeat active_color_count {
-        run_key = 0 + pen_active_colors[color_idx];
+        run_key = pen_active_colors[color_idx] + "";
         slot = run_key + 1;
         pen_current_color_key = run_key;
-        set_pen_color 0 + nes_pen_rgb[slot];
-        r_idx = 0 + pen_color_bucket_head[slot];
+        set_pen_color nes_pen_rgb[slot] + "";
+        r_idx = pen_color_bucket_head[slot] + "";
         pen_color_bucket_head[slot] = 0;
 
         until r_idx == 0 {
-            x0 = 0 + pen_run_x0[r_idx];
-            x1 = 0 + pen_run_x1[r_idx];
-            goto x0, 0 + pen_run_y[r_idx];
+            x0 = pen_run_x0[r_idx] + "";
+            x1 = pen_run_x1[r_idx] + "";
+            goto x0, pen_run_y[r_idx] + "";
             pen_down;
 
             if x1 != x0 {
@@ -218,7 +218,7 @@ proc pen_draw_frame {
             }
 
             pen_up;
-            r_idx = 0 + pen_run_next[r_idx];
+            r_idx = pen_run_next[r_idx] + "";
         }
 
         color_idx = color_idx + 1;

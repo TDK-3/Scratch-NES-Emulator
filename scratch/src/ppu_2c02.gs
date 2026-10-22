@@ -283,7 +283,7 @@ enum ppu_register_status {
 # compute per pixel: the emphasis packing of the current PPUMASK, and the universal backdrop
 # color after the greyscale mask.
 proc ppu_refresh_output_terms {
-    local backdrop = 0 + ppu_palette_color[1];
+    local backdrop = ppu_palette_color[1] + "";
 
     ppu_emphasis_packed = ppu_mask_emphasis * 64;
 
@@ -830,13 +830,13 @@ proc ppu_step_sprite_pixel {
     ppu_sprite_pixel_oam_index = -1;
 
     repeat ppu_sprite_unit_active_count {
-        x_counter = 0 + ppu_sprite_unit_x_counter[unit_index];
+        x_counter = ppu_sprite_unit_x_counter[unit_index] + "";
 
         if x_counter > 0 {
             ppu_sprite_unit_x_counter[unit_index] = x_counter - 1;
         } else {
-            pattern_low = 0 + ppu_sprite_unit_pattern_low[unit_index];
-            pattern_high = 0 + ppu_sprite_unit_pattern_high[unit_index];
+            pattern_low = ppu_sprite_unit_pattern_low[unit_index] + "";
+            pattern_high = ppu_sprite_unit_pattern_high[unit_index] + "";
 
             if ppu_sprite_pixel_found == 0 {
                 unit_pixel = 0;
@@ -852,8 +852,8 @@ proc ppu_step_sprite_pixel {
                 if unit_pixel != 0 {
                     ppu_sprite_pixel_found = 1;
                     ppu_sprite_pixel_value = unit_pixel;
-                    ppu_sprite_pixel_attributes = 0 + ppu_sprite_unit_attributes[unit_index];
-                    ppu_sprite_pixel_oam_index = 0 + ppu_sprite_unit_oam_index[unit_index];
+                    ppu_sprite_pixel_attributes = ppu_sprite_unit_attributes[unit_index] + "";
+                    ppu_sprite_pixel_oam_index = ppu_sprite_unit_oam_index[unit_index] + "";
                 }
             }
 
@@ -902,20 +902,20 @@ proc ppu_fetch_tile_into_shifters shift_eight {
         nt_base = (logical_table // 2) * 1024;
     }
 
-    tile = 0 + ppu_nametable_ram[nt_base + offset_1024 + 1];
+    tile = ppu_nametable_ram[nt_base + offset_1024 + 1] + "";
     ppu_next_background_tile = tile;
 
-    attr_byte = 0 + ppu_nametable_ram[nt_base + 960 + ((coarse_y // 4) * 8) + (coarse_x // 4) + 1];
+    attr_byte = ppu_nametable_ram[nt_base + 960 + ((coarse_y // 4) * 8) + (coarse_x // 4) + 1] + "";
     attr_shift = (((coarse_y // 2) % 2) * 4) + (((coarse_x // 2) % 2) * 2);
-    attr = (attr_byte // (0 + ppu_attribute_shift_divisors[attr_shift + 1])) % 4;
+    attr = (attr_byte // ppu_attribute_shift_divisors[attr_shift + 1]) % 4;
     ppu_next_background_attribute = attr;
 
     pat_addr = ppu_background_pattern_table + (tile * 16) + fine_y;
 
     if ppu_bus_mapper_kind == mapper_kind.nrom and cartridge_chr_rom_bytes > 0 {
         ppu_bus_pattern_mapped = 1;
-        pat_low = 0 + nrom_chr_rom[pat_addr + 1];
-        pat_high = 0 + nrom_chr_rom[pat_addr + 9];
+        pat_low = nrom_chr_rom[pat_addr + 1] + "";
+        pat_high = nrom_chr_rom[pat_addr + 9] + "";
         ppu_bus_read_value = pat_high;
     } else {
         if ppu_bus_mapper_kind == mapper_kind.mmc3 {
@@ -928,7 +928,7 @@ proc ppu_fetch_tile_into_shifters shift_eight {
         }
 
         ppu_bus_read_pattern_window pat_addr;
-        pat_low = 0 + ppu_bus_read_value;
+        pat_low = ppu_bus_read_value + "";
 
         if ppu_bus_mapper_kind == mapper_kind.mmc3 {
             if mmc3_ppu_a12_high == 0 {
@@ -940,7 +940,7 @@ proc ppu_fetch_tile_into_shifters shift_eight {
         }
 
         ppu_bus_read_pattern_window pat_addr + 8;
-        pat_high = 0 + ppu_bus_read_value;
+        pat_high = ppu_bus_read_value + "";
     }
 
     ppu_next_background_pattern_low = pat_low;
@@ -949,7 +949,7 @@ proc ppu_fetch_tile_into_shifters shift_eight {
     attr_low_fill = (attr % 2) * 255;
     attr_high_fill = ((attr // 2) % 2) * 255;
 
-    if 0 + $shift_eight == 1 {
+    if ($shift_eight + "") == 1 {
         ppu_background_pattern_low_shift = ((ppu_background_pattern_low_shift % 256) * 256) + pat_low;
         ppu_background_pattern_high_shift = ((ppu_background_pattern_high_shift % 256) * 256) + pat_high;
         ppu_background_attribute_low_shift = ((ppu_background_attribute_low_shift % 256) * 256) + attr_low_fill;
@@ -995,7 +995,7 @@ proc ppu_run_hblank_batch hblank_dots {
     local pattern_address = 0;
     local pattern_low = 0;
     local pattern_high = 0;
-    local trailing_dots = (0 + $hblank_dots) - 80;
+    local trailing_dots = $hblank_dots - 80;
 
     ppu_oam_address = 0;
     ppu_vram_address = ppu_transfer_horizontal_for(ppu_vram_address, ppu_temporary_vram_address);
@@ -1014,17 +1014,17 @@ proc ppu_run_hblank_batch hblank_dots {
                 candidate_found = 1;
 
                 if ppu_scanline == 261 {
-                    candidate_tile = 0 + ppu_line_zero_sprite_tile[slot_index];
-                    candidate_attributes = 0 + ppu_line_zero_sprite_attributes[slot_index];
-                    candidate_x = 0 + ppu_line_zero_sprite_x[slot_index];
-                    candidate_oam_index = 0 + ppu_line_zero_sprite_oam_index[slot_index];
-                    candidate_row = 0 + ppu_line_zero_sprite_row[slot_index];
+                    candidate_tile = ppu_line_zero_sprite_tile[slot_index] + "";
+                    candidate_attributes = ppu_line_zero_sprite_attributes[slot_index] + "";
+                    candidate_x = ppu_line_zero_sprite_x[slot_index] + "";
+                    candidate_oam_index = ppu_line_zero_sprite_oam_index[slot_index] + "";
+                    candidate_row = ppu_line_zero_sprite_row[slot_index] + "";
                 } else {
-                    candidate_tile = 0 + ppu_secondary_sprite_tile[slot_index];
-                    candidate_attributes = 0 + ppu_secondary_sprite_attributes[slot_index];
-                    candidate_x = 0 + ppu_secondary_sprite_x[slot_index];
-                    candidate_oam_index = 0 + ppu_secondary_sprite_oam_index[slot_index];
-                    candidate_row = 0 + ppu_secondary_sprite_row[slot_index];
+                    candidate_tile = ppu_secondary_sprite_tile[slot_index] + "";
+                    candidate_attributes = ppu_secondary_sprite_attributes[slot_index] + "";
+                    candidate_x = ppu_secondary_sprite_x[slot_index] + "";
+                    candidate_oam_index = ppu_secondary_sprite_oam_index[slot_index] + "";
+                    candidate_row = ppu_secondary_sprite_row[slot_index] + "";
                 }
             } else {
                 candidate_found = 0;
@@ -1046,8 +1046,8 @@ proc ppu_run_hblank_batch hblank_dots {
 
                 if ppu_bus_mapper_kind == mapper_kind.nrom and cartridge_chr_rom_bytes > 0 {
                     ppu_bus_pattern_mapped = 1;
-                    pattern_low = 0 + nrom_chr_rom[pattern_address + 1];
-                    pattern_high = 0 + nrom_chr_rom[pattern_address + 9];
+                    pattern_low = nrom_chr_rom[pattern_address + 1] + "";
+                    pattern_high = nrom_chr_rom[pattern_address + 9] + "";
                     ppu_bus_read_value = pattern_high;
                 } else {
                     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
@@ -1060,7 +1060,7 @@ proc ppu_run_hblank_batch hblank_dots {
                     }
 
                     ppu_bus_read_pattern_window pattern_address;
-                    pattern_low = 0 + ppu_bus_read_value;
+                    pattern_low = ppu_bus_read_value + "";
 
                     if ppu_bus_mapper_kind == mapper_kind.mmc3 {
                         if mmc3_ppu_a12_high == 0 {
@@ -1072,13 +1072,13 @@ proc ppu_run_hblank_batch hblank_dots {
                     }
 
                     ppu_bus_read_pattern_window pattern_address + 8;
-                    pattern_high = 0 + ppu_bus_read_value;
+                    pattern_high = ppu_bus_read_value + "";
                 }
 
                 if candidate_found == 1 {
                     if (candidate_attributes // 64) % 2 == 1 {
-                        pattern_low = 0 + ppu_reverse_byte_table[pattern_low + 1];
-                        pattern_high = 0 + ppu_reverse_byte_table[pattern_high + 1];
+                        pattern_low = ppu_reverse_byte_table[pattern_low + 1] + "";
+                        pattern_high = ppu_reverse_byte_table[pattern_high + 1] + "";
                     }
 
                     ppu_sprite_unit_pattern_low[slot_index] = pattern_low;
@@ -1140,7 +1140,7 @@ proc ppu_run_hblank_batch hblank_dots {
 # MMC3 A12 timing, sprite evaluation, sprite-zero hit, and shifter state identical to the
 # one-dot body below, which handles all unaligned and single-dot boundaries.
 proc ppu_run_dots count {
-    local dots_remaining = 0 + $count;
+    local dots_remaining = $count + "";
 
     # The temporaries of the batched and one-dot pixel bodies, declared once per call.
     local pixel_x = 0;
@@ -1334,7 +1334,7 @@ proc ppu_run_dots count {
                                 ppu_framebuffer_packed[fb_idx] = ppu_backdrop_packed;
                             } else {
                                 ppu_framebuffer_packed[fb_idx] = ppu_emphasis_packed
-                                    + (0 + ppu_palette_color[bg_pal + bg_px + 1]);
+                                    + ppu_palette_color[bg_pal + bg_px + 1];
                             }
 
                             fb_idx = fb_idx + 1;
@@ -1394,7 +1394,7 @@ proc ppu_run_dots count {
                                 }
 
                                 ppu_framebuffer_packed[fb_idx] = ppu_emphasis_packed
-                                    + (0 + ppu_palette_color[palette_offset + 1]);
+                                    + ppu_palette_color[palette_offset + 1];
                             }
 
                             fb_idx = fb_idx + 1;
@@ -1495,10 +1495,10 @@ proc ppu_run_dots count {
                         palette_offset = 0;
                     }
 
-                    color_index = 0 + ppu_palette_color[palette_offset + 1];
+                    color_index = ppu_palette_color[palette_offset + 1] + "";
 
                     if ppu_mask_greyscale == 1 {
-                        color_index = 0 + ppu_greyscale_colors[color_index + 1];
+                        color_index = ppu_greyscale_colors[color_index + 1] + "";
                     }
 
                     ppu_framebuffer_packed[fb_idx] = ppu_emphasis_packed + color_index;
@@ -1606,10 +1606,10 @@ proc ppu_run_dots count {
                         palette_offset = 0;
                     }
 
-                    color_index = 0 + ppu_palette_color[palette_offset + 1];
+                    color_index = ppu_palette_color[palette_offset + 1] + "";
 
                     if ppu_mask_greyscale == 1 {
-                        color_index = 0 + ppu_greyscale_colors[color_index + 1];
+                        color_index = ppu_greyscale_colors[color_index + 1] + "";
                     }
 
                     ppu_framebuffer_packed[ppu_framebuffer_row_base + ppu_dot] = ppu_emphasis_packed + color_index;
@@ -2069,16 +2069,16 @@ proc ppu_read_sprite_pixel {
     # The first opaque unit is the visible one; later units could not win, so the scan stops
     # there, and it never visits a slot the line did not load a sprite into.
     until unit_index > ppu_sprite_unit_active_count or ppu_sprite_pixel_found == 1 {
-        if 0 + ppu_sprite_unit_x_counter[unit_index] == 0 {
-            unit_pixel = ((0 + ppu_sprite_unit_pattern_low[unit_index]) // 128) % 2;
+        if (ppu_sprite_unit_x_counter[unit_index] + "") == 0 {
+            unit_pixel = (ppu_sprite_unit_pattern_low[unit_index] // 128) % 2;
             unit_pixel = unit_pixel
-                + ((((0 + ppu_sprite_unit_pattern_high[unit_index]) // 128) % 2) * 2);
+                + (((ppu_sprite_unit_pattern_high[unit_index] // 128) % 2) * 2);
 
             if unit_pixel != 0 {
                 ppu_sprite_pixel_found = 1;
                 ppu_sprite_pixel_value = unit_pixel;
-                ppu_sprite_pixel_attributes = 0 + ppu_sprite_unit_attributes[unit_index];
-                ppu_sprite_pixel_oam_index = 0 + ppu_sprite_unit_oam_index[unit_index];
+                ppu_sprite_pixel_attributes = ppu_sprite_unit_attributes[unit_index] + "";
+                ppu_sprite_pixel_oam_index = ppu_sprite_unit_oam_index[unit_index] + "";
             }
         }
 
@@ -2096,13 +2096,13 @@ proc ppu_clock_sprite_output_units {
     local pattern_high = 0;
 
     repeat ppu_sprite_unit_active_count {
-        x_counter = 0 + ppu_sprite_unit_x_counter[unit_index];
+        x_counter = ppu_sprite_unit_x_counter[unit_index] + "";
 
         if x_counter > 0 {
             ppu_sprite_unit_x_counter[unit_index] = x_counter - 1;
         } else {
-            pattern_low = 0 + ppu_sprite_unit_pattern_low[unit_index];
-            pattern_high = 0 + ppu_sprite_unit_pattern_high[unit_index];
+            pattern_low = ppu_sprite_unit_pattern_low[unit_index] + "";
+            pattern_high = ppu_sprite_unit_pattern_high[unit_index] + "";
             ppu_sprite_unit_pattern_low[unit_index] = (pattern_low * 2) % 256;
             ppu_sprite_unit_pattern_high[unit_index] = (pattern_high * 2) % 256;
         }
@@ -2154,7 +2154,7 @@ proc ppu_clock_rendering_pipeline {
             ppu_vram_address = ppu_increment_scroll_x_for(ppu_vram_address);
         } elif fetch_phase == 2 {
             ppu_bus_read_nametable 8192 + (ppu_vram_address % 4096);
-            ppu_next_background_tile = 0 + ppu_bus_read_value;
+            ppu_next_background_tile = ppu_bus_read_value + "";
         } elif fetch_phase == 4 {
             ppu_fetch_background_attribute;
         } elif fetch_phase == 6 {
@@ -2317,7 +2317,7 @@ proc ppu_evaluate_sprites_for_next_scanline {
             # The OAM read and ppu_sprite_row() inlined: the address is always inside 0-255 for
             # this loop, and the row is one floored modulo. Sprite evaluation walks up to 64 OAM
             # entries per line, so numeric coercion eliminates polymorphic compare calls.
-            candidate_row = (target_scanline - ((0 + ppu_oam[candidate_address + 1]) + 1)) % 256;
+            candidate_row = (target_scanline - (ppu_oam[candidate_address + 1] + 1)) % 256;
 
             if checking_overflow == 1 {
                 if candidate_row < sprite_height {
@@ -2336,12 +2336,12 @@ proc ppu_evaluate_sprites_for_next_scanline {
                 elapsed_dots = elapsed_dots + 2;
             } else {
                 slot_index = found_count + 1;
-                ppu_secondary_sprite_y[slot_index] = 0 + ppu_oam[candidate_address + 1];
+                ppu_secondary_sprite_y[slot_index] = ppu_oam[candidate_address + 1] + "";
                 ppu_secondary_sprite_row[slot_index] = candidate_row;
                 ppu_secondary_sprite_oam_index[slot_index] = oam_index;
-                ppu_secondary_sprite_tile[slot_index] = 0 + ppu_oam[candidate_address + 2];
-                ppu_secondary_sprite_attributes[slot_index] = 0 + ppu_oam[candidate_address + 3];
-                ppu_secondary_sprite_x[slot_index] = 0 + ppu_oam[candidate_address + 4];
+                ppu_secondary_sprite_tile[slot_index] = ppu_oam[candidate_address + 2] + "";
+                ppu_secondary_sprite_attributes[slot_index] = ppu_oam[candidate_address + 3] + "";
+                ppu_secondary_sprite_x[slot_index] = ppu_oam[candidate_address + 4] + "";
                 found_count = found_count + 1;
                 elapsed_dots = elapsed_dots + 8;
             }
