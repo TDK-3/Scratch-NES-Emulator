@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { NesConsoleFrame } from "../src/nes/core/nes_console.js";
-import { NesBrowserFrameScheduler } from "../src/nes/browser/frame_scheduler.js";
+import {
+    NTSC_FRAME_DURATION_MS,
+    NesBrowserFrameScheduler,
+} from "../src/nes/browser/frame_scheduler.js";
 
 interface FakeAnimationFrameQueue {
     readonly callbacks: Map<number, (timestamp: number) => void>;
@@ -73,6 +76,85 @@ test("stops the animation loop and reports errors when a frame fails", () => {
     assert.equal(received_error, expected_error);
     assert.equal(scheduler.is_running(), false);
     assert.equal(queue.callbacks.size, 0);
+});
+
+test("paces 120 Hz, 144 Hz, 165 Hz, and 240 Hz displays to ~60 Hz instead of running 2-4x fast", () => {
+    assert.ok(
+        NTSC_FRAME_DURATION_MS > 16.63 && NTSC_FRAME_DURATION_MS < 16.65,
+        `Expected NTSC frame duration near 16.6393 ms, got ${NTSC_FRAME_DURATION_MS}.`,
+    );
+
+    for (const refresh_hz of [60, 120, 144, 165, 240]) {
+        const queue = create_animation_frame_queue();
+        let frame_count = 0;
+        const scheduler = new NesBrowserFrameScheduler(
+            () => {
+                frame_count += 1;
+                return create_frame(frame_count);
+            },
+            () => {},
+            (error) => {
+                throw new Error(`Unexpected frame scheduler error: ${String(error)}.`);
+            },
+            queue.request,
+            queue.cancel,
+        );
+
+        scheduler.start();
+        const duration_seconds = 10;
+        const total_callbacks = refresh_hz * duration_seconds;
+        const step_ms = 1_000 / refresh_hz;
+
+        for (let index = 0; index < total_callbacks; index += 1) {
+            queue.run_next(index * step_ms);
+        }
+
+        const effective_fps = frame_count / duration_seconds;
+        assert.ok(
+            effective_fps >= 59.5 && effective_fps <= 60.5,
+            `Expected ~60 fps at ${refresh_hz} Hz, got ${effective_fps.toFixed(2)} fps (${frame_count} frames).`,
+        );
+
+        scheduler.stop();
+    }
+});
+
+test("clamps schedule debt after background tab suspension so high-refresh displays do not burst", () => {
+    const queue = create_animation_frame_queue();
+    let frame_count = 0;
+    const scheduler = new NesBrowserFrameScheduler(
+        () => {
+            frame_count += 1;
+            return create_frame(frame_count);
+        },
+        () => {},
+        (error) => {
+            throw new Error(`Unexpected frame scheduler error: ${String(error)}.`);
+        },
+        queue.request,
+        queue.cancel,
+    );
+
+    scheduler.start();
+    queue.run_next(0);
+    assert.equal(frame_count, 1);
+
+    // Simulate a 5-second background tab pause followed by 240 Hz callbacks (~4.17 ms apart).
+    queue.run_next(5_000);
+    assert.equal(frame_count, 2);
+
+    queue.run_next(5_004.17);
+    queue.run_next(5_008.33);
+    queue.run_next(5_012.5);
+    assert.equal(
+        frame_count,
+        2,
+        "Sub-frame high-refresh callbacks after a long stall must wait for the next NTSC frame window.",
+    );
+
+    queue.run_next(5_016.67);
+    assert.equal(frame_count, 3);
+    scheduler.stop();
 });
 
 function create_animation_frame_queue(): FakeAnimationFrameQueue {
