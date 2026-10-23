@@ -544,6 +544,29 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/rom_run.gs",
+        declaration: "rom_run_toggle_debug",
+        mirror: "rom_run_toggle_debug",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_init_debug",
+        mirror: null,
+        reason: "resets Stage-owned debug overlay state at green flag",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_poll_debug_key",
+        mirror: null,
+        reason: "host input sampling; it reads the Scratch Y key sensor and feeds rom_run_toggle_debug",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_build_debug_text",
+        mirror: null,
+        reason: "debug overlay formatting only; it reads Stage state and Scratch timer into one text variable",
+    },
+    {
+        source: "src/rom_run.gs",
         declaration: "rom_run_pace_frame",
         mirror: null,
         reason: "frame-rate cap; it waits on the Scratch timer, which the port cannot model",
@@ -1940,7 +1963,14 @@ test("the E key halts the console and dumps its state once to the display sprite
     }
 
     const sprite = get_source("main.gs");
-    assert.match(sprite.text, /on "rom run dump" \{\s*say rom_run_dump_text;\s*\}/);
+    assert.match(
+        sprite.text,
+        new RegExp(
+            'on "rom run dump" \\{\\s*if rom_run_debug_enabled == 1 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;\\s*say rom_run_dump_text;" +
+                "\\s*\\}\\s*\\}",
+        ),
+    );
 });
 
 test("the run loop services a ROM load request before it runs any more cycles", () => {
@@ -3049,5 +3079,131 @@ test("MMC3 batched and single-dot PPU paths preserve exact A12 falling edges and
         "cpu_write_cycle fast path must refresh ppu_next_cpu_event_dots after MMC3 IRQ register writes",
     );
 });
+
+test("Y-key debug overlay anchors in the bottom right and restricts say blocks to boot or debug mode", () => {
+    const keyboard_input = get_source("src/keyboard_input.gs");
+    assert.ok(
+        !/key_pressed\("y"\)/i.test(keyboard_input.text),
+        "controller polling must not bind Y so the debug toggle does not press a controller button",
+    );
+
+    const pen_display = get_source("src/pen_display.gs");
+    const debug_x_match = /var PEN_DEBUG_X = (-?\d+);/.exec(pen_display.text);
+    const debug_y_match = /var PEN_DEBUG_Y = (-?\d+);/.exec(pen_display.text);
+    assert.ok(
+        debug_x_match !== null && debug_y_match !== null,
+        "pen_display.gs must define PEN_DEBUG_X and PEN_DEBUG_Y",
+    );
+    assert.ok(
+        Number(debug_x_match[1]) > 0 && Number(debug_y_match[1]) < 0,
+        "PEN_DEBUG_X and PEN_DEBUG_Y must anchor the debug say bubble in the bottom-right quadrant",
+    );
+
+    const stage = get_source("stage.gs");
+    assert.match(
+        stage.text,
+        /onflag \{\s*rom_run_init_debug;[\s\S]*rom_run_start;/,
+        "stage onflag must reset debug/boot flags before starting the console",
+    );
+
+    const rom_run = get_source("src/rom_run.gs");
+    const poll_debug = rom_run.declarations.find((declaration) => declaration.name === "rom_run_poll_debug_key");
+    const poll_debug_body = poll_debug?.body.join("\n") ?? "";
+    assert.match(
+        poll_debug_body,
+        new RegExp(
+            'if key_pressed\\("y"\\) \\{\\s*key_down = 1;\\s*\\}' +
+                "\\s*rom_run_debug_enabled = rom_run_toggle_debug\\(" +
+                "\\s*rom_run_debug_enabled,\\s*key_down,\\s*rom_run_debug_key_held\\s*\\);" +
+                "\\s*rom_run_debug_key_held = key_down;",
+        ),
+        "rom_run_poll_debug_key must feed key_pressed(\"y\") into edge-triggered rom_run_toggle_debug",
+    );
+
+    const build_debug = rom_run.declarations.find((declaration) => declaration.name === "rom_run_build_debug_text");
+    const build_debug_body = build_debug?.body.join("\n") ?? "";
+    assert.match(
+        build_debug_body,
+        /"fps "[\s\S]*" \| time "[\s\S]*" \| frame "[\s\S]*" \| cycle "[\s\S]*" \| pc "[\s\S]*" \| ppu "/,
+        "rom_run_build_debug_text must format fps, time, frame, cycle, pc, and ppu",
+    );
+
+    const loop = rom_run.declarations.find((declaration) => declaration.name === "rom_run_loop");
+    const loop_body = loop?.body.join("\n") ?? "";
+    assert.match(
+        loop_body,
+        /rom_run_poll_debug_key;/,
+        "rom_run_loop must poll the Y debug key during execution",
+    );
+    assert.match(
+        loop_body,
+        /if rom_run_debug_enabled == 1 \{\s*if key_pressed\("e"\) \{\s*rom_run_halt_and_dump;\s*\}\s*\}/,
+        "rom_run_loop must only allow E-key halt-and-dump while debug mode is enabled",
+    );
+    assert.match(
+        loop_body,
+        /if rom_run_debug_enabled == 1 \{\s*rom_run_build_debug_text;\s*\}/,
+        "rom_run_loop must build debug overlay text only when debug mode is on",
+    );
+
+    for (const source of sources) {
+        if (source.path === "main.gs") {
+            continue;
+        }
+        assert.ok(
+            !source.lines.some((line) => /\bsay\b/.test(strip_comments_and_strings(line))),
+            `only main.gs may invoke say blocks (found say in ${source.path})`,
+        );
+    }
+
+    const main = get_source("main.gs");
+    const draw_frame = main.declarations.find((declaration) => declaration.name === "pen_draw_frame");
+    const draw_body = draw_frame?.body.join("\n") ?? "";
+    const hide_at = draw_body.indexOf(
+        "if pen_sprite_visible == 1 {\n        hide;\n        pen_sprite_visible = 0;\n    }",
+    );
+    const erase_at = draw_body.indexOf("erase_all;");
+    const pen_up_at = draw_body.lastIndexOf("pen_up;");
+    const debug_say_at = draw_body.indexOf(
+        "if rom_run_debug_enabled == 1 {\n        goto PEN_DEBUG_X, PEN_DEBUG_Y;\n        show;\n" +
+            "        pen_sprite_visible = 1;\n        say rom_run_debug_text;\n    }",
+    );
+    assert.ok(hide_at >= 0 && erase_at > hide_at, "pen_draw_frame must hide the sprite before pen scanline strokes");
+    assert.ok(
+        pen_up_at > erase_at && debug_say_at > pen_up_at,
+        "pen_draw_frame must move to PEN_DEBUG_X, PEN_DEBUG_Y, show, and say only after pen_up when debug is on",
+    );
+
+    const say_matches = main.lines.filter((line) => /\bsay\b/.test(strip_comments_and_strings(line)));
+    assert.equal(say_matches.length, 6, "main.gs must contain only the 6 boot/debug-gated say statements");
+    assert.match(
+        main.text,
+        new RegExp(
+            'on "port self test done" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_booting == 1 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
+                "\\s*say port_self_test_summary;\\s*\\}\\s*\\}",
+        ),
+        "port self test done must gate say on boot or debug mode",
+    );
+    assert.match(
+        main.text,
+        new RegExp(
+            'on "rom run started" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
+                "\\s*say rom_run_state_text;\\s*\\}\\s*\\}",
+        ),
+        "rom run started must gate say on boot failure or debug mode",
+    );
+    assert.match(
+        main.text,
+        new RegExp(
+            'on "rom image changed" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
+                "\\s*say rom_run_state_text;\\s*\\}\\s*\\}",
+        ),
+        "rom image changed must gate say on boot failure or debug mode",
+    );
+});
+
 
 

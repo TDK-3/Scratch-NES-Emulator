@@ -187,7 +187,7 @@ test("polling assembles one mask per pad from the keys that are held down", () =
 });
 
 test("keys the table does not bind are ignored and cannot leak between pads", () => {
-    assert.deepEqual(keyboard_poll_masks(new Set(["escape", "q", "up arrow "])), [0, 0]);
+    assert.deepEqual(keyboard_poll_masks(new Set(["escape", "q", "y", "up arrow "])), [0, 0]);
     assert.deepEqual(keyboard_poll_masks(new Set(["z", "u"])), [KEYBOARD_BUTTON.A, KEYBOARD_BUTTON.A]);
     assert.deepEqual(
         keyboard_poll_masks(new Set(["up arrow", "down arrow"])),

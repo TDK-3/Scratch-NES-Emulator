@@ -110,6 +110,65 @@ var rom_run_state_text = "";
 # The state dump the E key writes, shown by the display sprite.
 var rom_run_dump_text = "";
 
+# Debug overlay state toggled by pressing Y. Starts off (0) on green flag so the say block is
+# only used while booting or while debug mode is enabled.
+var rom_run_booting = 1;
+var rom_run_debug_enabled = 0;
+var rom_run_debug_key_held = 0;
+var rom_run_debug_text = "";
+
+# Pure rising-edge toggle for the Y debug key: flips enabled (0 <-> 1) only when key_down is 1
+# and key_held was 0 on the previous sample.
+func rom_run_toggle_debug(enabled, key_down, key_held) {
+    if $key_down == 1 and $key_held == 0 {
+        return 1 - $enabled;
+    }
+
+    return $enabled;
+}
+
+# Resets debug overlay state on green flag so a fresh run starts with debug mode off.
+proc rom_run_init_debug {
+    rom_run_booting = 1;
+    rom_run_debug_enabled = 0;
+    rom_run_debug_key_held = 0;
+    rom_run_debug_text = "";
+}
+
+# Samples the Y key and toggles rom_run_debug_enabled once per press edge.
+proc rom_run_poll_debug_key {
+    local key_down = 0;
+
+    if key_pressed("y") {
+        key_down = 1;
+    }
+
+    rom_run_debug_enabled = rom_run_toggle_debug(
+        rom_run_debug_enabled,
+        key_down,
+        rom_run_debug_key_held
+    );
+    rom_run_debug_key_held = key_down;
+}
+
+# Formats the live bottom-right debug overlay text (fps, elapsed time, frames, cycles, CPU PC,
+# and PPU position) when debug mode is enabled.
+proc rom_run_build_debug_text {
+    local fps_tenths = 0;
+    local elapsed_tenths = 0;
+
+    fps_tenths = (((rom_run_fps + "") * 10) + 0.5) // 1;
+    elapsed_tenths = (((timer() - (rom_run_start_timer + "")) * 10) + 0.5) // 1;
+
+    rom_run_debug_text = "fps " & (fps_tenths // 10) & "." & (fps_tenths % 10)
+        & " | time " & (elapsed_tenths // 10) & "." & (elapsed_tenths % 10) & "s"
+        & " | frame " & rom_run_frame_count
+        & " (drawn " & rom_run_frames_drawn & " skip " & rom_run_frames_skipped & ")"
+        & " | cycle " & rom_run_cycles
+        & " | pc " & cpu_program_counter
+        & " | ppu " & ppu_scanline & "," & ppu_dot;
+}
+
 # Decides whether a completed frame is skipped instead of drawn. While skipping is active, every
 # other frame is drawn, so the picture still refreshes at half the emulated rate when the pen
 # cannot keep up. A lead test (frames run ahead of frames drawn) was used before; it never
@@ -202,11 +261,13 @@ nowarp proc rom_run_pace_frame {
 # Boots the console with the embedded image. A board that does not validate leaves the console
 # stopped and says why in the state text.
 proc rom_run_start {
+    rom_run_booting = 1;
     rom_run_started = 0;
     rom_run_frame_count = 0;
     rom_run_frames_drawn = 0;
     rom_run_cycles = 0;
     rom_run_poll_countdown = 0;
+    rom_run_debug_key_held = 0;
     rom_run_skip_active = 0;
     rom_run_last_frame_skipped = 0;
     rom_run_pace_origin = 0;
@@ -259,6 +320,11 @@ nowarp proc rom_run_loop {
     local elapsed = 0;
     local should_skip = 0;
 
+    if rom_run_started == 1 {
+        rom_run_booting = 0;
+    }
+
+    rom_run_start_timer = timer();
     rom_run_last_fps_update_timer = timer();
     rom_run_pace_origin = timer();
     rom_run_last_paced_timer = -1;
@@ -280,11 +346,14 @@ nowarp proc rom_run_loop {
             # The pads follow the host keyboard between chunks, so a press reaches the
             # console within two 100-cycle chunks and immediately before VBlank NMI.
             keyboard_poll_controllers;
+            rom_run_poll_debug_key;
 
-            # E halts the console and dumps its state. It is sampled with the pads, and the halt
-            # does not return, so one press is enough.
-            if key_pressed("e") {
-                rom_run_halt_and_dump;
+            # E halts the console and dumps its state while debug mode is enabled. It is sampled
+            # with the pads, and the halt does not return, so one press is enough.
+            if rom_run_debug_enabled == 1 {
+                if key_pressed("e") {
+                    rom_run_halt_and_dump;
+                }
             }
         }
 
@@ -303,6 +372,11 @@ nowarp proc rom_run_loop {
             } else {
                 rom_run_last_frame_skipped = 0;
                 rom_run_frames_drawn = (rom_run_frames_drawn + "") + 1;
+
+                if rom_run_debug_enabled == 1 {
+                    rom_run_build_debug_text;
+                }
+
                 pen_display_update_geometry;
                 broadcast_and_wait "draw frame";
             }
@@ -313,8 +387,8 @@ nowarp proc rom_run_loop {
             rom_run_frame_count = rom_run_frame_count + 1;
             rom_run_pace_frame;
 
-            # FPS counter: update every 60 emulated frames (~1 sec at 60 fps).
-            if (rom_run_frame_count + "") - (rom_run_last_fps_update_frame + "") >= 60 {
+            # FPS counter: update every 30 emulated frames (~0.5 sec at 60 fps).
+            if (rom_run_frame_count + "") - (rom_run_last_fps_update_frame + "") >= 30 {
                 elapsed = timer() - (rom_run_last_fps_update_timer + "");
 
                 if elapsed > 0 {
@@ -362,6 +436,12 @@ proc rom_run_load_input_image {
             rom_run_image_name = "pasted image";
             rom_run_start;
             broadcast "rom image changed";
+
+            if rom_run_started == 1 {
+                rom_run_booting = 0;
+            }
+
+            rom_run_start_timer = timer();
             rom_run_last_fps_update_timer = timer();
             rom_run_pace_origin = timer();
             rom_run_last_paced_timer = -1;

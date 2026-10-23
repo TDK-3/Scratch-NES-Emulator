@@ -25,7 +25,7 @@ const KEY_BINDINGS: readonly (readonly [string, ControllerIndex, ControllerButto
     ["l", 1, "right"],
     ["u", 1, "a"],
     ["o", 1, "b"],
-    ["y", 1, "select"],
+    ["h", 1, "select"],
     ["p", 1, "start"],
 ];
 

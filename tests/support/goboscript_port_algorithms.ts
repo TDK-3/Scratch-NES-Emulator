@@ -602,7 +602,7 @@ export const KEYBOARD_BINDINGS: readonly KeyboardBinding[] = [
     { key: "l", controller: 1, button: "RIGHT" },
     { key: "u", controller: 1, button: "A" },
     { key: "o", controller: 1, button: "B" },
-    { key: "y", controller: 1, button: "SELECT" },
+    { key: "h", controller: 1, button: "SELECT" },
     { key: "p", controller: 1, button: "START" },
 ];
 
@@ -4402,4 +4402,16 @@ export function rom_run_effective_due(due: number, last_paced_timer: number): nu
     }
 
     return due;
+}
+
+/**
+ * Mirrors rom_run_toggle_debug in scratch/src/rom_run.gs: flips debug mode (0 <-> 1) only on a
+ * rising Y-key press edge (key_down === 1 && key_held === 0).
+ */
+export function rom_run_toggle_debug(enabled: number, key_down: number, key_held: number): number {
+    if (key_down === 1 && key_held === 0) {
+        return 1 - enabled;
+    }
+
+    return enabled;
 }
