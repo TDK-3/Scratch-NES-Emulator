@@ -1965,7 +1965,11 @@ test("the E key halts the console and dumps its state once to the display sprite
     const sprite = get_source("main.gs");
     assert.match(
         sprite.text,
-        /on "rom run dump" \{\s*if rom_run_debug_enabled == 1 \{\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\s*show;\s*pen_sprite_visible = 1;\s*say rom_run_dump_text;\s*\}\s*\}/,
+        new RegExp(
+            'on "rom run dump" \\{\\s*if rom_run_debug_enabled == 1 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;\\s*say rom_run_dump_text;" +
+                "\\s*\\}\\s*\\}",
+        ),
     );
 });
 
@@ -3086,7 +3090,10 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
     const pen_display = get_source("src/pen_display.gs");
     const debug_x_match = /var PEN_DEBUG_X = (-?\d+);/.exec(pen_display.text);
     const debug_y_match = /var PEN_DEBUG_Y = (-?\d+);/.exec(pen_display.text);
-    assert.ok(debug_x_match !== null && debug_y_match !== null, "pen_display.gs must define PEN_DEBUG_X and PEN_DEBUG_Y");
+    assert.ok(
+        debug_x_match !== null && debug_y_match !== null,
+        "pen_display.gs must define PEN_DEBUG_X and PEN_DEBUG_Y",
+    );
     assert.ok(
         Number(debug_x_match[1]) > 0 && Number(debug_y_match[1]) < 0,
         "PEN_DEBUG_X and PEN_DEBUG_Y must anchor the debug say bubble in the bottom-right quadrant",
@@ -3104,7 +3111,12 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
     const poll_debug_body = poll_debug?.body.join("\n") ?? "";
     assert.match(
         poll_debug_body,
-        /if key_pressed\("y"\) \{\s*key_down = 1;\s*\}\s*rom_run_debug_enabled = rom_run_toggle_debug\(\s*rom_run_debug_enabled,\s*key_down,\s*rom_run_debug_key_held\s*\);\s*rom_run_debug_key_held = key_down;/,
+        new RegExp(
+            'if key_pressed\\("y"\\) \\{\\s*key_down = 1;\\s*\\}' +
+                "\\s*rom_run_debug_enabled = rom_run_toggle_debug\\(" +
+                "\\s*rom_run_debug_enabled,\\s*key_down,\\s*rom_run_debug_key_held\\s*\\);" +
+                "\\s*rom_run_debug_key_held = key_down;",
+        ),
         "rom_run_poll_debug_key must feed key_pressed(\"y\") into edge-triggered rom_run_toggle_debug",
     );
 
@@ -3147,33 +3159,48 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
     const main = get_source("main.gs");
     const draw_frame = main.declarations.find((declaration) => declaration.name === "pen_draw_frame");
     const draw_body = draw_frame?.body.join("\n") ?? "";
-    const hide_at = draw_body.indexOf("if pen_sprite_visible == 1 {\n        hide;\n        pen_sprite_visible = 0;\n    }");
+    const hide_at = draw_body.indexOf(
+        "if pen_sprite_visible == 1 {\n        hide;\n        pen_sprite_visible = 0;\n    }",
+    );
     const erase_at = draw_body.indexOf("erase_all;");
     const pen_up_at = draw_body.lastIndexOf("pen_up;");
     const debug_say_at = draw_body.indexOf(
-        "if rom_run_debug_enabled == 1 {\n        goto PEN_DEBUG_X, PEN_DEBUG_Y;\n        show;\n        pen_sprite_visible = 1;\n        say rom_run_debug_text;\n    }",
+        "if rom_run_debug_enabled == 1 {\n        goto PEN_DEBUG_X, PEN_DEBUG_Y;\n        show;\n" +
+            "        pen_sprite_visible = 1;\n        say rom_run_debug_text;\n    }",
     );
     assert.ok(hide_at >= 0 && erase_at > hide_at, "pen_draw_frame must hide the sprite before pen scanline strokes");
     assert.ok(
         pen_up_at > erase_at && debug_say_at > pen_up_at,
-        "pen_draw_frame must move to PEN_DEBUG_X, PEN_DEBUG_Y, show, and say rom_run_debug_text only after pen_up when debug is enabled",
+        "pen_draw_frame must move to PEN_DEBUG_X, PEN_DEBUG_Y, show, and say only after pen_up when debug is on",
     );
 
     const say_matches = main.lines.filter((line) => /\bsay\b/.test(strip_comments_and_strings(line)));
     assert.equal(say_matches.length, 6, "main.gs must contain only the 6 boot/debug-gated say statements");
     assert.match(
         main.text,
-        /on "port self test done" \{\s*if rom_run_debug_enabled == 1 or rom_run_booting == 1 \{\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\s*show;\s*pen_sprite_visible = 1;\s*say port_self_test_summary;\s*\}\s*\}/,
+        new RegExp(
+            'on "port self test done" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_booting == 1 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
+                "\\s*say port_self_test_summary;\\s*\\}\\s*\\}",
+        ),
         "port self test done must gate say on boot or debug mode",
     );
     assert.match(
         main.text,
-        /on "rom run started" \{\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \{\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\s*show;\s*pen_sprite_visible = 1;\s*say rom_run_state_text;\s*\}\s*\}/,
+        new RegExp(
+            'on "rom run started" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
+                "\\s*say rom_run_state_text;\\s*\\}\\s*\\}",
+        ),
         "rom run started must gate say on boot failure or debug mode",
     );
     assert.match(
         main.text,
-        /on "rom image changed" \{\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \{\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\s*show;\s*pen_sprite_visible = 1;\s*say rom_run_state_text;\s*\}\s*\}/,
+        new RegExp(
+            'on "rom image changed" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \\{' +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
+                "\\s*say rom_run_state_text;\\s*\\}\\s*\\}",
+        ),
         "rom image changed must gate say on boot failure or debug mode",
     );
 });
