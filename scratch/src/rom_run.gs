@@ -265,6 +265,9 @@ proc rom_run_start {
     rom_run_started = 0;
     rom_run_frame_count = 0;
     rom_run_frames_drawn = 0;
+    rom_run_frames_skipped = 0;
+    rom_run_fps = 0;
+    rom_run_last_fps_update_frame = 0;
     rom_run_cycles = 0;
     rom_run_poll_countdown = 0;
     rom_run_debug_key_held = 0;
@@ -272,6 +275,7 @@ proc rom_run_start {
     rom_run_last_frame_skipped = 0;
     rom_run_pace_origin = 0;
     rom_run_last_paced_timer = -1;
+    ppu_frame_ready = 0;
     rom_run_state_text = "not started";
 
     # The self test detached every device and emptied the cartridge window
@@ -300,12 +304,9 @@ proc rom_run_start {
 
         rom_run_started = 1;
         rom_run_state_text = "running " & cartridge_board_state_text;
-        rom_run_fps = 0;
-        rom_run_last_fps_update_frame = 0;
         rom_run_last_fps_update_timer = timer();
         rom_run_start_timer = timer();
         rom_run_pace_origin = timer();
-        rom_run_frames_skipped = 0;
     } else {
         rom_run_state_text = "boot failed " & cartridge_board_state_text;
     }
@@ -357,48 +358,50 @@ nowarp proc rom_run_loop {
             }
         }
 
-        frame_loop_run_chunk;
-        rom_run_cycles = (rom_run_cycles + "") + (frame_loop_chunk_cycles_run + "");
+        if rom_run_started == 1 {
+            frame_loop_run_chunk;
+            rom_run_cycles = (rom_run_cycles + "") + (frame_loop_chunk_cycles_run + "");
 
-        if ppu_frame_ready == 1 {
-            # Skipped frames still advance the PPU and CPU, but they skip the pen draw and the
-            # broadcast wait. The decision is made by rom_run_should_skip.
-            should_skip = rom_run_should_skip(rom_run_skip_active, rom_run_last_frame_skipped);
-            ppu_frame_ready = 0;
+            if ppu_frame_ready == 1 {
+                # Skipped frames still advance the PPU and CPU, but they skip the pen draw and
+                # the broadcast wait. The decision is made by rom_run_should_skip.
+                should_skip = rom_run_should_skip(rom_run_skip_active, rom_run_last_frame_skipped);
+                ppu_frame_ready = 0;
 
-            if should_skip == 1 {
-                rom_run_last_frame_skipped = 1;
-                rom_run_frames_skipped = (rom_run_frames_skipped + "") + 1;
-            } else {
-                rom_run_last_frame_skipped = 0;
-                rom_run_frames_drawn = (rom_run_frames_drawn + "") + 1;
+                if should_skip == 1 {
+                    rom_run_last_frame_skipped = 1;
+                    rom_run_frames_skipped = (rom_run_frames_skipped + "") + 1;
+                } else {
+                    rom_run_last_frame_skipped = 0;
+                    rom_run_frames_drawn = (rom_run_frames_drawn + "") + 1;
 
-                if rom_run_debug_enabled == 1 {
-                    rom_run_build_debug_text;
+                    if rom_run_debug_enabled == 1 {
+                        rom_run_build_debug_text;
+                    }
+
+                    pen_display_update_geometry;
+                    broadcast_and_wait "draw frame";
                 }
-
-                pen_display_update_geometry;
-                broadcast_and_wait "draw frame";
             }
-        }
 
-        if frame_loop_frame_complete == 1 {
-            frame_loop_reset;
-            rom_run_frame_count = rom_run_frame_count + 1;
-            rom_run_pace_frame;
+            if frame_loop_frame_complete == 1 {
+                frame_loop_reset;
+                rom_run_frame_count = rom_run_frame_count + 1;
+                rom_run_pace_frame;
 
-            # FPS counter: update every 30 emulated frames (~0.5 sec at 60 fps).
-            if (rom_run_frame_count + "") - (rom_run_last_fps_update_frame + "") >= 30 {
-                elapsed = timer() - (rom_run_last_fps_update_timer + "");
+                # FPS counter: update every 30 emulated frames (~0.5 sec at 60 fps).
+                if (rom_run_frame_count + "") - (rom_run_last_fps_update_frame + "") >= 30 {
+                    elapsed = timer() - (rom_run_last_fps_update_timer + "");
 
-                if elapsed > 0 {
-                    rom_run_fps =
-                        ((rom_run_frame_count + "") - (rom_run_last_fps_update_frame + ""))
-                        / elapsed;
+                    if elapsed > 0 {
+                        rom_run_fps =
+                            ((rom_run_frame_count + "") - (rom_run_last_fps_update_frame + ""))
+                            / elapsed;
+                    }
+
+                    rom_run_last_fps_update_frame = rom_run_frame_count;
+                    rom_run_last_fps_update_timer = timer();
                 }
-
-                rom_run_last_fps_update_frame = rom_run_frame_count;
-                rom_run_last_fps_update_timer = timer();
             }
         }
     }
