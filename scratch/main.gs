@@ -45,26 +45,26 @@ onflag {
     pen_up;
     erase_all;
     goto PEN_DEBUG_X, PEN_DEBUG_Y;
+    say "Starting the console...";
     show;
     pen_sprite_visible = 1;
-    say "Starting the console...";
 }
 
 on "port self test done" {
     if rom_run_debug_enabled == 1 or rom_run_booting == 1 {
         goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        say port_self_test_summary;
         show;
         pen_sprite_visible = 1;
-        say port_self_test_summary;
     }
 }
 
 on "rom run started" {
     if rom_run_debug_enabled == 1 or rom_run_started == 0 {
         goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        say rom_run_state_text;
         show;
         pen_sprite_visible = 1;
-        say rom_run_state_text;
     }
 }
 
@@ -73,9 +73,9 @@ on "rom run started" {
 on "rom run dump" {
     if rom_run_debug_enabled == 1 {
         goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        say rom_run_dump_text;
         show;
         pen_sprite_visible = 1;
-        say rom_run_dump_text;
     }
 }
 
@@ -84,9 +84,9 @@ on "rom run dump" {
 on "rom image changed" {
     if rom_run_debug_enabled == 1 or rom_run_started == 0 {
         goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        say rom_run_state_text;
         show;
         pen_sprite_visible = 1;
-        say rom_run_state_text;
     }
 }
 
@@ -260,9 +260,9 @@ proc pen_draw_frame {
 
     if rom_run_debug_enabled == 1 {
         goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        say rom_run_debug_text;
         show;
         pen_sprite_visible = 1;
-        say rom_run_debug_text;
     }
 }
 

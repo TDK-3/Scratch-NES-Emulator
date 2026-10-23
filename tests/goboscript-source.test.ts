@@ -1967,7 +1967,7 @@ test("the E key halts the console and dumps its state once to the display sprite
         sprite.text,
         new RegExp(
             'on "rom run dump" \\{\\s*if rom_run_debug_enabled == 1 \\{' +
-                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;\\s*say rom_run_dump_text;" +
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*say rom_run_dump_text;\\s*show;\\s*pen_sprite_visible = 1;" +
                 "\\s*\\}\\s*\\}",
         ),
     );
@@ -3142,6 +3142,11 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
     );
     assert.match(
         loop_body,
+        /if rom_run_started == 1 \{\s*frame_loop_run_chunk;/,
+        "rom_run_loop must not advance CPU/PPU chunks or clear boot-failure bubbles when rom_run_started is 0",
+    );
+    assert.match(
+        loop_body,
         /if rom_run_debug_enabled == 1 \{\s*rom_run_build_debug_text;\s*\}/,
         "rom_run_loop must build debug overlay text only when debug mode is on",
     );
@@ -3165,13 +3170,13 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
     const erase_at = draw_body.indexOf("erase_all;");
     const pen_up_at = draw_body.lastIndexOf("pen_up;");
     const debug_say_at = draw_body.indexOf(
-        "if rom_run_debug_enabled == 1 {\n        goto PEN_DEBUG_X, PEN_DEBUG_Y;\n        show;\n" +
-            "        pen_sprite_visible = 1;\n        say rom_run_debug_text;\n    }",
+        "if rom_run_debug_enabled == 1 {\n        goto PEN_DEBUG_X, PEN_DEBUG_Y;\n        say rom_run_debug_text;\n" +
+            "        show;\n        pen_sprite_visible = 1;\n    }",
     );
     assert.ok(hide_at >= 0 && erase_at > hide_at, "pen_draw_frame must hide the sprite before pen scanline strokes");
     assert.ok(
         pen_up_at > erase_at && debug_say_at > pen_up_at,
-        "pen_draw_frame must move to PEN_DEBUG_X, PEN_DEBUG_Y, show, and say only after pen_up when debug is on",
+        "pen_draw_frame must move to PEN_DEBUG_X, PEN_DEBUG_Y, update say text before show, and show only after pen_up",
     );
 
     const say_matches = main.lines.filter((line) => /\bsay\b/.test(strip_comments_and_strings(line)));
@@ -3180,8 +3185,8 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
         main.text,
         new RegExp(
             'on "port self test done" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_booting == 1 \\{' +
-                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
-                "\\s*say port_self_test_summary;\\s*\\}\\s*\\}",
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*say port_self_test_summary;" +
+                "\\s*show;\\s*pen_sprite_visible = 1;\\s*\\}\\s*\\}",
         ),
         "port self test done must gate say on boot or debug mode",
     );
@@ -3189,8 +3194,8 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
         main.text,
         new RegExp(
             'on "rom run started" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \\{' +
-                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
-                "\\s*say rom_run_state_text;\\s*\\}\\s*\\}",
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*say rom_run_state_text;" +
+                "\\s*show;\\s*pen_sprite_visible = 1;\\s*\\}\\s*\\}",
         ),
         "rom run started must gate say on boot failure or debug mode",
     );
@@ -3198,8 +3203,8 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
         main.text,
         new RegExp(
             'on "rom image changed" \\{\\s*if rom_run_debug_enabled == 1 or rom_run_started == 0 \\{' +
-                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*show;\\s*pen_sprite_visible = 1;" +
-                "\\s*say rom_run_state_text;\\s*\\}\\s*\\}",
+                "\\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\\s*say rom_run_state_text;" +
+                "\\s*show;\\s*pen_sprite_visible = 1;\\s*\\}\\s*\\}",
         ),
         "rom image changed must gate say on boot failure or debug mode",
     );
