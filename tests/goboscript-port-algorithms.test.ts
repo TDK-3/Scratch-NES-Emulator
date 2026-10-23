@@ -3808,3 +3808,34 @@ test("rom_run_effective_due prevents two frames from completing on the same froz
         "equal timestamps also require the next runtime tick before completing",
     );
 });
+
+test("rom_run_toggle_debug flips debug state once per rising Y-key edge", () => {
+    let enabled = 0;
+    let key_held = 0;
+    const step = (key_down: number): void => {
+        enabled = ported.rom_run_toggle_debug(enabled, key_down, key_held);
+        key_held = key_down;
+    };
+
+    step(0);
+    assert.deepEqual({ enabled, key_held }, { enabled: 0, key_held: 0 }, "idle release keeps debug mode off");
+
+    step(1);
+    assert.deepEqual({ enabled, key_held }, { enabled: 1, key_held: 1 }, "first rising edge turns debug mode on");
+
+    step(1);
+    assert.deepEqual({ enabled, key_held }, { enabled: 1, key_held: 1 }, "holding Y does not re-toggle debug mode");
+
+    step(0);
+    assert.deepEqual({ enabled, key_held }, { enabled: 1, key_held: 0 }, "releasing Y keeps debug mode on and rearms");
+
+    step(1);
+    assert.deepEqual({ enabled, key_held }, { enabled: 0, key_held: 1 }, "second rising edge turns debug mode off");
+
+    step(1);
+    assert.deepEqual({ enabled, key_held }, { enabled: 0, key_held: 1 }, "holding Y after turning off stays off");
+
+    step(0);
+    assert.deepEqual({ enabled, key_held }, { enabled: 0, key_held: 0 }, "final release leaves debug mode off");
+});
+
