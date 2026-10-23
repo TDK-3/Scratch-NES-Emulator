@@ -1,7 +1,7 @@
 # Host keyboard input for the GoboScript port.
 #
 # Mirrors src/nes/browser/keyboard_input.ts: the arrow keys, Z, X, Shift, and Enter drive the
-# first pad, and IJKL, U, O, Y, and P drive the second one, in the same A/B/Select/Start and
+# first pad, and IJKL, U, O, H, and P drive the second one, in the same A/B/Select/Start and
 # Up/Down/Left/Right order as the reference adapter.
 #
 # The host state is read with the built-in "key () pressed?" reporter instead of a key-press
@@ -104,7 +104,7 @@ proc keyboard_poll_controllers {
         player_two_mask = player_two_mask + keyboard_button.b;
     }
 
-    if key_pressed("y") {
+    if key_pressed("h") {
         player_two_mask = player_two_mask + keyboard_button.select;
     }
 

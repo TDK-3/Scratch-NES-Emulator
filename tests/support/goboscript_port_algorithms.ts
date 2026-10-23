@@ -602,7 +602,7 @@ export const KEYBOARD_BINDINGS: readonly KeyboardBinding[] = [
     { key: "l", controller: 1, button: "RIGHT" },
     { key: "u", controller: 1, button: "A" },
     { key: "o", controller: 1, button: "B" },
-    { key: "y", controller: 1, button: "SELECT" },
+    { key: "h", controller: 1, button: "SELECT" },
     { key: "p", controller: 1, button: "START" },
 ];
 

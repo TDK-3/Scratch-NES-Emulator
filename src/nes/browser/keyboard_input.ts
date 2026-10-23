@@ -26,7 +26,7 @@ const KEY_BINDINGS: Readonly<Record<string, ButtonBinding>> = Object.freeze({
     l: { controller: 1, button: "right" },
     u: { controller: 1, button: "a" },
     o: { controller: 1, button: "b" },
-    y: { controller: 1, button: "select" },
+    h: { controller: 1, button: "select" },
     p: { controller: 1, button: "start" },
 });
 
