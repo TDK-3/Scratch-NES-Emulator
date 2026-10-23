@@ -3125,6 +3125,11 @@ test("Y-key debug overlay anchors in the bottom right and restricts say blocks t
     );
     assert.match(
         loop_body,
+        /if rom_run_debug_enabled == 1 \{\s*if key_pressed\("e"\) \{\s*rom_run_halt_and_dump;\s*\}\s*\}/,
+        "rom_run_loop must only allow E-key halt-and-dump while debug mode is enabled",
+    );
+    assert.match(
+        loop_body,
         /if rom_run_debug_enabled == 1 \{\s*rom_run_build_debug_text;\s*\}/,
         "rom_run_loop must build debug overlay text only when debug mode is on",
     );

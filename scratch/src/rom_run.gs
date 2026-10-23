@@ -324,6 +324,7 @@ nowarp proc rom_run_loop {
         rom_run_booting = 0;
     }
 
+    rom_run_start_timer = timer();
     rom_run_last_fps_update_timer = timer();
     rom_run_pace_origin = timer();
     rom_run_last_paced_timer = -1;
@@ -347,10 +348,12 @@ nowarp proc rom_run_loop {
             keyboard_poll_controllers;
             rom_run_poll_debug_key;
 
-            # E halts the console and dumps its state. It is sampled with the pads, and the halt
-            # does not return, so one press is enough.
-            if key_pressed("e") {
-                rom_run_halt_and_dump;
+            # E halts the console and dumps its state while debug mode is enabled. It is sampled
+            # with the pads, and the halt does not return, so one press is enough.
+            if rom_run_debug_enabled == 1 {
+                if key_pressed("e") {
+                    rom_run_halt_and_dump;
+                }
             }
         }
 
@@ -438,6 +441,7 @@ proc rom_run_load_input_image {
                 rom_run_booting = 0;
             }
 
+            rom_run_start_timer = timer();
             rom_run_last_fps_update_timer = timer();
             rom_run_pace_origin = timer();
             rom_run_last_paced_timer = -1;
