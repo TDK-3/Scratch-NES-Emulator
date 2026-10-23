@@ -37,29 +37,57 @@ var pen_current_color_key = 512;
 var pen_applied_size = -1;
 var pen_applied_transparency = -1;
 
+# Tracks whether this sprite is currently shown so pen_draw_frame hides it before drawing pen
+# strokes and only shows a bottom-right say bubble while booting or while debug mode is on.
+var pen_sprite_visible = 1;
+
 onflag {
     pen_up;
     erase_all;
+    goto PEN_DEBUG_X, PEN_DEBUG_Y;
+    show;
+    pen_sprite_visible = 1;
     say "Starting the console...";
 }
 
 on "port self test done" {
-    say port_self_test_summary;
+    if rom_run_debug_enabled == 1 or rom_run_booting == 1 {
+        goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        show;
+        pen_sprite_visible = 1;
+        say port_self_test_summary;
+    }
 }
 
 on "rom run started" {
-    say rom_run_state_text;
+    if rom_run_debug_enabled == 1 or rom_run_started == 0 {
+        goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        show;
+        pen_sprite_visible = 1;
+        say rom_run_state_text;
+    }
 }
 
-# The E key halts the console and broadcasts the state dump, which the sprite shows as one say block.
+# The E key halts the console and broadcasts the state dump, which the sprite shows when debug
+# mode is enabled.
 on "rom run dump" {
-    say rom_run_dump_text;
+    if rom_run_debug_enabled == 1 {
+        goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        show;
+        pen_sprite_visible = 1;
+        say rom_run_dump_text;
+    }
 }
 
-# The Stage loads a pasted image at the run loop's request, so it reports the outcome the
-# same way: the sprite says the state text the boot or the failed load left behind.
+# The Stage loads a pasted image at the run loop's request, so the sprite reports boot failures
+# or debug-mode load outcomes without calling say during normal non-debug play.
 on "rom image changed" {
-    say rom_run_state_text;
+    if rom_run_debug_enabled == 1 or rom_run_started == 0 {
+        goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        show;
+        pen_sprite_visible = 1;
+        say rom_run_state_text;
+    }
 }
 
 on "draw frame" {
@@ -92,7 +120,11 @@ proc pen_draw_frame {
     local x0 = 0;
     local x1 = 0;
 
-    hide;
+    if pen_sprite_visible == 1 {
+        hide;
+        pen_sprite_visible = 0;
+    }
+
     pen_up;
     erase_all;
 
@@ -225,6 +257,13 @@ proc pen_draw_frame {
     }
 
     pen_up;
+
+    if rom_run_debug_enabled == 1 {
+        goto PEN_DEBUG_X, PEN_DEBUG_Y;
+        show;
+        pen_sprite_visible = 1;
+        say rom_run_debug_text;
+    }
 }
 
 # Draws one horizontal run of NES pixels from left_x to right_x (0-255) on

@@ -41,6 +41,11 @@ var PEN_STAGE_HEIGHT = 360;
 var PEN_FRAME_WIDTH = 256;
 var PEN_FRAME_HEIGHT = 240;
 
+# Bottom-right stage anchor for the display sprite's debug say bubble, inset 4 stage units
+# from the (+240, -180) corner so the bubble opens leftward inside the stage border.
+var PEN_DEBUG_X = 236;
+var PEN_DEBUG_Y = -176;
+
 # The user setting: 1 scales the picture to fit the stage, anything else
 # keeps the native 1x picture. Global (Stage-owned) so it can be changed
 # from any sprite or its monitor while the project runs, and it starts at

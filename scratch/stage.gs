@@ -34,6 +34,8 @@ costumes "assets/blank.svg";
 %include src/rom_run
 
 onflag {
+    rom_run_init_debug;
+
     # The nibble tables back every bitwise helper, so they have to exist before anything reads
     # a bus byte. The opcode table is converted from the strings its data file loads to the
     # numbers every decode wants in the same place.

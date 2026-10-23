@@ -544,6 +544,29 @@ const MIRROR_CONTRACT: readonly {
     },
     {
         source: "src/rom_run.gs",
+        declaration: "rom_run_toggle_debug",
+        mirror: "rom_run_toggle_debug",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_init_debug",
+        mirror: null,
+        reason: "resets Stage-owned debug overlay state at green flag",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_poll_debug_key",
+        mirror: null,
+        reason: "host input sampling; it reads the Scratch Y key sensor and feeds rom_run_toggle_debug",
+    },
+    {
+        source: "src/rom_run.gs",
+        declaration: "rom_run_build_debug_text",
+        mirror: null,
+        reason: "debug overlay formatting only; it reads Stage state and Scratch timer into one text variable",
+    },
+    {
+        source: "src/rom_run.gs",
         declaration: "rom_run_pace_frame",
         mirror: null,
         reason: "frame-rate cap; it waits on the Scratch timer, which the port cannot model",
@@ -1940,7 +1963,10 @@ test("the E key halts the console and dumps its state once to the display sprite
     }
 
     const sprite = get_source("main.gs");
-    assert.match(sprite.text, /on "rom run dump" \{\s*say rom_run_dump_text;\s*\}/);
+    assert.match(
+        sprite.text,
+        /on "rom run dump" \{\s*if rom_run_debug_enabled == 1 \{\s*goto PEN_DEBUG_X, PEN_DEBUG_Y;\s*show;\s*pen_sprite_visible = 1;\s*say rom_run_dump_text;\s*\}\s*\}/,
+    );
 });
 
 test("the run loop services a ROM load request before it runs any more cycles", () => {
